@@ -1,0 +1,7 @@
+# Run locally: pip install pre-commit && pre-commit install
+# Or one-off: pre-commit run --all-files
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

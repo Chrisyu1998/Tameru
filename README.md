@@ -61,6 +61,31 @@ Duplicated from `CLAUDE.md` because they're easy to forget under build pressure:
 - If a deliverable is genuinely blocked (API returns the wrong shape, env doesn't exist), pause and fix before continuing — don't paper over it.
 - If you find a contradiction between a prompt and `DESIGN.md`, **`DESIGN.md` wins**. Update the prompt and note what changed.
 
-## Local development (after Day 1 lands)
+## Local development
 
-Day 1 of `prompt/week-1-foundation/` will populate this section with `uvicorn`, `supabase start`, `npm run dev`, and the env-var checklist. Until then, this repo is design + prompts only.
+Prerequisites: Python 3.11+, Docker, and (optional) the Supabase CLI.
+
+```bash
+# 1. Environment
+cp .env.example .env           # fill in values locally; .env is gitignored
+
+# 2. Install the backend (editable)
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[dev]'
+
+# 3. Run the API
+uvicorn app.main:app --reload
+curl localhost:8000/healthz    # -> {"ok": true}
+
+# 4. Local Postgres for schema work (Day 2+)
+supabase start
+
+# 5. Container build (what Railway runs)
+docker build -t tameru .
+
+# 6. Secret scan before pushing
+brew install gitleaks          # one-time
+gitleaks detect --source .
+```
+
+The frontend lives under `frontend/` starting Day 8.
