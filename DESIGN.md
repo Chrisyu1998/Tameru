@@ -580,7 +580,15 @@ This eval exists specifically so the Haiku-vs-Flash-Lite (or future model) decis
 
 ## 8. Data Models
 
-All tables include `user_id UUID NOT NULL REFERENCES auth.users(id)`. RLS policy on every table: `USING (user_id = auth.uid())`.
+User-owned tables (`cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `mcp_tokens`, `users_meta`) include `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. The audit tables `ai_call_log` and `ai_call_log_daily` differ — see §8.8 and §8.9.
+
+Every table has:
+
+- `ENABLE ROW LEVEL SECURITY` **and** `FORCE ROW LEVEL SECURITY` — FORCE closes the table-owner bypass.
+- A single `FOR ALL` policy on user-owned tables: `USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid())`.
+- `SELECT`-only policy on audit tables (§8.8, §8.9) — all writes go through the service role.
+
+Enum-like text fields carry `CHECK` constraints enforcing the allowed values listed in each section's description column.
 
 ### 8.1 `cards`
 
@@ -625,7 +633,7 @@ All tables include `user_id UUID NOT NULL REFERENCES auth.users(id)`. RLS policy
 |---|---|---|
 | id | UUID | Primary key |
 | user_id | UUID | FK → auth.users |
-| card_id | UUID | FK → cards |
+| card_id | UUID | FK → cards; `ON DELETE CASCADE`. A subscription without a card to charge is meaningless, and `RESTRICT` here would deadlock account deletion (both `cards` and `subscriptions` cascade from `auth.users`; Postgres does not guarantee sibling-cascade order, and RESTRICT is checked immediately) |
 | name | text | "Disney+", "Netflix" |
 | amount | numeric | Fixed billing |
 | frequency | text | monthly \| quarterly \| annual \| weekly |
@@ -686,23 +694,25 @@ Powers the "past corrections" field in the Gemini categorization prompt. Most re
 
 ### 8.8 `ai_call_log`
 
-Append-only log of every Gemini, Claude, and Perplexity API call.
+Append-only audit log of every Gemini, Claude, and Perplexity API call.
 
 | Field | Type | Description |
 |---|---|---|
 | id | UUID | Primary key |
-| user_id | UUID | Nullable for system-level calls |
+| user_id | UUID | Nullable for system-level calls; `REFERENCES auth.users(id) ON DELETE SET NULL` to preserve audit history after account deletion |
 | timestamp | timestamptz | |
-| provider | text | anthropic \| google \| perplexity |
-| model | text | claude-haiku-4-5 \| gemini-3.1-flash-lite-preview \| sonar \| ... |
-| task_type | text | categorization \| nl_parse \| chat_turn \| memory_distill \| card_lookup \| receipt_parse \| csv_import \| digest |
-| prompt_version | text | e.g. categorize_v3 |
+| provider | text | `anthropic` \| `google` \| `perplexity` |
+| model | text | `claude-haiku-4-5` \| `gemini-3.1-flash-lite-preview` \| `sonar` \| ... |
+| task_type | text | `categorization` \| `nl_parse` \| `chat_turn` \| `memory_distill` \| `card_lookup` \| `receipt_parse` \| `csv_import` \| `digest` |
+| prompt_version | text | e.g. `categorize_v3` |
 | prompt_hash | text | SHA-256 of rendered system prompt |
 | input_tokens | integer | |
 | output_tokens | integer | |
 | latency_ms | integer | |
 | success | boolean | |
 | error_code | text | Nullable |
+
+**RLS shape:** `SELECT`-only policy (`USING (user_id = auth.uid())`). **No** INSERT/UPDATE/DELETE policies — all writes come from the backend logger and the `pg_cron` aggregator via the service role, which bypasses RLS. A compromised user JWT cannot forge or scrub audit entries.
 
 ### 8.9 `ai_call_log_daily` (rollup)
 
@@ -711,7 +721,7 @@ Daily aggregation of `ai_call_log` rows older than 90 days.
 | Field | Type | Description |
 |---|---|---|
 | date | date | |
-| user_id | UUID | |
+| user_id | UUID | `NOT NULL` (required by composite PK); `REFERENCES auth.users(id) ON DELETE CASCADE` |
 | provider | text | |
 | model | text | |
 | task_type | text | |
@@ -722,6 +732,10 @@ Daily aggregation of `ai_call_log` rows older than 90 days.
 | error_count | integer | |
 
 **Primary key:** `(date, user_id, provider, model, task_type)`.
+
+**System-level calls (NULL `user_id` in `ai_call_log`) are not rolled up here** — Postgres forbids NULLs in a PK column, and a sentinel UUID would break the FK. The aggregator skips them; they remain queryable in `ai_call_log` during its 90-day hot window. If system-call aggregates become useful later, add a separate rollup table keyed only on `(date, provider, model, task_type)`.
+
+**RLS shape:** same as §8.8 — `SELECT`-only, writes via service role.
 
 ---
 

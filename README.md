@@ -63,7 +63,7 @@ Duplicated from `CLAUDE.md` because they're easy to forget under build pressure:
 
 ## Local development
 
-Prerequisites: Python 3.11+, Docker, and (optional) the Supabase CLI.
+Prerequisites: Python 3.11+, Docker Desktop (running, required by `supabase start`), and the Supabase CLI.
 
 ```bash
 # 1. Environment
@@ -77,15 +77,27 @@ pip install -e '.[dev]'
 uvicorn app.main:app --reload
 curl localhost:8000/healthz    # -> {"ok": true}
 
-# 4. Local Postgres for schema work (Day 2+)
-supabase start
+# 4. Install the Supabase CLI (one-time)
+brew install supabase/tap/supabase        # macOS (recommended)
+# or: npm install -g supabase              # cross-platform fallback
 
-# 5. Container build (what Railway runs)
+# 5. Boot local Postgres + Auth and apply migrations from scratch
+supabase start                 # first run pulls Docker images — takes a few minutes
+supabase db reset              # drops the DB and replays supabase/migrations/ + seed.sql
+
+# 6. Generate the next migration after a schema change
+supabase db diff -f <short_name>   # writes a timestamped .sql to supabase/migrations/
+
+# 7. Container build (what Railway runs)
 docker build -t tameru .
 
-# 6. Secret scan before pushing
+# 8. Secret scan before pushing
 brew install gitleaks          # one-time
 gitleaks detect --source .
 ```
+
+Schema changes are **always** made by editing or adding a migration under
+`supabase/migrations/` and running `supabase db reset` to verify. Never use
+the Supabase dashboard SQL editor for schema changes (CLAUDE.md invariant 6).
 
 The frontend lives under `frontend/` starting Day 8.

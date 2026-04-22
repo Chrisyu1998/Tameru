@@ -1,0 +1,6 @@
+-- Placeholder seed file.
+--
+-- Intentionally empty for Phase 1. Demo mode is a guided frontend tour with
+-- hardcoded fixtures (CLAUDE.md invariant 10, DESIGN.md §10), not DB rows.
+-- Real user data is created through the app via authenticated inserts under
+-- RLS; never seeded here.
