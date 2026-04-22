@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**Tameru** is a mobile-first PWA for spending intelligence. Manual transaction entry + AI-assisted categorization + agentic chat over your spending data + an MCP server. Single-user today, multi-tenant from day one. The full design lives in `DESIGN.md` — read it before making non-trivial decisions. This file captures only the invariants future Claude instances will trip on if they don't know.
+**Tameru** is a mobile-first PWA for spending intelligence. Manual transaction entry + AI-assisted categorization + agentic chat over your spending data + an MCP server. Multi-tenant from day one. **v1 scope: invite-only, ~10 friends and family, free for everyone, no Stripe, no paid tier** (DESIGN.md §3.3). A forward plan for conditional scaling to ~100 users with paid tier via Stripe is documented in DESIGN.md §17 — that plan is not v1 scope and only activates on an explicit later decision. The full design lives in `DESIGN.md` — read it before making non-trivial decisions. This file captures only the invariants future Claude instances will trip on if they don't know.
 
 ## Stack
 
 React PWA (Vite + Tailwind + Zustand) · FastAPI (Python) · Supabase (Postgres + Auth + RLS) · Anthropic API (Messages + `tool_use`) · Google Gemini 3.1 Flash-Lite (`gemini-3.1-flash-lite-preview`, currently in preview) · Perplexity Sonar · Resend · PostHog · Sentry · Railway hosting · Postgres `pg_cron`.
+
+Stripe is documented in the forward plan only — not a v1 dependency.
 
 The codebase is being scaffolded. If a tool, command, or directory you need doesn't exist yet, check `DESIGN.md` for the intended shape before inventing one.
 
@@ -16,7 +18,7 @@ The codebase is being scaffolded. If a tool, command, or directory you need does
 
 These are load-bearing decisions from the design review. Each one was chosen over a tempting alternative for a specific reason — re-deriving the choice without context will produce the wrong answer.
 
-1. **RLS is enforced via the user's JWT, not the service role.** FastAPI receives `Authorization: Bearer <user_jwt>` and instantiates a per-request Supabase client passing that JWT. Postgres enforces `auth.uid() = user_id` automatically. The `SUPABASE_SERVICE_ROLE_KEY` is reserved for **two callers only**: the `pg_cron` daily auto-logger (DB function, no app context) and Supabase CLI migrations. Application handlers never use the service role. If you find yourself reaching for it in a request handler, stop — you're about to bypass RLS.
+1. **RLS is enforced via the user's JWT, not the service role.** FastAPI receives `Authorization: Bearer <user_jwt>` and instantiates a per-request Supabase client passing that JWT. Postgres enforces `auth.uid() = user_id` automatically. In v1, the `SUPABASE_SERVICE_ROLE_KEY` is reserved for **two callers only**: the `pg_cron` daily auto-logger (DB function, no app context) and Supabase CLI migrations. Application handlers never use the service role. If you find yourself reaching for it in a request handler, stop — you're about to bypass RLS. **Forward-plan addition (only if the §17 scaling plan activates):** a Stripe webhook handler would become a sanctioned third caller, because no user JWT is in scope for a Stripe-initiated request — it resolves `user_id` via `stripe_customer_id` on `users_meta`. Do not add this path until the scaling decision is made.
 
 2. **The Claude agent loop runs in FastAPI using the Messages API with `tool_use` blocks.** Not Claude Managed Agents (designed for long-running autonomous work in Anthropic's container — wrong fit for 4–6s chat turns and DB-backed tools). Not LangChain. Not the standalone Agent SDK as a wrapper. The loop is ~80 lines and lives in our process so the user's JWT is in scope when typed tools execute.
 
@@ -28,13 +30,17 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 
 6. **Schema changes go through Supabase CLI migrations checked into `supabase/migrations/`.** Never edit production schema via the dashboard SQL editor outside emergencies. RLS policies live in migration files alongside the tables they protect.
 
-7. **No Expo. No native app. PWA only.** This was an explicit scope decision. iOS push limitations are accepted; the weekly digest is email-first via Resend.
+7. **PWA today. Expo and Capacitor rejected. Swift admitted as a possible future migration — not on the roadmap.** PWA is the ship target for v1 (~10-user invite-only) and remains the only surface unless and until a scaling decision changes that. Expo and Capacitor were evaluated and rejected (see DESIGN.md §10.3). Native Swift may later be worth it if three signals all fire: explicit user demand, measurable PWA UX drag on retention, and sustained paid-tier revenue (§10.4) — none of which can exist at the v1 scale. Do not start Swift work speculatively. iOS web push limitations are accepted; the weekly digest is email-first via Resend.
 
 8. **NL transaction parse fires on submit/blur, not on debounced keystrokes.** One Gemini call per transaction. Predictable cost. Do not add a debounced parse-as-you-type even if it feels like a UX win.
 
 9. **The dashboard fits on one screen with no scrolling.** Adding a tile requires removing one. Historical analysis lives in the AI chat (generative charts), not in the dashboard. The entry-moment insight is the primary behavioral intervention — not the dashboard.
 
 10. **Onboarding "demo" is a guided tour with hardcoded fixture data, not a live AI on fake data.** Static screens of real components rendered with fixtures. No fake-data layer in Supabase. No AI calls in the tour.
+
+11. **If billing is ever added, it is Stripe on the web — never IAP.** v1 has no paid tier and no billing. This invariant is a pre-agreed stance for the conditional §17 forward plan: when/if a paid tier ships, subscriptions go through a Stripe web checkout. Even if a native iOS build later ships, the checkout remains on the web (Spotify/Netflix model) — the 30% App Store IAP cut is not paid. Stripe state (`stripe_customer_id`, `stripe_subscription_status`, `stripe_current_period_end`, `plan`) would live on `users_meta`; webhook idempotency would be keyed on `stripe_events.event_id`. The freemium gate would be enforced in FastAPI middleware keyed on `users_meta.plan`, not in Stripe plan logic — Stripe only says which bucket the user is in. Do not implement any billing surface without an explicit scaling decision.
+
+12. **Backend is frontend-stack-agnostic.** FastAPI + per-request JWT + Supabase must work identically for a browser PWA, a Capacitor wrapper, or a future Swift client. No `User-Agent` branching in handlers. No frontend-specific payload shapes. This is the property that makes the Swift-migration decision (§10.4) reversible.
 
 ## Model usage by task
 
@@ -59,11 +65,15 @@ If you find yourself adding any field to a PostHog event that contains user-gene
 
 ## What is in scope and what is not
 
-**Permanently out of scope:** net worth tracking, investments, credit score, budgeting forecasts, multi-currency, international cards.
+**Permanently out of scope:** net worth tracking, investments, credit score, budgeting forecasts, multi-currency, international cards, Plaid / Teller.io auto-sync, in-app purchases via App Store IAP, public launch / Product Hunt, Expo / React Native.
 
-**Deferred (do not build proactively):** Plaid/Teller.io auto-sync (Phase 3), transfer bonus digest, SUB wishlist alerts (Phase 2), spending limits (Phase 3), receipt photo (Phase 2), card recommender (Phase 2).
+**v1 target (current build):** ~10 users via invite-only, free for everyone, no paid tier, no Stripe. See DESIGN.md §3.3 and §11.3 (v1 cost math).
 
-**Phase 1 only:** everything in §6 of `DESIGN.md` marked Phase 1.
+**Deferred (do not build proactively):** transfer bonus digest, SUB wishlist alerts, spending limits, receipt photo, card recommender. All post-launch, author-driven.
+
+**Conditional future plan (not v1 scope):** scaling to ~100 users via open invite link with a paid tier via Stripe on the web. Documented in DESIGN.md §17 and §11.6. Activation requires an explicit later decision — do not build the punch-list items proactively. Swift iOS migration is admitted as a possible further-future path (§10.4).
+
+**Phase 1 only (what ships in v1):** everything in §6 of `DESIGN.md` marked Phase 1. Nothing from §17.
 
 ## Commit message rules
 
@@ -85,7 +95,10 @@ Small typo fixes don't need ceremony. Substantive architectural changes still ne
 
 - Adding any new third-party AI vendor or SDK.
 - Switching from `tool_use` to a different agent pattern (Agent SDK wrapper, Managed Agents, LangChain).
-- Using the Supabase service role outside migrations and `pg_cron`.
+- Using the Supabase service role outside migrations and `pg_cron` (the Stripe webhook path in invariant #1 only activates if the §17 scaling plan is explicitly activated).
 - Adding a new MCP tool that mutates data.
 - Putting any user content into a PostHog event.
+- Starting any work on the §17 scaling punch-list (Stripe integration, infra upgrades, Privacy Policy / ToS, etc.) — the scaling decision must be made explicitly first; v1 does not need any of it.
+- Starting any Swift / native-iOS work — the trigger criteria in DESIGN.md §10.4 must be met first, and the scaling phase must already be active.
+- Adding any in-app purchase / App Store IAP path — invariant #11 says never.
 - Editing `DESIGN.md` substantively (small typo fixes are fine; architectural changes need agreement).

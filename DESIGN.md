@@ -6,12 +6,12 @@
 |---|---|
 | Author | Chris Yu |
 | Date | April 2026 |
-| Version | 3.0 (revised from PRD v2.1) |
+| Version | 3.1 (adds forward plan for scaling) |
 | Status | Approved — implementation |
 | Stack | React PWA · FastAPI · Supabase · Anthropic API · Gemini API · Perplexity API · PostHog |
 | Domain | tameru.app (candidate) |
 
-This document supersedes PRD v2.1. Material changes from v2.1 are summarized in §0.
+This document supersedes PRD v2.1. Material changes from v2.1 are summarized in §0. v3.1 is a planning-only revision: **current scope is unchanged** — still ~10-user invite-only, free for everyone, no Stripe, no paid tier. v3.1 adds a **forward plan** describing what would need to happen *if* v1 is successful and scaling to ~100 users becomes the next step, plus a reconsidered mobile-strategy stance admitting Swift as a possible future migration. See §0.1 summary and §17 detail.
 
 ---
 
@@ -41,6 +41,22 @@ This document supersedes PRD v2.1. Material changes from v2.1 are summarized in 
 | AI provider data retention disclosed: **Anthropic ZDR requested + Gemini paid tier** | Privacy copy now matches reality. |
 | PostHog drops "client-side question classifier" — only structural events tracked | Simpler, no PII surface, sufficient for funnel analysis. |
 | SSE streams: **frontend reconnect button + Railway grace period** | Acknowledged failure mode for in-flight chat during deploys. |
+
+---
+
+## 0.1 Changes from v3.0
+
+**v3.1 is a planning-only revision.** Nothing in the v1 build scope changes. v1 still launches to ~10 invite-only friends and family, free for everyone, with no Stripe and no paid tier.
+
+| Change | Type | Reason |
+|---|---|---|
+| New **§17 — Forward plan for scaling to ~100 users** | Forward plan (not v1 scope) | Documents the operational punch-list (infra, compliance, billing, cost controls) that would need to be completed *if* v1 is successful and scaling to ~100 users is chosen later. Serves as future-self's reference so the decisions are not re-litigated under pressure. **Activation is conditional on an explicit decision to scale** — nothing in §17 is required for v1 launch. |
+| Mobile strategy revised in §10: **PWA today, Swift native admitted as a possible future migration** | Stance change (affects forward plan only) | PWA still ships for v1 and stays the only surface at the ~10-user scale. Expo and Capacitor were re-evaluated and rejected — see §10.3. Swift migration is a conditional future path, triggered by real user demand (§10.4 criteria). |
+| Schema sections §8.7 and §8.10 document forward-plan billing columns and the `stripe_events` idempotency table | Forward plan (not v1 schema) | The columns and table are **not part of the v1 migrations**. They are documented so the schema shape is pre-agreed; the migration ships only if/when the scaling decision is made. Day-1 `users_meta` does not include the Stripe columns. |
+| New §11.6 — cost projection at 100 users | Forward plan | Shows the AI-cost shape at the scaled audience so the freemium-vs-paid economics are explicit before any scaling decision. Not a v1 cost estimate (see §11.3 for that — unchanged). |
+| Open items (§16) expanded with: freemium gating rule, paid-tier price, entity registration timing, Swift migration thresholds, Anthropic rate-limit increase request | Forward plan | Each is a decision to close *before* scaling, not before v1 launch. |
+
+Everything outside these additions is unchanged. If you are reading this to understand what v1 builds, read §3.3, §6, §11.3, and §15 Phase 1 — not §17.
 
 ---
 
@@ -114,15 +130,25 @@ Personal finance in 2026 splits into three buckets:
 - Net worth, investments, credit score, budgeting forecasts.
 - Multi-currency or international card support.
 
-### 3.3 Scope limit — invite-only
+### 3.3 Scope limit — invite-only (v1)
 
-Tameru is an invite-only project. No public launch. No paid tier. No Stripe. No Plaid or Teller.io. Expected user count: ~10 close friends and family, never more than a few dozen. Feature additions beyond Phase 1 are built only if the author wants them, not because growth demands them. Cost ceiling is low and bounded (§11.2 daily cap).
+Tameru v1 ships as an **invite-only project**. No public launch. No paid tier. No Stripe. No Plaid or Teller.io. Expected user count at v1 launch: **~10 close friends and family**, never more than a few dozen at this scale. Feature additions beyond Phase 1 are built only if the author wants them, not because growth demands them. Cost ceiling is low and bounded (§11.2 daily cap).
+
+**Permanently excluded at every scale:**
+
+- Plaid / Teller.io / any auto-sync that imports compliance scope Tameru doesn't want.
+- Public launch, Product Hunt, paid acquisition.
+- In-app purchases via App Store IAP — the design-doc stance is Stripe-on-web, even in the forward plan.
+
+**Forward plan (not v1 scope):** if v1 is successful, a decision may be made later to scale to ~100 users via an open invite link, with a free + paid tier billed through Stripe on the web. That plan is documented in **§17**. It is not part of the v1 build. Activating it is an explicit decision, not an automatic progression.
 
 ### 3.4 Deferred (nice-to-have, not committed)
 
 - Transfer bonus digest, SUB wishlist alerts.
 - Card recommender, proactive insights, recurring detection, receipt photo via Gemini Vision, retroactive rewards gap analysis.
-- Native iOS/Android via Expo — **dropped from roadmap.** PWA covers the mobile case; iOS web push limitations are accepted.
+- **Expo / React Native** — evaluated and rejected as a migration path. See §10.
+- **Native iOS via Swift** — admitted as a *possible* future migration if real user demand justifies the rewrite cost. Not on the roadmap. Trigger criteria is an open item (§16).
+- Android — out of scope until an iOS surface exists.
 
 ---
 
@@ -685,12 +711,26 @@ Powers the "past corrections" field in the Gemini categorization prompt. Most re
 
 ### 8.7 `users_meta`
 
+**v1 schema (ships with v1):**
+
 | Field | Type | Description |
 |---|---|---|
 | user_id | UUID | PK / FK → auth.users |
 | active_device_id | text | Most recently signed-in device |
 | analytics_opted_out | boolean | Default false |
 | created_at | timestamptz | |
+
+**Forward-plan additions (only migrated if the scaling-to-100 decision is made — §17):**
+
+| Field | Type | Description |
+|---|---|---|
+| plan | text | `free` \| `paid`. Default `free`. CHECK constraint on allowed values. |
+| stripe_customer_id | text | Stripe Customer ID. Nullable until the user enters a paid flow. |
+| stripe_subscription_id | text | Stripe Subscription ID. Nullable for free-tier users. |
+| stripe_subscription_status | text | `active` \| `trialing` \| `past_due` \| `canceled` \| `incomplete` \| NULL. Mirrors Stripe; source of truth is Stripe, this column is a local cache. |
+| stripe_current_period_end | timestamptz | End of the current paid billing period. Used to gracefully degrade to free-tier gating when a payment lapses. |
+
+**Note on Stripe vs. Tameru subscriptions:** when the forward-plan columns ship, `stripe_subscription_*` will refer to **the user's paid subscription to Tameru**. They are distinct from the `subscriptions` table (§8.3), which tracks **user-logged recurring charges** like Netflix. Do not conflate the two.
 
 ### 8.8 `ai_call_log`
 
@@ -736,6 +776,24 @@ Daily aggregation of `ai_call_log` rows older than 90 days.
 **System-level calls (NULL `user_id` in `ai_call_log`) are not rolled up here** — Postgres forbids NULLs in a PK column, and a sentinel UUID would break the FK. The aggregator skips them; they remain queryable in `ai_call_log` during its 90-day hot window. If system-call aggregates become useful later, add a separate rollup table keyed only on `(date, provider, model, task_type)`.
 
 **RLS shape:** same as §8.8 — `SELECT`-only, writes via service role.
+
+### 8.10 `stripe_events` (forward plan only — not in v1)
+
+**Not in v1 schema.** Only migrated if the scaling-to-100 decision is made (§17) and paid billing ships. Documented here so the shape is pre-agreed.
+
+Webhook-idempotency log. Stripe retries on non-2xx responses, so every handler must be idempotent. Each webhook event ID is inserted on first receipt; duplicates are no-ops.
+
+| Field | Type | Description |
+|---|---|---|
+| event_id | text | Primary key. Stripe event ID (`evt_...`). |
+| event_type | text | e.g. `customer.subscription.created`, `invoice.paid`, `invoice.payment_failed` |
+| received_at | timestamptz | First observation |
+| processed_at | timestamptz | Nullable; set after handler completes |
+| payload_hash | text | SHA-256 of the raw webhook body for audit |
+
+**RLS shape:** `ENABLE ROW LEVEL SECURITY` with no policies — the table is reachable only via the service role (webhook handler uses service role because there's no user JWT in scope for a Stripe-initiated request). A user JWT can neither read nor write.
+
+**No `user_id` column** — webhooks sometimes arrive before the corresponding user row is fully hydrated (e.g., `checkout.session.completed` races with the initial customer creation). The handler looks up the user via `stripe_customer_id` on `users_meta` and updates that row; `stripe_events` exists only to deduplicate.
 
 ---
 
@@ -809,11 +867,11 @@ User can opt out entirely in Settings (`users_meta.analytics_opted_out`).
 
 ---
 
-## 10. Mobile Strategy — PWA Only
+## 10. Mobile Strategy — PWA Today, Swift Admitted as a Possible Future Migration
 
-Tameru ships and stays as a Progressive Web App. No Expo migration on the roadmap. The author accepts the trade-off of weaker iOS push notifications in exchange for simpler shipping and one codebase.
+Tameru ships as a Progressive Web App. A Swift-native iOS migration is admitted as a *possible* future path if user demand materializes. Expo and Capacitor were evaluated and rejected for the reasons below. There is no Swift work on the Phase 1 roadmap.
 
-### 10.1 PWA requirements
+### 10.1 PWA requirements (current ship)
 
 - Installable via Safari "Add to Home Screen."
 - Service Worker caches the app shell for offline load.
@@ -826,6 +884,30 @@ Tameru ships and stays as a Progressive Web App. No Expo migration on the roadma
 ### 10.2 Push notifications — disclosure
 
 iOS Safari supports web push only on iOS 16.4+ and only after the user installs the PWA to home screen. Even then, opt-in rates are lower than native. The weekly digest is therefore email-first; web push is a supplementary nudge channel for users who opt in.
+
+### 10.3 Alternatives considered for an App Store surface
+
+| Option | Verdict | Reason |
+|---|---|---|
+| **Capacitor / WebView wrapper** | Rejected as the *primary* native path | App Store Guideline 4.2 ("minimum functionality") scrutinizes web wrappers. Apps with real native-feeling features usually pass, but the UX ceiling is ~85–90% of true native — noticeably off on keyboard, scroll momentum, and navigation gestures. If a native surface is ever built, it should be worth the effort, not a thin shell. |
+| **React Native / Expo** | Rejected | Would be viable in isolation — but the web PWA is already the commitment, and RN imposes meaningful architectural tax on features Tameru uses daily: SSE streaming needs `react-native-sse`, Web Speech API has no equivalent (would force server-side Whisper, breaking the §7.7 privacy posture), IndexedDB offline queue must be re-implemented against `expo-sqlite`, and Tailwind maps only ~95% cleanly via NativeWind. Net: two codebases or a rewrite, for ~95% of native feel. |
+| **Native Swift / SwiftUI** | **Admitted as possible future migration** | Best iOS UX ceiling. Realistic cost at Tameru's feature scope is ~2× the PWA build time (see §17 rationale). Only worth doing if real users ask for it — not speculatively. |
+
+### 10.4 Swift migration — when it's worth it
+
+Triggered by signal, not schedule. Migrate only if **all three** are true:
+
+- A meaningful fraction of active users explicitly ask for a "real iOS app" in feedback.
+- PWA-specific UX limits (push opt-in rate, Safari install friction, offline sync complaints) are measurably hurting retention.
+- There is sustained revenue from the paid tier (§17) to justify the 2–3 month build.
+
+Exact thresholds are an open item (§16). Until all three are true, PWA is not a stepping stone — it is the product.
+
+### 10.5 Why the backend is migration-safe regardless
+
+FastAPI + per-request JWT + Supabase is stack-agnostic. Every API is called the same way from a browser, a Capacitor shell, a React Native client, or a Swift `URLSession`. The agent loop, RLS, MCP server, and `pg_cron` scheduler do not assume a web frontend. A future Swift client re-uses 100% of the backend.
+
+This is a property to preserve: **no frontend-specific logic in the backend.** If a request handler ever starts branching on `User-Agent`, stop — the abstraction has leaked.
 
 ---
 
@@ -919,9 +1001,33 @@ Mitigations already in place:
 - **The daily cap is the insurance policy.** Without it, one user running a chat loop overnight could 10× the month's bill. The cap makes the worst case predictable.
 - **The original PRD's $0.40/month for Phase 1 chat was off by ~50×.** Token math (§11.1) is the source of truth — keep the math visible so future-you doesn't repeat the same mistake.
 
----
+### 11.6 Cost projection — if scaled to 100 users (forward plan only)
 
-## 12. Schema Migrations
+**Not a v1 cost estimate.** v1 runs at the ~$37/month shape in §11.3. This table projects what the bill would look like *if* the scaling-to-100 decision is later made (§17), at which point infrastructure upgrades and freemium gating become load-bearing.
+
+Linear-scale projection from §11.3, assuming the same per-user usage profile and **freemium gating not yet applied** (see §17.6 for the gating lever).
+
+| Service | Cost at 100 users | Notes |
+|---|---|---|
+| Railway Starter | $20.00 | Upgrade from Hobby required — removes sleep, adds RAM headroom. |
+| Supabase Pro | $25.00 | Mandatory. Free tier caps at 500 MAU / 500MB; Pro unlocks PITR, PgBouncer, and daily backups. |
+| Google OAuth | $0.00 | Free. |
+| Sentry | $0.00 | Free tier fits with headroom. |
+| Resend | $0.00 | Under 3K emails/month at this scale. |
+| PostHog | $0.00 | Under 1M events/month. |
+| Stripe | ~2.9% + $0.30/tx | Usage-based; only paid-tier conversions incur. |
+| Gemini 3.1 Flash-Lite — categorization | $0.50 | 9,000 calls/month. |
+| Gemini 3.1 Flash-Lite — CSV (amortized) | $0.10 | |
+| Gemini 3.1 Flash-Lite — NL parse | $0.20 | |
+| Perplexity — card lookup | $0.50 | One-time per card add, amortized. |
+| Claude Haiku — agent chat | **$270.00** | 15,000 turns/month. Dominant line item; freemium gating is the lever. |
+| Claude Haiku — memory distill | $2.00 | 1 per session per user per day. |
+| Claude Sonnet — weekly digest | $0.70 | 4 calls/user/month. |
+| **Total (100 users, no gating)** | **~$319/month** | **~$3.19 per user per month, as at 10 users — AI cost is near-linear.** |
+
+**Why this number matters:** at 10 users the entire bill is noise. At 100 users, Claude chat alone is $270/mo — crossing the threshold where a freemium gate becomes the difference between a sustainable project and a subsidy from the author's pocket. The gate, the paid tier, and the Flash-Lite A/B (§16) are all responses to this one line item.
+
+**What freemium gating changes:** a rule like "3 chat turns/day free; paid tier unlimited" moves free-tier users from ~150 turns/month to ~90, which at 80% free / 20% paid cuts the chat line roughly in half. Exact numbers depend on the gate; see §17.6.
 
 All schema changes go through the **Supabase CLI** and are checked into the repo under `supabase/migrations/`.
 
@@ -1010,7 +1116,7 @@ If a future SLO requires no dropped streams, scale horizontally (Railway support
 
 ### Post-Phase 1 — optional, author-driven only
 
-Because Tameru is invite-only (§3.3), there is no committed Phase 2 or Phase 3. The following features may be added if the author wants them, in any order, with no scaling or pricing pressure:
+Because v1 Tameru is invite-only (§3.3), there is no committed Phase 2 or Phase 3. The following features may be added if the author wants them, in any order, with no scaling or pricing pressure:
 
 - Card recommender (best card per category based on current wallet)
 - Recurring subscription detection (suggest patterns as new subscriptions)
@@ -1020,7 +1126,15 @@ Because Tameru is invite-only (§3.3), there is no committed Phase 2 or Phase 3.
 - Transfer bonus digest, SUB wishlist alerts
 - Spending limits with AI nudges
 
-Explicitly excluded: Plaid / Teller.io auto-sync, Stripe / paid tier, public launch, Expo / native apps.
+Explicitly excluded at every phase: Plaid / Teller.io auto-sync, public launch / Product Hunt, Expo / React Native, in-app purchases via App Store IAP.
+
+### Conditional future phase — Scaling to ~100 users (not committed)
+
+If v1 runs successfully at the ~10-user invite scale and the author later decides to scale to ~100 users, a "Phase 1.5" scaling-readiness milestone activates before the invite link opens to a wider audience. The full punch-list — infra upgrades, Stripe billing (schema §8.7 + §8.10), Privacy Policy + ToS, account deletion, Anthropic ZDR + rate-limit increase, per-user cost dashboard, incident runbook — is **§17**, gated by the §17.13 checklist.
+
+**This phase is triggered by an explicit decision, not by growth.** It is documented now so the shape is pre-agreed; nothing in it ships with v1.
+
+Admitted as a *possible* post-scaling migration (not on the roadmap): native Swift iOS client (§10.4).
 
 ---
 
@@ -1028,12 +1142,171 @@ Explicitly excluded: Plaid / Teller.io auto-sync, Stripe / paid tier, public lau
 
 These are explicitly acknowledged unknowns that the v1 build will resolve in code:
 
+**v1 open items:**
+
 - **Gemini 3.1 Flash-Lite is in preview** as of March 3, 2026 (`gemini-3.1-flash-lite-preview`). Preview models can change pricing, behavior, or be deprecated on short notice. Risk mitigation: model string is held in a single env var (`GEMINI_MODEL`) so we can fall back to `gemini-2.5-flash` (GA) instantly if Flash-Lite preview becomes unstable.
-- **Flash-Lite A/B test for chat agent.** After Phase 1 launch, run the multi-hop eval suite (§7.10) against `gemini-3.1-flash-lite-preview` as an alternate chat model. If accuracy holds within 10% of Haiku, switch to save ~$18/month. Decision recorded in `evals/results.db` and a follow-up doc note.
-- Anthropic ZDR enrollment — submit request before public launch (currently using default 30-day T&S retention).
-- Perplexity Sonar JSON-mode reliability for card lookup — fall back to manual entry if extraction confidence is low.
-- iOS PWA push opt-in rates in practice — measure via PostHog `weekly_digest_opened` after Phase 1 launch. Email is the primary digest channel regardless.
+- **Flash-Lite A/B test for chat agent.** After Phase 1 launch, run the multi-hop eval suite (§7.10) against `gemini-3.1-flash-lite-preview` as an alternate chat model. If accuracy holds within 10% of Haiku, switch to save ~$18/month at the ~10-user v1 scale. The savings grow to ~$180/month *if* the conditional scaling-to-100 phase activates — so this A/B becomes a higher priority at that point.
+- **Anthropic ZDR enrollment** — submit request before v1 launch (currently using default 30-day T&S retention).
+- **Perplexity Sonar JSON-mode reliability** for card lookup — fall back to manual entry if extraction confidence is low.
+- **iOS PWA push opt-in rates in practice** — measure via PostHog `weekly_digest_opened` after Phase 1 launch. Email is the primary digest channel regardless. This measurement also feeds the §10.4 Swift-migration decision.
+
+**Conditional open items — decide before activating the §17 scaling plan, not before v1 launch:**
+
+- **Freemium gating rule for chat.** If/when a paid tier ships, the free tier will have some cap on AI chat usage and the paid tier will be higher or unlimited. Candidate rule: "3 turns/day free, paid unlocks the §11.2 daily cap." Enforcement lives in FastAPI middleware (§7.3), keyed on `users_meta.plan`; Stripe only determines which bucket a user is in.
+- **Paid-tier price point.** Not committed. Must be set before the first paid-tier flow ships. Price is a product decision — no backend change required to move it later.
+- **Business entity registration.** Sole proprietorship is fine for the invite-only v1 scope. Registration (LLC or similar) must precede the first paid flow for liability and Stripe KYC reasons. Target: complete concurrently with the §17 punch-list *if* scaling is chosen.
+- **Anthropic rate-limit increase request.** Default 50 RPM / 200K TPM is sufficient for ~10 users. If the scaling decision is made, submit an increase request at least 2 weeks before opening the invite link.
+- **Swift migration trigger criteria.** §10.4 lists the three signals. Exact thresholds (how many users asking, what retention delta, what revenue floor) are deferred until real signal arrives.
 
 ---
 
-— End of design document — Tameru v3.0 · Chris Yu · April 2026
+## 17. Forward Plan — Scaling to ~100 Users (conditional)
+
+**This section is not v1 scope.** v1 ships invite-only to ~10 users with no paid tier, no Stripe, and no infrastructure upgrades (§3.3). This section documents the operational punch-list that would activate **if and only if** v1 is successful and the author later decides to open the product to a wider (~100-user) audience. Every bullet is either a build task, a configuration change, or a policy decision that must be closed *before* opening an invite link at that scale. Activation is an explicit choice — nothing here is automatic.
+
+The intent of writing this down now is so future-self has a pre-reviewed plan and does not have to reason from scratch under pressure.
+
+### 17.1 Decisions pre-agreed for this scale (applies only if activated)
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Distribution | Open invite link (shareable URL) | Simpler than waitlist/codes at ~100 users. If abuse surfaces, fall back to signed invite codes — the signup endpoint is structured to swap gating cleanly. |
+| Pricing | Free tier day 1; paid tier via Stripe on the web | Friends/family pay nothing; paid tier unlocks the chat quota. Exact gating rule and price point are open items (§16). |
+| Billing surface | Stripe on the web, not IAP | Permanent stance. Applies even if a native iOS build later ships. The web checkout is the source of truth; native clients link out (Spotify/Netflix model). |
+| Business entity | Sole prop now; register before first paid user | Forming an LLC (or equivalent) is required for Stripe KYC on the paid flow and for ToS liability language. Trigger: the day the paid tier goes live. |
+| On-call | Solo, best-effort within 24 hours | Documented publicly in ToS. No pager rotation, no uptime SLA. Honesty about limitations is better than promises that can't be kept. |
+| Mobile surface | PWA only | Swift migration is a post-100-users question per §10.4, not a scaling prerequisite. |
+
+### 17.2 Schema changes for billing
+
+See §8.7 for `users_meta` additions and §8.10 for the `stripe_events` idempotency table. One migration PR. Workflow per §12.
+
+**Webhook handler responsibility:** the webhook endpoint runs with the Supabase service role (invariant: no user JWT is in scope for a Stripe-initiated request — this is the *third* sanctioned service-role caller alongside `pg_cron` and CLI migrations; CLAUDE.md invariant #1 must be updated to admit this). It looks up the user by `stripe_customer_id`, updates `plan` / `stripe_subscription_status` / `stripe_current_period_end` on `users_meta`, and records the event ID in `stripe_events`. All writes are idempotent against the `stripe_events.event_id` primary key.
+
+### 17.3 Infrastructure
+
+- [ ] **Railway Hobby → Starter (~$20/mo).** Removes sleep-on-inactivity; raises RAM. Hobby's idle sleep would kill SSE streams within seconds of inactivity.
+- [ ] **Supabase Free → Pro ($25/mo).** Mandatory. Free tier caps at 500 MAU and 500MB DB, but also omits PITR, PgBouncer, and daily backups — which are the load-bearing upgrades, not the MAU cap.
+- [ ] **Enable PgBouncer (transaction-mode pooling)** on Supabase Pro. Per-request JWT clients (§9.1) at 100 concurrent users can exhaust Postgres's direct connection pool. Transaction-mode pooling multiplexes safely.
+- [ ] **Verify `terminationGracePeriodSeconds = 60`** on Railway. Documented in §14.4; confirm the Railway YAML reflects it.
+- [ ] **Confirm `/healthz` endpoint** exists and returns in <100ms without DB access.
+- [ ] **UptimeRobot (free tier)** on `/healthz`, pinging every 5 minutes, with alerts routed to a channel the author actually reads daily (personal phone, Discord DM — not a buried inbox).
+
+### 17.4 Database
+
+- [ ] **Index audit** — confirm indexes exist on every frequent query pattern:
+  - `transactions(user_id, date)` (dashboard, chat time-range queries)
+  - `transactions(user_id, category)` (category rollups)
+  - `transactions(user_id, card_id)` (per-card analysis)
+  - `transactions(subscription_id, date)` (already covered by the UNIQUE constraint in §8.2)
+  - `subscriptions(user_id, status)`
+  - `merchant_category(user_id, merchant)` (already UNIQUE per §8.4)
+  - `ai_call_log(user_id, timestamp)` (cost dashboard, rate-limit checks)
+- [ ] **RLS load test.** Seed ~100K rows across ~100 synthetic users. `EXPLAIN ANALYZE` the five most frequent API queries and verify the `auth.uid() = user_id` check does not dominate plan cost. RLS policies that look fine at 10 users can add 10–100× cost under load if an index is missing.
+- [ ] **`ai_call_log` growth check.** At 100 users × 5 turns/day × 3 hops ≈ 1,500 rows/day; 90-day hot window ≈ 135K rows. Verify the `pg_cron` aggregator (§14.1) runs daily and prunes. Add a heartbeat row that the job updates; alert if stale > 26 hours.
+- [ ] **PITR restore drill.** Restore a Supabase snapshot into a scratch project *before* production depends on it. Uncaught errors in the restore path have a habit of surfacing only when you need them to work.
+
+### 17.5 API & Backend
+
+- [ ] **Rate limit every endpoint**, not only `/chat`. Auth, export, CSV upload, MCP — all are abuse surfaces. Per-user and per-IP limits.
+- [ ] **Verify per-user daily Claude token cap (§11.2) is enforced in code**, not only documented. Add an integration test that exercises the 429 path.
+- [ ] **Anthropic rate-limit increase request.** Default 50 RPM / 200K TPM is tight at 100 active users chatting concurrently. Submit at least 2 weeks before the invite link opens.
+- [ ] **Verify 429 backoff** (§7.3) is actually wired in the agent loop, not just a comment.
+- [ ] **Server-side CSV upload limits.** Reject files above a size or row-count threshold *before* parsing. Prevents a malicious 100MB upload from pinning a FastAPI worker.
+- [ ] **Pydantic validation on every NL-entry / merchant field.** No bare `str` inputs reaching the DB. Closes SQL injection surface even with RLS.
+- [ ] **SSE concurrency budget.** 100 users holding 100 open streams on one Railway instance: measure memory. If it doesn't hold, add a connection cap and reject overflow with a retry-after message.
+- [ ] **Request timeout on every AI provider call.** Anthropic, Gemini, Perplexity — all. A hung upstream must not block a FastAPI worker indefinitely.
+- [ ] **Stripe webhook handler** with signature verification, idempotent against `stripe_events.event_id`. Test end-to-end: create a Stripe test subscription, observe `users_meta.plan` flip to `paid`; trigger a test `invoice.payment_failed`, observe graceful degradation.
+
+### 17.6 AI cost controls
+
+The shape of the problem: §11.6 shows Claude chat is ~$270/mo at 100 users with no gating — that's the dominant line item by ~10×. Mitigations, in priority order:
+
+- [ ] **Commit to a freemium gating rule.** Candidate default: 3 chat turns per day on free tier; paid tier uses the §11.2 daily cap as the ceiling. Alternative: N messages/week. Exact numbers are an open item (§16). Enforcement is in FastAPI middleware (same place as the §11.2 daily cap), keyed on `users_meta.plan`.
+- [ ] **Per-user cost dashboard.** A single SQL query against `ai_call_log` + `ai_call_log_daily` that returns "top 10 users by AI spend this week." Needed *before* 100 users, not after a surprise bill. A Supabase SQL view is sufficient; Metabase is overkill at this scale.
+- [ ] **Prioritize the Flash-Lite A/B for chat (§16 open item).** At 10 users the savings was ~$18/mo — not worth prioritizing. At 100 users it's ~$180/mo — worth a week of eval-suite work. Re-evaluation criterion: multi-hop eval accuracy within 10% of Haiku's.
+- [ ] **Cost alert.** If daily AI spend crosses a configured threshold, alert the author. Catches runaway usage that slips past the per-user cap (e.g., a new model pricing surprise).
+
+### 17.7 Security & Auth
+
+- [ ] **API key rotation plan.** One-page doc: which keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `PERPLEXITY_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SENTRY_DSN`), how to rotate each without full redeploy (Railway env-var hot-update where supported), rotation cadence (quarterly baseline; immediately on any suspected leak).
+- [ ] **RLS contract tests (§13.1) passing in CI.** Blocker. A red RLS test cannot ship.
+- [ ] **Supabase brute-force protection enabled** on auth endpoints. Enabled in Supabase dashboard; verify it's on.
+- [ ] **Service-role key audit.** Grep the codebase. Confirm no request handler imports `SUPABASE_SERVICE_ROLE_KEY`. The CI lint from §9.1 enforces this; confirm it's configured and fails the build on violation. The Stripe webhook handler is now a sanctioned third caller (§17.2) — update the lint's allowlist accordingly.
+- [ ] **MCP token revocation tested end-to-end.** User revokes a token; next MCP request with that bearer fails with a clean 401, not a 500.
+- [ ] **`gitleaks` scan green** before the repo goes public (already in the §9.2 pipeline from Day 1 scaffold; verify it's still running).
+
+### 17.8 Compliance
+
+At ~100 users across US multi-state, Taiwan, and Japan, most statutory thresholds (CCPA's 100K-resident floor, GDPR territorial scope, etc.) are not crossed. But the baseline below is non-negotiable because (a) paid billing changes the legal posture, (b) international users expect transparent privacy practices, and (c) any future App Store submission requires most of this up front.
+
+- [ ] **Privacy Policy publicly hosted.** Lists every sub-processor (Anthropic, Google, Supabase, PostHog, Sentry, Resend, Perplexity, Stripe). Discloses cross-border transfer to US servers. Names the data categories (transaction data, auth data, product usage events).
+- [ ] **Terms of Service publicly posted.** Includes liability language appropriate to the business entity once registered; includes the solo-dev best-effort response SLA.
+- [ ] **Account deletion endpoint**, tested end-to-end. Deleting an `auth.users` row cascades through every user-owned table per §8 FK definitions; verify no orphan rows remain. Accessible from in-app Settings — not only by emailing support.
+- [ ] **Explicit consent at signup.** Checkbox (not pre-checked, not implied) for the sub-processor list and cross-border transfer. Record consent timestamp on `users_meta`.
+- [ ] **Anthropic ZDR enrolled** (§16). Close before the invite link opens.
+- [ ] **Google Gemini DPA on file.** Paid tier is already required; confirm DPA is signed, not just implied.
+- [ ] **Data export endpoint** (§9.6) verified working at a realistic data size.
+- [ ] **User-facing "data we store about you" screen** in Settings. Lists sub-processors, links to Privacy Policy, links to deletion + export flows. Cheap to build, high trust dividend.
+
+### 17.9 Reliability & runbooks
+
+- [ ] **`pg_cron` missed-run alerting.** The subscription auto-logger silently skipping is the highest-cost silent failure mode — users don't notice until month-end. Add a heartbeat row that the cron updates; alert if stale > 26 hours.
+- [ ] **Sentry alerts** on 5xx spike and auth-failure spike. Thresholds set conservatively and tuned after a week of baseline traffic.
+- [ ] **Per-provider outage behavior** decided and implemented:
+  - Anthropic down → chat returns a user-visible "AI is temporarily unavailable, please try again in a few minutes." Not a silent hang.
+  - Gemini down → categorization falls back to "Uncategorized" with a hint that the user can set it manually. Saves continue.
+  - Perplexity down → card add falls back to manual multiplier entry.
+  - Stripe down → no checkout, show the user a polite retry message.
+- [ ] **Gemini 3.1 Flash-Lite preview → 2.5 Flash fallback tested** via the `GEMINI_MODEL` env-var swap in a staging deploy, not just documented.
+- [ ] **SSE reconnect tested under a real Railway redeploy**, not only a local simulation.
+- [ ] **Incident response runbook.** One page per failure mode (Railway down, Supabase down, Anthropic down, `pg_cron` stalled, Stripe webhook failing, key rotation emergency). "What do I do in the first 15 minutes" bullets. Written in prose the author can actually follow at 2am.
+
+### 17.10 Observability
+
+- [ ] **Per-user AI cost view.** Supabase SQL view over `ai_call_log` + `ai_call_log_daily`. Queryable in the dashboard.
+- [ ] **PostHog onboarding funnel.** Measure drop-off: philosophy screen viewed → first transaction logged → first chat turn → returned day 7. Drop-off between steps is the first signal to investigate at 100 users.
+- [ ] **Slow query logging enabled** on Supabase. Review weekly during the first month at scale; fix anything slower than 1s.
+- [ ] **Sentry error volume review and scrub.** Known-noise errors become a 10× noise floor at 10× volume — fix or ignore them explicitly before scaling.
+
+### 17.11 User-facing
+
+- [ ] **In-app feedback channel.** Pick one and link it: Discord invite, email form, in-app report button. Single source so the author actually sees everything.
+- [ ] **Support email publicly listed** in ToS and in-app Settings.
+- [ ] **Welcome email sequence** (Resend): day 0 welcome, day 1 nudge to first transaction, day 7 nudge to try the chat. Three emails, no more.
+- [ ] **Communication channel for outages.** Status page OR a single designated Discord/X/email channel where outage updates post. Solo-dev is allowed to skip a formal status page as long as users know where to look.
+- [ ] **In-app "Delete my account" button** (not email-only). Required for GDPR-adjacent regimes; required by Apple if a native build ever ships. Cheaper to build now than backfill later.
+- [ ] **Plan / billing UI.** Settings → Billing shows current plan, period end, invoices, and a "Manage subscription" link to Stripe's customer portal (cheapest path; no custom UI needed).
+
+### 17.12 Biggest risks at this scale, specifically
+
+1. **AI cost explosion.** ~10× jump in Claude chat spend. Mitigation: freemium gating + daily cap. Without both, one runaway user can 10× the bill in a day.
+2. **Supabase Free-tier hard caps hit mid-onboarding.** Must upgrade to Pro *before* opening the invite link, not after hitting the limit. Cutover is instant but planning it into a launch day adds unnecessary risk.
+3. **Anthropic rate-limit throttling.** Default 50 RPM is not enough headroom for 100 users. Request the increase at least 2 weeks before launch — Anthropic's response time is variable.
+4. **RLS under real load.** Policies that are free at 10 users add per-query cost that's invisible at low row counts. Load-test before trusting it.
+5. **Compliance stops being optional.** Privacy Policy, deletion endpoint, explicit consent, and ToS move from "nice to have" to legally required the moment there are international users plus paid billing.
+6. **Stripe webhook reliability.** A missed webhook is a silent billing desync. Idempotency (§8.10) is the safety net; so is a periodic reconciliation job that compares Stripe subscription state against `users_meta`. The reconciliation job is nice-to-have at 100 users but worth a backlog note.
+
+### 17.13 Go / no-go checklist (only if scaling is activated)
+
+Minimum set before flipping a ~100-user invite link live. None of this applies to the v1 ~10-user launch:
+
+- [ ] Railway Starter + Supabase Pro active.
+- [ ] PgBouncer enabled.
+- [ ] Privacy Policy + Terms of Service live and linked from signup.
+- [ ] Account deletion endpoint tested, cascades verified.
+- [ ] Stripe integration tested end-to-end (new subscription, successful renewal, payment failure, cancellation, refund).
+- [ ] RLS contract tests green in CI.
+- [ ] `/healthz` + UptimeRobot configured with alerts to the author.
+- [ ] Per-user AI cost view queryable.
+- [ ] Anthropic rate-limit increase approved.
+- [ ] Anthropic ZDR enrolled.
+- [ ] Freemium gating rule committed and enforced in middleware.
+- [ ] Incident response runbook written.
+- [ ] Business entity registered (if paid tier ships concurrently with invite link).
+
+If any box is red, the invite link waits.
+
+---
+
+— End of design document — Tameru v3.1 · Chris Yu · April 2026
