@@ -1,8 +1,8 @@
-# Day 17 — SSE streaming + frontend reconnect
+# Day 12 — SSE streaming + frontend reconnect
 
 ## Goal
 
-Convert `POST /chat/turn` to stream tokens via Server-Sent Events. Frontend renders progressively. On stream drop, show a reconnect button.
+Upgrade the chat wire from the non-streaming request/reply Day 10 ships on to Server-Sent Events. Convert `POST /chat/turn` to stream tokens. Frontend renders progressively (replacing Day 10's full-reply render). On stream drop, show a reconnect button.
 
 ## Read first
 
@@ -24,9 +24,9 @@ Convert `POST /chat/turn` to stream tokens via Server-Sent Events. Frontend rend
     - `streamTurn({message, conversation_id, onToken, onToolUse, onToolResult, onDone, onError})`.
     - Uses native `EventSource` (with `Authorization` header — falls back to `fetch` + `ReadableStream` if `EventSource` headers aren't supported).
     - On `error`, surfaces the failure to the caller with a stable shape.
-- Reconnect UX (built today, used in Day 18):
-  - On `error` or unexpected disconnect, the chat UI shows: "Connection lost. [Retry]". Clicking Retry re-fires the same message with the same `conversation_id`. The backend's idempotency comes from the assistant turn not being persisted until `done`.
-- Verify Railway grace period from Day 7 is set to 60s.
+- Reconnect UX (wires into the chat UI from Day 10):
+  - On `error` or unexpected disconnect, the chat UI shows: "Connection lost. [Retry]". Clicking Retry re-fires the same message with the same `conversation_id`. The backend's idempotency comes from the assistant turn not being persisted until `done`. Replaces Day 10's generic "something went wrong — retry" placeholder.
+- Verify Railway grace period from Day 11 is set to 60s.
 - Tests:
   - `tests/test_chat_stream.py`: integration test that connects to the SSE endpoint, asserts events arrive in order, ends with `done`.
 

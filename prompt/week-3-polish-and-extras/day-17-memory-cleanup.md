@@ -1,4 +1,4 @@
-# Day 20 — Memory time decay + capacity cap
+# Day 17 — Memory time decay + capacity cap
 
 ## Goal
 

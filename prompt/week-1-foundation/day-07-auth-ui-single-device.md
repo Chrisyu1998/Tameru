@@ -1,4 +1,4 @@
-# Day 9 — Auth UI + single-device enforcement + home-currency capture at signup
+# Day 7 — Auth UI + single-device enforcement + home-currency capture at signup
 
 ## Goal
 
@@ -34,7 +34,7 @@ Sign in with Google, persist the session, enforce single active device per user,
     - Single dropdown with the allowed set (`USD · EUR · GBP · CAD · AUD · JPY · CHF · SGD · TWD`). Default from the browser's `navigator.language` + `Intl.NumberFormat`-derived currency when it matches the allowed set; otherwise default to `USD`.
     - "continue" primary → `POST /auth/bootstrap` → proceeds to frame 4 (Add First Card).
   - On 401 `{code: "DEVICE_DISPLACED"}` from any API call, show a full-screen modal: "You signed in on another device. This session has ended." with a single "Sign in again" button.
-- Add `X-Device-Id` to the `api.ts` fetch wrapper from Day 8.
+- Add `X-Device-Id` to the `api.ts` fetch wrapper from Day 6.
 
 ## Don't
 

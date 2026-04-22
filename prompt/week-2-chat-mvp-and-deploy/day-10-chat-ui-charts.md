@@ -1,8 +1,8 @@
-# Day 18 — Chat UI (full): thread, write flows, candidate cards, charts
+# Day 10 — Chat UI (full): thread, write flows, candidate cards, charts
 
 ## Goal
 
-The full chat experience. Chat is the only user-initiated write surface in v1 (CLAUDE.md invariant 8), so this day covers more than Q&A — it renders the **parse card** (UX frame 15) for `propose_*` tool results, the **candidate list** when `get_transactions` returns multiple rows, and the **entry-moment insight bubble** after a confirm. Plus the original read-path features: streaming, tool_use indicator, inline Recharts for generative charts.
+The full chat experience. Chat is the only user-initiated write surface in v1 (CLAUDE.md invariant 8), so this day covers more than Q&A — it renders the **parse card** (UX frame 15) for `propose_*` tool results, the **candidate list** when `get_transactions` returns multiple rows, and the **entry-moment insight bubble** after a confirm. Plus the original read-path features: tool_use indicator, inline Recharts for generative charts. **Wire mode today is non-streaming** (one request → one full reply) against Day 8's `/chat/turn`; Day 12 upgrades the wire to SSE and swaps in token-by-token rendering without touching the ParseCard/CandidateList/Insight/Chart surfaces shipped here.
 
 ## Read first
 
@@ -17,12 +17,12 @@ The full chat experience. Chat is the only user-initiated write surface in v1 (C
 `frontend/src/pages/Chat.tsx`:
 
 - Conversation thread (oldest top, newest bottom). Auto-scroll on new content.
-- Input bar at bottom (multiline textarea; submit on Cmd/Ctrl+Enter; tap-to-send button). Mic button integration belongs to Day 21; this day wires a placeholder slot.
-- Streaming render: tokens arrive via SSE (Day 17), append to the in-flight assistant bubble.
-- Tool-use indicator: while a `tool_use` event is active, show a small quiet pill in the bubble (e.g. "looking up dining transactions…"). Replace with the next text chunk when it arrives.
+- Input bar at bottom (multiline textarea; submit on Cmd/Ctrl+Enter; tap-to-send button). Mic button integration belongs to Day 18; this day wires a placeholder slot.
+- **Non-streaming wire for now.** POST to Day 8's `/chat/turn` and render the full assistant reply when it arrives. No progressive token rendering today. Day 12 converts `/chat/turn` to SSE and swaps this in for a token-by-token render; the rest of Day 10 (ParseCard, CandidateList, EntryInsightBubble, conversation switching) stays intact across that upgrade.
+- Tool-use indicator: while the turn is in flight, show a small quiet pill in the bubble (e.g. "thinking…"). Day 12 refines this to show per-tool pills ("looking up dining transactions…") once tool-use events stream individually.
 - Conversation list: left drawer (mobile: top dropdown) showing prior conversations by title. New-conversation button.
 
-`frontend/src/components/ChatThread.tsx`: reusable, also used by the guided tour (Day 10).
+`frontend/src/components/ChatThread.tsx`: reusable, also used by the guided tour (Day 21).
 
 ### Inline cards: write flows (parse card, candidate list)
 
@@ -34,15 +34,17 @@ This is the core addition that makes chat a complete write surface.
 - For `transaction` kind (UX frame 15): five rows (merchant / amount / date / card / category) each with a pencil glyph, editable inline. Action row: "let me fix it" secondary + "looks right" primary.
 - For `card` kind: network · last-4 · program · multipliers (as multiplier chips) · annual fee · source URLs as citation links. Same "looks right" / "let me fix it" buttons.
 - For `subscription` kind: name · amount · frequency · next billing · card · category. Same button pair.
-- "Looks right" → calls the matching `POST /<resource>/confirm` endpoint (Day 5 / Day 11 / Day 14) with the proposal. On success, the returned entity (and, for transactions, the entry-moment insight) is rendered into the chat.
+- "Looks right" → calls the matching `POST /<resource>/confirm` endpoint (Day 5 / Day 14 / Day 19) with the proposal. On success, the returned entity (and, for transactions, the entry-moment insight) is rendered into the chat.
 - "Let me fix it" → inline edit of the card fields; "looks right" re-enables after edits.
 - **Nothing is written to the database from this component except via the confirm endpoints.** A parse card in the chat is a preview, never a row.
+- **Stub note:** in the reordered plan, only `POST /transactions/confirm` (Day 5) exists by this day. Ship ParseCard rendering the `transaction` kind end-to-end, and leave `card` and `subscription` branches as a one-line placeholder (`"This ParseCard kind ships on Day 14 / Day 19."`). The branch-by-`kind` switch exists today so the additions are additive — Day 14 replaces the card placeholder with real rendering + a `POST /cards/confirm` call, Day 19 does the same for subscriptions. Do not wire up `POST /cards/confirm` or `POST /subscriptions/confirm` here; those endpoints don't exist yet.
 
 `frontend/src/components/CandidateList.tsx`:
 
 - Rendered when a `tool_result` for `get_transactions` returns multiple rows and Claude's surrounding prose suggests disambiguation.
-- Each row: date · merchant · amount · card last-4 — compact, tappable. Tapping a row opens `EditTransactionSheet` (Day 12) for that transaction.
+- Each row: date · merchant · amount · card last-4 — compact, tappable. Tapping a row opens `EditTransactionSheet` (Day 15) for that transaction.
 - The component is dumb: it renders whatever the tool result contained. Claude's prose ("I see three coffees around that time, tap one to edit") supplies the framing.
+- **Stub note:** `EditTransactionSheet` (Day 15) lands after this day in the reordered plan. Ship `CandidateList` today rendering tappable rows, but make the tap a no-op (or route to a "coming soon" placeholder) until Day 15. For the first dogfood build, Claude's prose can ask a clarifying question instead of relying on tap-to-edit. Day 15 wires the tap to open the edit sheet in a one-line change.
 
 ### Entry-moment insight bubble
 
@@ -64,7 +66,7 @@ Backend: add a typed `render_chart(spec)` tool the agent can call (preferred ove
 
 ### Daily cap UI
 
-When the SSE stream emits an `error` event with `code: "DAILY_CAP_EXCEEDED"` (Day 16, DESIGN.md §11.2), render the inline frame-16 treatment: amber-tinted card replacing the input row with "you've used your daily ai quota" title and "resets at midnight utc" subtitle. No retry button. Other error codes get Day 17's generic "connection lost — retry" handling.
+When a turn response (or in Day 12+, an SSE `error` event) surfaces `code: "DAILY_CAP_EXCEEDED"` (Day 9, DESIGN.md §11.2), render the inline frame-16 treatment: amber-tinted card replacing the input row with "you've used your daily ai quota" title and "resets at midnight utc" subtitle. No retry button. Other error codes get a generic "something went wrong — retry" handling; Day 12's SSE upgrade replaces this with the reconnect-button flow.
 
 ### Tests
 
@@ -85,9 +87,8 @@ When the SSE stream emits an `error` event with `code: "DAILY_CAP_EXCEEDED"` (Da
 ## Done when
 
 - "spent $47 at Trader Joe's on my Amex Gold" → parse card (frame 15) with five editable rows → "looks right" → row committed → insight bubble rendered below.
-- "change that $10 coffee from last week" (with seeded ambiguity) → Claude's prose plus a candidate list → tapping a candidate opens the edit sheet (Day 12).
+- "change that $10 coffee from last week" (with seeded ambiguity) → Claude's prose plus a candidate list → tapping a candidate opens the edit sheet (Day 15).
 - "add a card called Chase Sapphire Preferred" → parse card in `card` kind → "looks right" → card created.
 - "chart my grocery spending by week in March" → inline line chart via `render_chart`.
-- Token streaming feels smooth (chunks appear without perceptible jitter).
 - Switching conversations preserves their state.
 - Hitting the daily cap during a turn renders the frame-16 treatment and freezes further sends until reset.

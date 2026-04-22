@@ -170,7 +170,7 @@ def categorize(
 
     Amount is deliberately not a parameter here — see categorize_v3
     rationale in app/prompts/categorize.py. Callers that have an amount
-    (Day 5 confirm, Day 16 propose_transaction) don't pass it.
+    (Day 5 confirm, Day 9 propose_transaction) don't pass it.
 
     User-controlled merchant text is only ever passed to Gemini inside
     the `<merchant>...</merchant>` tag rendered by render_prompt, which

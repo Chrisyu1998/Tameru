@@ -1,4 +1,4 @@
-# Day 21 — Voice input in the chat input bar (Web Speech API → chat submit)
+# Day 18 — Voice input in the chat input bar (Web Speech API → chat submit)
 
 ## Goal
 
@@ -25,22 +25,22 @@ This day replaces the **old** "standalone AddTransaction page with Type it toggl
 
 ### Frontend — chat input bar integration
 
-`frontend/src/components/ChatInputBar.tsx` (built Day 18; this day adds the voice-mode UI state to it):
+`frontend/src/components/ChatInputBar.tsx` (built Day 10; this day adds the voice-mode UI state to it):
 
 - Mic button visible only when `voiceSupported`. Right-aligned in the input row, in accent color.
 - Tapping the mic enters **Voice Active** state (UX frame 14):
   - Input row transforms: large pulsing accent ring around a mic glyph in the center, live interim transcript displayed in lowercase secondary text above the glyph, terracotta square stop button on the right, "listening…" micro-label in accent.
   - Send button is hidden while listening — transcript will auto-submit.
 - On final transcript (explicit stop or 1.5s silence):
-  - Text auto-submits into the chat thread as a user message. Same endpoint as typed input (`POST /chat/turn`, Day 15).
+  - Text auto-submits into the chat thread as a user message. Same endpoint as typed input (`POST /chat/turn`, Day 8).
   - The chat UI reverts to the normal input row.
 - Errors (`no-speech`, `not-allowed`, network, etc.) inline with a "try again" link and a `PostHog event error_shown { code: "voice_<type>" }`.
 
 ### No backend work today
 
-There is no `POST /transactions/nl_parse` endpoint. There is no Gemini `parse_nl_entry` function. The NL parse for chat input is what Claude does natively in `tool_use` arg-filling (Day 15 and Day 16). Voice is purely an alternate input mode for the chat — same Claude loop, same tools, same propose-confirm flow.
+There is no `POST /transactions/nl_parse` endpoint. There is no Gemini `parse_nl_entry` function. The NL parse for chat input is what Claude does natively in `tool_use` arg-filling (Day 8 and Day 9). Voice is purely an alternate input mode for the chat — same Claude loop, same tools, same propose-confirm flow.
 
-If you find yourself reaching for a separate Gemini parse, stop — that's the old architecture. Gemini's role in the chat path is `categorize()` (Day 4), called from inside `propose_transaction` (Day 16), after Claude has already extracted the fields.
+If you find yourself reaching for a separate Gemini parse, stop — that's the old architecture. Gemini's role in the chat path is `categorize()` (Day 4), called from inside `propose_transaction` (Day 9), after Claude has already extracted the fields.
 
 ### Tests
 

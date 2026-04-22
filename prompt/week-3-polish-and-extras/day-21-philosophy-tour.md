@@ -1,4 +1,4 @@
-# Day 10 — Philosophy screen + 4-screen guided tour
+# Day 21 — Philosophy screen + 4-screen guided tour
 
 ## Goal
 
@@ -20,11 +20,11 @@ First-launch onboarding. Philosophy screen pitches intentional entry. The 4-scre
   - 4 swipeable screens (touch swipe + arrow buttons). Pagination dots at the bottom.
   - **Screen 1 — Dashboard:** render the actual `<Dashboard>` component (built Day 13) with hardcoded fixture props. Numbers from a constant: `Dining +$47 above average`, `Groceries within average`, etc.
   - **Screen 2 — Entry-moment nudge:** a short looping animation showing the chat-based entry flow (UX frame 15 sequence) — user message "spent $47 at Trader Joe's" → parse card renders with five fields → "looks right" tap → confirmed transaction line → below it, the quiet AI insight bubble "4th dining transaction this week — you usually have 2." No toasts — in the chat-unified UX the nudge lives inline in the chat thread (CLAUDE.md invariant 8).
-  - **Screen 3 — AI chat:** a static `<ChatThread>` (built Day 18) rendering one Q ("How much did I spend on dining last month?") and one A. No streaming, no API call.
+  - **Screen 3 — AI chat:** a static `<ChatThread>` (built Day 10) rendering one Q ("How much did I spend on dining last month?") and one A. No streaming, no API call.
   - **Screen 4 — Weekly digest:** a static rendering of the email layout with example numbers.
   - Final CTA: "This is Tameru with 3 months of data. Log your first transaction or import a CSV to get there." → `/signin`.
 - A `frontend/src/fixtures/tour.ts` module exporting all the hardcoded data. Single source of truth so updating the tour data is one file.
-- The Dashboard, ChatThread, and Digest components must accept all data via props — no hidden API calls. (Days 13, 18, and 25 build these out; today, build minimal versions sufficient for the tour and reuse them later.)
+- The Dashboard, ChatThread, and Digest components must accept all data via props — no hidden API calls. (Days 13, 10, and 25 build these out; today, build minimal versions sufficient for the tour and reuse them later.)
 
 ## Don't
 

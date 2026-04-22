@@ -33,9 +33,9 @@ Each prompt follows the same structure:
 
 | Week | Folder | Theme |
 |---|---|---|
-| 1 | `prompt/week-1-foundation/` | Backend, schema, RLS, Gemini categorization, CSV import, deploy |
-| 2 | `prompt/week-2-ui-core-flows/` | PWA scaffold, philosophy + tour, cards, manual entry, dashboard, subscriptions |
-| 3 | `prompt/week-3-agent-memory/` | Claude `tool_use` agent, SSE streaming, chat UI, cross-session memory, NL entry |
+| 1 | `prompt/week-1-foundation/` | Backend foundation (scaffold, schema, RLS, Gemini categorization, transactions API) + PWA shell + auth UI |
+| 2 | `prompt/week-2-chat-mvp-and-deploy/` | Claude `tool_use` loop + all typed tools + chat UI (ParseCard) + Railway deploy + SSE streaming + dashboard + cards/Perplexity — end of Week 2 is the first dogfood-able build |
+| 3 | `prompt/week-3-polish-and-extras/` | Transaction list + edit sheet + offline queue, cross-session memory + decay, voice input, subscriptions + pg_cron, CSV import, philosophy + tour |
 | 4 | `prompt/week-4-eval-mcp-observability/` | Eval harness, MCP server, observability, weekly digest, PostHog, privacy, E2E launch |
 
 The 28-day plan assumes ~4–6 hours of focused work per day. If your real days are shorter, stretch the calendar — the dependency order matters, the calendar doesn't.
@@ -100,7 +100,7 @@ Schema changes are **always** made by editing or adding a migration under
 `supabase/migrations/` and running `supabase db reset` to verify. Never use
 the Supabase dashboard SQL editor for schema changes (CLAUDE.md invariant 6).
 
-The frontend lives under `frontend/` starting Day 8.
+The frontend lives under `frontend/` starting Day 6.
 
 ## Google OAuth setup
 
@@ -117,7 +117,7 @@ Sign-in is Google OAuth via Supabase Auth; magic link is the fallback
 4. Copy the Client ID and Client Secret into the Supabase provider form.
 
 The frontend initiates sign-in with `supabase.auth.signInWithOAuth({ provider:
-"google" })` (lands Day 8). The backend never talks to Google directly — it
+"google" })` (lands Day 6). The backend never talks to Google directly — it
 only validates the JWT Supabase issues after the user completes the flow.
 
 ## JWT validation

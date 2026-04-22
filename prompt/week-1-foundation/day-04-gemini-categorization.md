@@ -4,7 +4,7 @@
 
 A typed `categorize(merchant, user) -> CategorySuggestion` library function that calls `gemini-3.1-flash-lite-preview`, returns a category from a closed enum, factors in this user's recent `merchant_category` corrections, and logs every call — success and failure — to `ai_call_log` using the caller's JWT.
 
-No HTTP endpoint today. Imported by Day 16's `propose_transaction` tool (to suggest a category when Claude doesn't provide one) and by Day 5's `POST /transactions/confirm` endpoint (for server-side validation when a proposal arrives without a category).
+No HTTP endpoint today. Imported by Day 9's `propose_transaction` tool (to suggest a category when Claude doesn't provide one) and by Day 5's `POST /transactions/confirm` endpoint (for server-side validation when a proposal arrives without a category).
 
 ## Read first
 

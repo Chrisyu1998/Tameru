@@ -100,7 +100,7 @@ Add `CHECK` constraints on text fields whose values are enumerated in `DESIGN.md
 
 - Don't create any tables in the dashboard SQL editor. Migrations only (invariant 6).
 - Don't add CRUD endpoints today — Day 5 owns the transactions API.
-- Don't seed fake data; demo mode is a guided tour with frontend fixtures (Day 10), not DB rows (invariant 10).
+- Don't seed fake data; demo mode is a guided tour with frontend fixtures (Day 21), not DB rows (invariant 10).
 - Don't write `UPDATE` or `DELETE` policies on `ai_call_log` or `ai_call_log_daily` — audit rows must not be mutable or scrubbable by users. A narrow `INSERT` policy on `ai_call_log` with `WITH CHECK (user_id = auth.uid())` is correct and intended (invariant 14). `ai_call_log_daily` has no INSERT policy — rollup rows come from the service-role aggregator only.
 - Don't schedule any `pg_cron` jobs today — the extension is installed, but the first scheduled job lands with its feature (Day 4 aggregator, Day 5+ subscription auto-logger).
 

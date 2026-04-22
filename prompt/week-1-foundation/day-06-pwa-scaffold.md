@@ -1,4 +1,4 @@
-# Day 8 — PWA scaffold (Vite + React + Tailwind + Zustand + Service Worker)
+# Day 6 — PWA scaffold (Vite + React + Tailwind + Zustand + Service Worker)
 
 ## Goal
 
@@ -20,8 +20,8 @@ Frontend scaffolded as an installable PWA with offline app shell. Lighthouse PWA
   - Auto-update strategy with a "new version available" toast.
 - `frontend/src/lib/api.ts` — fetch wrapper that adds `Authorization: Bearer <jwt>` from the store and points at `VITE_API_URL`.
 - `frontend/src/pages/`:
-  - `Splash.tsx` — empty for now (Day 10).
-  - `Home.tsx` — empty for now (Day 12).
+  - `Splash.tsx` — empty for now (Day 21).
+  - `Home.tsx` — empty for now (Day 15).
 - `frontend/.env.example` with `VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 - A single `npm run build` and `npm run dev` that just works.
 - README updated with frontend dev commands.
@@ -30,7 +30,7 @@ Frontend scaffolded as an installable PWA with offline app shell. Lighthouse PWA
 
 - Don't add component libraries (shadcn/ui, MUI, Chakra). Tailwind primitives are enough.
 - Don't add a router beyond what's needed — `react-router-dom` for 3 routes is fine; no nested layouts yet.
-- Don't ship the `frontend/` build to Railway today. Backend still serves only the API. Day 14 or Day 28 wires up static hosting (or a separate Vercel project for the frontend, your call — leave a TODO if you defer).
+- Don't ship the `frontend/` build to Railway today. Backend still serves only the API. Day 19 or Day 28 wires up static hosting (or a separate Vercel project for the frontend, your call — leave a TODO if you defer).
 
 ## Done when
 

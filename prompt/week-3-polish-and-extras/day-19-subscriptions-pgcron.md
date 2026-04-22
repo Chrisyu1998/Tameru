@@ -1,4 +1,4 @@
-# Day 14 — Subscription manager + `pg_cron` auto-logger with idempotency
+# Day 19 — Subscription manager + `pg_cron` auto-logger with idempotency
 
 ## Goal
 
@@ -22,7 +22,7 @@ User adds a subscription. Daily `pg_cron` SQL function inserts a transaction whe
 - `SELECT cron.schedule('autolog-subscriptions', '0 6 * * *', 'SELECT autolog_subscriptions();');` — runs daily at 06:00 UTC.
 - Backend:
   - `app/routes/subscriptions.py`:
-    - **`POST /subscriptions/confirm`** — body: `SubscriptionProposal` (name, card_id, amount, frequency, start_date, category, next_billing_date — computed from start_date + frequency by the `propose_subscription` tool in Day 16). Writes the row. Called after "looks right" on the chat parse card (UX frame 15 in `subscription` kind).
+    - **`POST /subscriptions/confirm`** — body: `SubscriptionProposal` (name, card_id, amount, frequency, start_date, category, next_billing_date — computed from start_date + frequency by the `propose_subscription` tool in Day 9). Writes the row. Called after "looks right" on the chat parse card (UX frame 15 in `subscription` kind).
     - **No `POST /subscriptions` that accepts free-form user input** — adds go through chat → `propose_subscription` → `POST /subscriptions/confirm` (invariant 8).
     - `GET /subscriptions?status=` — list.
     - `PATCH /subscriptions/{id}` — pause (`status=paused`), resume (`status=active`), edit fields. Used by UX frame 22's "pause subscription" action and the edit sheet.

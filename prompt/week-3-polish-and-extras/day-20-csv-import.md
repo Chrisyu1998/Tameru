@@ -1,4 +1,4 @@
-# Day 6 — CSV bank import (Gemini column detect + batch categorize + dedup)
+# Day 20 — CSV bank import (Gemini column detect + batch categorize + dedup)
 
 ## Goal
 

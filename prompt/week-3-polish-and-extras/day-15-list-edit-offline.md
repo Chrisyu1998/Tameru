@@ -1,4 +1,4 @@
-# Day 12 — Transaction list, edit sheet, and offline confirm queue
+# Day 15 — Transaction list, edit sheet, and offline confirm queue
 
 ## Goal
 
@@ -47,7 +47,7 @@ There is **no `+`-button entry form** in v1 (CLAUDE.md invariant 8). Chat is the
 
 `frontend/src/components/ChatTransactionCandidateCards.tsx`:
 
-- Rendered inside the chat thread when a `get_transactions` tool result returns multiple rows and the agent's surrounding prose suggests disambiguation ("I see three coffees around that time, which one?"). Day 18 owns the chat thread plumbing; this day builds the candidate-card component and its tap-to-edit wiring.
+- Rendered inside the chat thread when a `get_transactions` tool result returns multiple rows and the agent's surrounding prose suggests disambiguation ("I see three coffees around that time, which one?"). Day 10 owns the chat thread plumbing; this day builds the candidate-card component and its tap-to-edit wiring.
 - Each candidate card renders the same 5 fields as the list row (more compact) with a "tap to edit" affordance that opens the `EditTransactionSheet` with that transaction's id.
 
 ### Frontend — offline confirm queue
@@ -68,11 +68,11 @@ There is **no `+`-button entry form** in v1 (CLAUDE.md invariant 8). Chat is the
 
 ## Don't
 
-- Don't build a `+` button on the Home screen, and don't add a standalone `AddTransaction.tsx` page. The create path lives in chat (Day 18).
+- Don't build a `+` button on the Home screen, and don't add a standalone `AddTransaction.tsx` page. The create path lives in chat (Day 10).
 - Don't send the JWT into IndexedDB. The queue stores proposals, not auth — the in-flight Supabase session provides auth at replay time.
 - Don't add receipt photo input today — Phase 2.
 - Don't call `POST /transactions/confirm` without a prior proposal shape — every entry in the offline queue must already be a confirmed payload the user saw and approved in the chat UI.
-- Don't support chat-driven edits or deletes in this UI — edits open the sheet on tap; deletes use swipe or the sheet's delete button. The chat agent has no `edit_transaction` or `delete_transaction` tool (see Day 16 "Don't").
+- Don't support chat-driven edits or deletes in this UI — edits open the sheet on tap; deletes use swipe or the sheet's delete button. The chat agent has no `edit_transaction` or `delete_transaction` tool (see Day 9 "Don't").
 
 ## Done when
 

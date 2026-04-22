@@ -1,4 +1,4 @@
-# Day 7 — Deploy to Railway + smoke test in production
+# Day 11 — Deploy to Railway + smoke test in production
 
 ## Goal
 
@@ -15,7 +15,7 @@ The Week 1 backend is live on Railway with all secrets in env vars, CI runs RLS 
   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`
   - `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-3.1-flash-lite-preview`
   - `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL=claude-haiku-4-5` (placeholder; used Week 3)
-  - `PERPLEXITY_API_KEY` (placeholder; used Day 11)
+  - `PERPLEXITY_API_KEY` (placeholder; used Day 14)
   - `SENTRY_DSN` (placeholder; wired Day 24)
 - `terminationGracePeriodSeconds: 60` configured in `railway.json` (or service settings).
 - `.github/workflows/ci.yml`:
@@ -29,7 +29,7 @@ The Week 1 backend is live on Railway with all secrets in env vars, CI runs RLS 
 ## Don't
 
 - Don't commit any real secret to `.env.example` or `railway.json`. Examples only.
-- Don't enable the `pg_cron` jobs yet — Day 14 (subscriptions) and Day 24 (AICallLog rollup) own those.
+- Don't enable the `pg_cron` jobs yet — Day 19 (subscriptions) and Day 24 (AICallLog rollup) own those.
 - Don't skip the smoke test "because the unit tests passed." Prod has different env vars.
 
 ## Done when

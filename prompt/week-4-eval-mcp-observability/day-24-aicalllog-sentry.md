@@ -12,7 +12,7 @@ Every Gemini, Claude, and Perplexity call writes to `ai_call_log` with all field
 
 - Audit existing call sites — confirm every AI integration writes a row to `ai_call_log` with all required fields:
   - `provider`, `model`, `task_type`, `prompt_version`, `prompt_hash`, `input_tokens`, `output_tokens`, `latency_ms`, `success`, `error_code`.
-  - Backfill any gaps: card_lookup (Day 11), entry_moment (no AI — confirm absent), digest (Day 25 — pre-wire today).
+  - Backfill any gaps: card_lookup (Day 14), entry_moment (no AI — confirm absent), digest (Day 25 — pre-wire today).
 - New migration `..._aicalllog_aggregator_function.sql`:
   - `CREATE OR REPLACE FUNCTION aggregate_aicalllog() RETURNS void` that:
     1. Inserts into `ai_call_log_daily` from `ai_call_log` rows older than 90 days, grouped by `(date(timestamp), user_id, provider, model, task_type)`.

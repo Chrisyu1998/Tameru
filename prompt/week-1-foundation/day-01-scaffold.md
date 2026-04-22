@@ -18,7 +18,7 @@ Stand up the empty repo: directory layout, FastAPI hello-world, Supabase project
   - `app/integrations/` (empty for now)
   - `supabase/migrations/` (empty)
   - `evals/` (empty)
-  - `frontend/` (empty — Day 8 fills this)
+  - `frontend/` (empty — Day 6 fills this)
   - `tests/` (empty)
 - Files at repo root:
   - `pyproject.toml` with FastAPI, uvicorn, supabase-py, anthropic, google-generativeai, sentry-sdk, pytest

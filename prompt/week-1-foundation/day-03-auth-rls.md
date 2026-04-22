@@ -49,7 +49,7 @@ End-to-end auth: user signs in with Google via Supabase, gets a JWT, FastAPI val
 
 ### `app/main.py`
 
-- `GET /me` endpoint protected by `get_current_user_jwt`. Returns `{"user_id": ..., "email": ...}` **directly from the JWT claims** — no DB round-trip, no `users_meta` SELECT. The JWT already has what we need. Day 9 extends this endpoint to also include `home_currency` (adding one `users_meta` SELECT), which is needed to render currency symbols in the UI; accept that extra round-trip when it lands. Not today.
+- `GET /me` endpoint protected by `get_current_user_jwt`. Returns `{"user_id": ..., "email": ...}` **directly from the JWT claims** — no DB round-trip, no `users_meta` SELECT. The JWT already has what we need. Day 7 extends this endpoint to also include `home_currency` (adding one `users_meta` SELECT), which is needed to render currency symbols in the UI; accept that extra round-trip when it lands. Not today.
 
 ### OAuth configuration
 

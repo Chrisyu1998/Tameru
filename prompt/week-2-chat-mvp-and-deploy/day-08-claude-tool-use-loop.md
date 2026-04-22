@@ -1,8 +1,8 @@
-# Day 15 — Minimal Claude `tool_use` agent loop with one tool
+# Day 8 — Minimal Claude `tool_use` agent loop with one tool
 
 ## Goal
 
-A working `tool_use` loop in FastAPI: send a user message, Claude calls one typed tool, get a response back. No streaming yet, no UI yet — just prove the loop works end-to-end. Tomorrow adds the rest of the tools; Day 17 adds streaming.
+A working `tool_use` loop in FastAPI: send a user message, Claude calls one typed tool, get a response back. No streaming yet, no UI yet — just prove the loop works end-to-end. Tomorrow adds the rest of the tools; Day 12 adds streaming.
 
 ## Read first
 
@@ -31,8 +31,8 @@ A working `tool_use` loop in FastAPI: send a user message, Claude calls one type
 
 ## Don't
 
-- Don't add streaming — Day 17 owns SSE.
-- Don't add the other 6 tools today — Day 16 owns them.
+- Don't add streaming — Day 12 owns SSE.
+- Don't add the other 6 tools today — Day 9 owns them.
 - Don't use Claude's Managed Agents or the standalone Agent SDK. Messages API + `tool_use` blocks via the `anthropic` SDK directly. (See `CLAUDE.md` invariant 2 for why.)
 - Don't make the loop synchronous-blocking — use `async`.
 

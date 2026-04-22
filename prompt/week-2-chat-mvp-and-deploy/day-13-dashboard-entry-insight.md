@@ -44,7 +44,7 @@ The insight is computed inside `POST /transactions/confirm` (Day 5) and returned
 
 ### Frontend — entry-moment insight (chat bubble, not toast)
 
-The insight is rendered as a quiet AI bubble below the just-committed transaction by the `EntryInsightBubble` component, which lives in Day 18's chat UI and consumes the `insight` field returned by `POST /transactions/confirm`. **This day ships only the backend** — Day 18 owns the rendering. No `EntryInsightToast.tsx` — the toast pattern is gone now that the write flow is in chat.
+The insight is rendered as a quiet AI bubble below the just-committed transaction by the `EntryInsightBubble` component, which lives in Day 10's chat UI and consumes the `insight` field returned by `POST /transactions/confirm`. **This day ships only the backend** — Day 10 owns the rendering. No `EntryInsightToast.tsx` — the toast pattern is gone now that the write flow is in chat.
 
 ### Tests
 
@@ -54,11 +54,11 @@ The insight is rendered as a quiet AI bubble below the just-committed transactio
 
 ## Don't
 
-- Don't add a 6-month bar chart. Don't add tabs. Don't add a "drilling" interaction on the dashboard. The chat is the escape valve; the per-category list (Day 12) is the history surface.
+- Don't add a 6-month bar chart. Don't add tabs. Don't add a "drilling" interaction on the dashboard. The chat is the escape valve; the per-category list (Day 15) is the history surface.
 - Don't show absolute totals on tiles. Delta only.
 - Don't make the entry-moment insight an AI call. Deterministic rules for v1.
 - Don't expose the insight as a standalone endpoint. It travels with the transaction confirm response.
-- Don't render the insight as a toast. It's an inline chat bubble (Day 18 owns the rendering).
+- Don't render the insight as a toast. It's an inline chat bubble (Day 10 owns the rendering).
 - Don't add the "Ask me about your spending" placeholder — the bottom-nav chat button is the CTA.
 
 ## Done when

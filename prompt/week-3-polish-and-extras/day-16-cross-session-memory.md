@@ -1,4 +1,4 @@
-# Day 19 — Cross-session memory: distillation, injection, and Settings panel
+# Day 16 — Cross-session memory: distillation, injection, and Settings panel
 
 ## Goal
 

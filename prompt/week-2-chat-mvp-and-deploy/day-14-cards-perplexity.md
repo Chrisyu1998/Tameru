@@ -1,11 +1,11 @@
-# Day 11 — Card management + Perplexity Sonar multiplier lookup (chat-integrated + onboarding)
+# Day 14 — Card management + Perplexity Sonar multiplier lookup (chat-integrated + onboarding)
 
 ## Goal
 
 Users add cards two ways:
 
 1. **Onboarding (UX frame 4 — "Add First Card")** — a dedicated setup screen during first-run. Text input + suggestion chips, then lookup/confirm inline on that screen.
-2. **Post-onboarding — via chat.** User says "add my Chase Sapphire Reserve"; Claude calls the `propose_card` tool (Day 16); the tool impl runs the Perplexity lookup and returns a `CardProposal`; React renders the proposal as a parse card in the chat; user taps "looks right" → `POST /cards/confirm` writes the row.
+2. **Post-onboarding — via chat.** User says "add my Chase Sapphire Reserve"; Claude calls the `propose_card` tool (Day 9); the tool impl runs the Perplexity lookup and returns a `CardProposal`; React renders the proposal as a parse card in the chat; user taps "looks right" → `POST /cards/confirm` writes the row.
 
 Both paths use the same Perplexity lookup and the same `POST /cards/confirm` endpoint. There is no standalone `AddCard.tsx` page after onboarding — "add via tameru ai" is the post-onboarding affordance (UX frames 18 and 20).
 
@@ -25,7 +25,7 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 
 ### `app/routes/cards.py`
 
-- `POST /cards/lookup` — body: `{name}`. Calls Perplexity, returns the proposed card data + citations. Used by the onboarding flow *and* by the `propose_card` tool internals (Day 16).
+- `POST /cards/lookup` — body: `{name}`. Calls Perplexity, returns the proposed card data + citations. Used by the onboarding flow *and* by the `propose_card` tool internals (Day 9).
 - **`POST /cards/confirm`** — body: `CardProposal` payload (network, last4, program, multipliers, annual_fee, source_urls, alias?). Inserts the row. Returns the created card. Called after "looks right" on either the onboarding screen or the chat parse card.
 - **No `POST /cards` (direct write from a free-form user form).** The only commit path is `/confirm` after a proposal the user saw.
 - `GET /cards` — list active cards.
@@ -54,7 +54,7 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 - Empty state (UX frame 20): card icon + "no cards yet" + "add via tameru ai" primary (deep-links to the chat half-sheet pre-seeded with a "let's add your first card" suggestion chip).
 - AI hint footer on the populated list: "✨ add a new card via tameru ai →" (taps into chat).
 
-**There is no standalone `AddCard.tsx` page after onboarding.** The post-onboarding add path is chat-only. Day 16's `propose_card` tool is the entry point; Day 18's `ParseCard` component renders the preview.
+**There is no standalone `AddCard.tsx` page after onboarding.** The post-onboarding add path is chat-only. Day 9's `propose_card` tool is the entry point; Day 10's `ParseCard` component renders the preview.
 
 ### Tests
 
@@ -68,7 +68,7 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 - Don't expose Perplexity's raw response to the user — parse to structured JSON.
 - Don't store citation URLs as a single string; use the `text[]` column.
 - Don't build a standalone `AddCard.tsx` page for post-onboarding use. Chat is the add surface after onboarding (invariant 8).
-- Don't write to `cards` from inside `propose_card` (Day 16). The tool returns a proposal; `POST /cards/confirm` commits.
+- Don't write to `cards` from inside `propose_card` (Day 9). The tool returns a proposal; `POST /cards/confirm` commits.
 
 ## Done when
 
