@@ -11,6 +11,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "supabase>=2.8",
+  "pyjwt[crypto]>=2.9",
   "anthropic>=0.40",
   "google-genai>=0.3",
   "sentry-sdk[fastapi]>=2.18",

@@ -749,6 +749,8 @@ Supabase Auth handles all authentication. Google OAuth is the primary flow; magi
 
 The FastAPI backend receives `Authorization: Bearer <user_jwt>` from the frontend. **For each request**, the backend instantiates a Supabase client passing that JWT. PostgREST sets `request.jwt.claims` per query, and Postgres enforces RLS automatically. A bug in the API cannot leak one user's data to another, because the database refuses the row.
 
+**JWT verification:** the backend verifies each incoming JWT locally against the project's asymmetric JWKS at `${SUPABASE_URL}/auth/v1/.well-known/jwks.json` (Supabase issues ES256 tokens signed by rotating EC P-256 keys). `algorithms` is pinned to `["ES256"]` — accepting `RS256` in addition would widen the algorithm-confusion attack surface for zero benefit. `audience` is required to be `"authenticated"` and `issuer` is required to match `${SUPABASE_URL}/auth/v1`, so a token minted by a different Supabase project cannot authenticate. The JWKS is cached in-process and refreshed on a `kid` miss — verification is zero network round trips on the hot path. The shared `SUPABASE_JWT_SECRET` (HS256, legacy) is not used and is deliberately absent from `.env.example`.
+
 The **service role key** is reserved for exactly two callers:
 
 1. The `pg_cron` daily auto-logger (runs as DB function, no application context).

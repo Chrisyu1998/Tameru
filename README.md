@@ -101,3 +101,49 @@ Schema changes are **always** made by editing or adding a migration under
 the Supabase dashboard SQL editor for schema changes (CLAUDE.md invariant 6).
 
 The frontend lives under `frontend/` starting Day 8.
+
+## Google OAuth setup
+
+Sign-in is Google OAuth via Supabase Auth; magic link is the fallback
+(`DESIGN.md` §9.1).
+
+**Supabase Dashboard → Authentication → Providers → Google:**
+
+1. Enable the Google provider.
+2. In Google Cloud Console, create an OAuth 2.0 Client ID (Web application).
+3. Authorized redirect URIs — add **both**:
+   - Hosted: `https://<your-project-ref>.supabase.co/auth/v1/callback`
+   - Local: `http://127.0.0.1:54321/auth/v1/callback`
+4. Copy the Client ID and Client Secret into the Supabase provider form.
+
+The frontend initiates sign-in with `supabase.auth.signInWithOAuth({ provider:
+"google" })` (lands Day 8). The backend never talks to Google directly — it
+only validates the JWT Supabase issues after the user completes the flow.
+
+## JWT validation
+
+FastAPI verifies each request's `Authorization: Bearer <jwt>` locally in
+`app/auth.py` against the project's asymmetric JWKS at
+`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`. We pin `algorithms=
+["ES256"]` and require `audience="authenticated"` plus `issuer=
+"${SUPABASE_URL}/auth/v1"`. PyJWT's `PyJWKClient` caches the keys and
+refreshes on `kid` miss, so there is no per-request round trip to Supabase
+Auth. The verified identity flows into `supabase_for_user`, so PostgREST
+forwards the JWT and Postgres enforces RLS on `auth.uid()`.
+
+## RLS contract tests
+
+These tests create throwaway users and assert that user A's rows are
+invisible and unwritable to user B — for every RLS-protected table
+(`DESIGN.md` §13.1). They run against the **local** Supabase stack only;
+`tests/conftest.py` refuses to run if `SUPABASE_URL` is not localhost.
+
+```bash
+supabase start                     # once per machine boot
+supabase db reset                  # apply migrations
+pytest tests/test_rls_contract.py tests/test_no_service_role_leak.py
+```
+
+`conftest.py` auto-populates `SUPABASE_URL`, the anon/service-role keys, and
+`SUPABASE_JWT_SECRET` from `supabase status -o json` when those env vars are
+unset, so the common flow above "just works" without exporting them by hand.
