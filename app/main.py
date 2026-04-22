@@ -1,8 +1,11 @@
 from fastapi import Depends, FastAPI
 
 from app.auth import AuthedUser, get_current_user_jwt
+from app.routes import transactions as transactions_routes
 
 app = FastAPI(title="Tameru")
+
+app.include_router(transactions_routes.router)
 
 
 @app.get("/healthz")

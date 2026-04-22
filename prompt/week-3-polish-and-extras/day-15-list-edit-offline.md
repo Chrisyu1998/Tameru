@@ -54,10 +54,10 @@ There is **no `+`-button entry form** in v1 (CLAUDE.md invariant 8). Chat is the
 
 `frontend/src/lib/offline_queue.ts`:
 
-- IndexedDB-backed queue (`idb` library). Store: `pending_confirms`. Each entry: `{id: uuid, kind: "transaction"|"card"|"subscription", payload: ProposalPayload, queued_at}`.
+- IndexedDB-backed queue (`idb` library). Store: `pending_confirms`. Each entry: `{id: uuid, kind: "transaction"|"card"|"subscription", payload: ProposalPayload, queued_at}`. For transactions, `payload.client_request_id` is the server-side idempotency key (Day 5 / §8.2) and must be preserved across queue → replay — don't regenerate it on drain. Cards and subscriptions have no such key; dup-on-replay is an accepted UX bug the user can resolve with a delete (see Day 9 and Day 14 rationale).
 - On a confirm request (chat parse card "looks right") failing with a network error, push to queue and render the `pending sync` badge (UX frame 32).
-- Service worker `online` event handler: drains the queue, POSTs each to the matching confirm endpoint (`POST /transactions/confirm`, `POST /cards/confirm`, `POST /subscriptions/confirm`), removes on success.
-- On replay success for a transaction confirm, the server's entry-moment insight (Day 13) comes back with the response and is rendered into the chat retroactively — or silently dropped if the user has long since moved past the conversation. Acceptable either way; don't replay stale toasts.
+- Service worker `online` event handler: drains the queue, POSTs each to the matching confirm endpoint (`POST /transactions/confirm`, `POST /cards/confirm`, `POST /subscriptions/confirm`), removes on success. A second drain triggered by a rapid reconnect is safe for transactions (server returns the existing row by `client_request_id`); for cards and subscriptions, the risk is a duplicate row — minimize this by dequeuing optimistically on request dispatch, not only on 2xx.
+- On replay success for a transaction confirm, the server returns the existing row with `insight: null` (Day 13) — the original insight was already shown when the user first tapped "looks right" offline, or missed; don't re-fire. For first-time (non-replay) successes, the insight bubble renders into the chat normally.
 - UI: persistent banner "X pending sync" (UX frame 32's "· 1 pending sync" micro-label on the Home dashboard is the reference copy).
 
 ### Tests
@@ -72,7 +72,8 @@ There is **no `+`-button entry form** in v1 (CLAUDE.md invariant 8). Chat is the
 - Don't send the JWT into IndexedDB. The queue stores proposals, not auth — the in-flight Supabase session provides auth at replay time.
 - Don't add receipt photo input today — Phase 2.
 - Don't call `POST /transactions/confirm` without a prior proposal shape — every entry in the offline queue must already be a confirmed payload the user saw and approved in the chat UI.
-- Don't support chat-driven edits or deletes in this UI — edits open the sheet on tap; deletes use swipe or the sheet's delete button. The chat agent has no `edit_transaction` or `delete_transaction` tool (see Day 9 "Don't").
+- Don't regenerate `client_request_id` during queue drain. The id identifies the user's commit intent; regenerating it would defeat Day 5's idempotency and produce duplicate rows on network retries.
+- Don't build an inline chat delete/update confirm card today. The chat-driven delete/update path in v1 is: agent `get_transactions(...)` → candidate cards → tap → edit sheet (this day) → Save/Delete. The inline confirm card for the exact-1 case is a post-launch enhancement (§6.2) and requires new agent tools (`propose_delete_transaction`, `propose_update_transaction`) not yet defined. The agent has no direct-mutate tools in v1 (see Day 9 and CLAUDE.md invariant 8).
 
 ## Done when
 

@@ -32,49 +32,10 @@ from app.db import supabase_for_user
 
 
 # ---------------------------------------------------------------------------
-# Per-user card fixtures — `subscriptions` requires `card_id NOT NULL`.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def card_a(user_a) -> str:
-    client = supabase_for_user(user_a.jwt)
-    resp = (
-        client.table("cards")
-        .insert(
-            {
-                "user_id": user_a.id,
-                "name": "A card",
-                "issuer": "Chase",
-                "program": "UR",
-            }
-        )
-        .execute()
-    )
-    return resp.data[0]["id"]
-
-
-@pytest.fixture(scope="session")
-def card_b(user_b) -> str:
-    client = supabase_for_user(user_b.jwt)
-    resp = (
-        client.table("cards")
-        .insert(
-            {
-                "user_id": user_b.id,
-                "name": "B card",
-                "issuer": "Amex",
-                "program": "MR",
-            }
-        )
-        .execute()
-    )
-    return resp.data[0]["id"]
-
-
-# ---------------------------------------------------------------------------
 # Row factories — keep every inserted row unique per session so re-running the
-# suite in the same session doesn't hit UNIQUE constraints.
+# suite in the same session doesn't hit UNIQUE constraints. `card_a` and
+# `card_b` session fixtures live in conftest.py so the Day 5 suite can use
+# them too.
 # ---------------------------------------------------------------------------
 
 

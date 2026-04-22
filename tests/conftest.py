@@ -153,3 +153,47 @@ def user_b(admin_client, supabase_env):
     user = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "b")
     yield user
     _delete_user(admin_client, user.id)
+
+
+# Per-user card fixtures — shared across the RLS contract suite and the
+# Day 5 transactions suite. `subscriptions` requires `card_id NOT NULL`, and
+# `transactions.card_id` is the FK that the Day 5 confirm-path ownership
+# check validates.
+@pytest.fixture(scope="session")
+def card_a(user_a) -> str:
+    from app.db import supabase_for_user
+
+    client = supabase_for_user(user_a.jwt)
+    resp = (
+        client.table("cards")
+        .insert(
+            {
+                "user_id": user_a.id,
+                "name": "A card",
+                "issuer": "Chase",
+                "program": "UR",
+            }
+        )
+        .execute()
+    )
+    return resp.data[0]["id"]
+
+
+@pytest.fixture(scope="session")
+def card_b(user_b) -> str:
+    from app.db import supabase_for_user
+
+    client = supabase_for_user(user_b.jwt)
+    resp = (
+        client.table("cards")
+        .insert(
+            {
+                "user_id": user_b.id,
+                "name": "B card",
+                "issuer": "Amex",
+                "program": "MR",
+            }
+        )
+        .execute()
+    )
+    return resp.data[0]["id"]

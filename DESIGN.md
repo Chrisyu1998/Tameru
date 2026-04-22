@@ -311,12 +311,12 @@ Manual entry is intentional. The 10-second friction of logging a purchase builds
 1. User taps the center chat button in the bottom nav.
 2. User types or speaks: "spent $47 at Trader Joe's on my Amex Gold."
 3. Claude Haiku receives the message and calls `propose_transaction(...)` via `tool_use`, filling merchant / amount / date / card_name from its own read of the message (not Gemini — see §7.4).
-4. The tool implementation resolves `card_name → card_id` from the user's cards, calls `categorize()` (Gemini Flash-Lite — §7.4) for a category suggestion, and returns a `TransactionProposal` payload. **No DB write happens inside the tool.**
-5. The React client renders the proposal as an inline parse card in the chat (UX frame 15): merchant, amount, date, card, category — each editable.
-6. User taps "looks right" → client calls `POST /transactions/confirm` with the proposal. The server writes the row and fires the Entry-Moment Insight (below) in the same response.
-7. If offline, the confirm call queues in IndexedDB and syncs on reconnect.
+4. The tool implementation resolves `card_name → card_id` from the user's cards, calls `categorize()` (Gemini Flash-Lite — §7.4) for a category suggestion, generates a fresh `client_request_id` (UUIDv4), and returns a `TransactionProposal` payload. **No DB write happens inside the tool.**
+5. The React client renders the proposal as an inline parse card in the chat (UX frame 15): merchant, amount, date, card, category — each editable. The `client_request_id` is carried opaquely by the client.
+6. User taps "looks right" → client calls `POST /transactions/confirm` with the proposal (including the `client_request_id`). The server validates, inserts, and fires the Entry-Moment Insight (below) in the same response.
+7. If offline, the confirm call queues in IndexedDB (keyed by `client_request_id`) and syncs on reconnect. A partial unique index on `(user_id, client_request_id)` — see §8.2 — makes duplicate replay a no-op rather than a duplicate row; the server returns the existing transaction with `insight: null` on replay.
 
-This **propose-then-confirm** shape — tool returns proposal, UI commits — is the invariant mutation pattern for all user-facing writes. The same flow applies to `propose_card` and `propose_subscription`. It matches the Intent Preview pattern from agentic-UX design and guarantees no row is written without explicit UI confirmation.
+This **propose-then-confirm** shape — tool returns proposal, UI commits — is the invariant mutation pattern for all user-facing writes. The same flow applies to `propose_card` and `propose_subscription` (each with its own `client_request_id`). It matches the Intent Preview pattern from agentic-UX design and guarantees no row is written without explicit UI confirmation.
 
 **Currency:** amounts are entered in the user's home currency — a single currency chosen at signup and immutable thereafter (§8.7, CLAUDE.md invariant 13). For foreign purchases, users enter the amount their card statement will show in home currency; v1 does not fetch FX rates or convert on the user's behalf. Per-transaction multi-currency is explicitly out of scope (§3.2).
 
@@ -349,12 +349,18 @@ Anything not on the dashboard lives in the chat. Generative charts, trend analys
 
 #### Transaction list UX — edit / delete surface
 
-Chat is sufficient for high-confidence mutations ("delete my last transaction" → one turn). It is **not** sufficient for ambiguous retrieval ("change that $10 coffee from two weeks ago" when there are ten coffees in that window) — the resulting disambiguation turns are a known failure mode of chat-first design (2026 consensus; see §7.7 for how chat still contributes via inline candidate lists). v1 therefore ships a dedicated per-category transaction list reached from the Breakdown drill.
+Chat is sufficient for high-confidence mutations ("delete my last transaction" → one turn). It is **not** sufficient for ambiguous retrieval ("change that $10 coffee from two weeks ago" when there are ten coffees in that window) — the resulting disambiguation turns are a known failure mode of chat-first design (2026 consensus; see §7.7 for how chat still contributes via inline candidate lists). v1 therefore ships a dedicated per-category transaction list reached from the Breakdown drill, and the chat surface hands off to the edit sheet (UX frame 11b) for all mutations.
 
 **Entry points:**
 
 - Tap a category in Breakdown → expand to show 3 most recent (UX frame 11) → tap "see all <category>" → per-category transaction list (UX frame 11a).
-- In chat, when Claude detects ambiguity, it calls `get_transactions(...)` and the tool result is rendered as tappable candidate cards inline; tapping a card opens the same edit sheet (UX frame 11b) used by the list surface.
+- In chat, when the user expresses a delete or update intent, Claude calls `get_transactions(...)` with narrow filters:
+  - **v1 UX (ship this)** — the result is rendered as tappable candidate cards inline regardless of count. Tapping a card opens the edit sheet (UX frame 11b), where the user taps Save or Delete. A single-row result is a one-card list the user taps once to reach the sheet.
+  - **Zero matches** → Claude asks a clarifying question in prose; no card is rendered.
+
+The agent is always read-only on the ledger: `get_transactions(...)` retrieves, never mutates. The HTTP `PATCH` / `DELETE` call is always the user's explicit tap on the edit sheet — not a `tool_use` side-effect (CLAUDE.md invariant 8).
+
+**Post-launch enhancement (not v1 scope).** When `get_transactions(...)` returns exactly one match and the user's prior turn expressed a clear delete/update intent, a future version renders an inline confirm card in the chat ("Delete Costco $47 on 4/22? [Confirm] [Cancel]") — collapsing the candidate-tap → edit-sheet-tap to a single tap. Implementation requires two additional agent tools (`propose_delete_transaction`, `propose_update_transaction`) that return delete/update proposal payloads without mutating, plus a MutationConfirmCard component. Neither the tools nor the component are load-bearing for v1; the candidate-card → edit-sheet path satisfies the functional requirement (one-turn delete in chat-model terms, two taps in UI terms). Add the enhancement after v1 launch if real users flag the extra tap.
 
 **List surface (UX frame 11a):**
 
@@ -492,7 +498,7 @@ Phase 1 uses typed tools only. A read-only `run_query(sql)` tool may be added in
 
 **Why propose-then-confirm instead of a direct-write tool?** Transactions, cards, and subscriptions are visible on the user's ledger. Writing on `tool_use` would mean Claude could create a row from a misread vague message before the user sees what it parsed. The proposal pattern makes the UI the point of commit: no row exists until the user taps a button. It also matches the Intent Preview pattern from 2026 agentic-UX design literature.
 
-**Edits and deletes are not chat tools.** The user edits by tapping a transaction (either in a chat-rendered candidate list or in the list surface, UX frame 11a) to open the edit sheet (UX frame 11b). Deletes happen via swipe-left on a row or the delete button on the edit sheet. Chat's role in edits is retrieval — calling `get_transactions(...)` and rendering candidate cards inline when the user is specific enough to narrow but too vague to uniquely identify a row. See §6.2 "Transaction list UX" for the full rationale.
+**The agent has no direct-mutate tools for ledger rows.** No `edit_transaction`, no `delete_transaction`, no `add_*`. Chat's mutation role is retrieval (`get_transactions(...)`) + proposal (`propose_*`) only; the `tool_use` call itself never commits. The HTTP `PATCH` / `DELETE` call is always made by the client after an explicit user tap. In v1 that tap lives on the edit sheet (UX frame 11b), reached from the per-category list or from a chat-rendered candidate-card list. A post-launch enhancement (§6.2) adds an inline confirm card for the exact-1-match delete/update case, served by two additional `propose_*` tools that return proposals without mutating — same invariant shape, different UI. v1 does not ship those tools or that component.
 
 **Example trace — read:** "How much more did I spend on dining in March vs February?"
 → `calculate_total(category="Dining", date_from="2026-03-01", date_to="2026-03-31")`
@@ -690,13 +696,18 @@ Enum-like text fields carry `CHECK` constraints enforcing the allowed values lis
 | amount | numeric | In the user's `users_meta.home_currency` (§8.7). Stored as `numeric` for money-safe arithmetic — never `float`. |
 | date | date | Transaction date |
 | category | text | User-confirmed or auto-assigned |
-| gemini_suggestion | text | Raw suggestion before user confirm |
+| gemini_suggestion | text | Raw suggestion before user confirm. Self-reported by the client on `/transactions/confirm`; see "Trust posture" below. |
 | source | text | manual \| nlp \| receipt_photo \| auto_logged \| csv_import |
 | notes | text | Optional |
+| client_request_id | UUID | Nullable. Set by the client on the chat-confirm path (§6.2 step 4) for offline-replay idempotency. `NULL` for pg_cron auto-logger (§6.5) and CSV batch inserts (§5.4.3). |
 | created_at | timestamptz | |
 | updated_at | timestamptz | Used for offline sync conflict resolution |
 
-**Constraint:** `UNIQUE (subscription_id, date) WHERE subscription_id IS NOT NULL` — guarantees subscription idempotency.
+**Constraints:**
+- `UNIQUE (subscription_id, date) WHERE subscription_id IS NOT NULL` — guarantees subscription idempotency for the pg_cron auto-logger.
+- `UNIQUE (user_id, client_request_id) WHERE client_request_id IS NOT NULL` — partial unique index for chat-confirm idempotency. Replay of the same confirm (e.g. IndexedDB queue draining after reconnect) returns the existing row instead of creating a duplicate.
+
+**Trust posture for `gemini_suggestion`:** the field is reported by the client on the confirm payload and stored as-is. A user tampering with it forges audit data only on their own account and gains nothing; the authoritative record of what Gemini actually said lives in `ai_call_log` (§8.8). Do not server-side re-derive the suggestion or sign proposals for v1 — the cost/complexity does not match the threat. If fleet-wide override-rate analytics later become load-bearing (e.g. under the §17 scaling plan), introduce a short-lived `transaction_proposals` server-storage layer at that point; do not build it speculatively.
 
 ### 8.3 `subscriptions`
 
@@ -722,11 +733,18 @@ Powers the "past corrections" field in the Gemini categorization prompt. Most re
 |---|---|---|
 | id | UUID | Primary key |
 | user_id | UUID | FK → auth.users |
-| merchant | text | Normalized (lowercased, trimmed) |
+| merchant | text | Normalized via `normalize_merchant()` (lowercased, trimmed, interior whitespace collapsed — `app/util/merchant.py`) |
 | category | text | User-confirmed category |
 | updated_at | timestamptz | |
 
 **Constraint:** `UNIQUE (user_id, merchant)`.
+
+**When the upsert fires** — two sites, one predicate (`category != gemini_suggestion`):
+
+1. **`POST /transactions/confirm`** (Day 5): if the user edits the parse card's category away from `gemini_suggestion` before tapping "looks right," that is a correction and must seed the cache. Pure confirmations (category unchanged from the Gemini guess) are **not** written — caching confirmations would pollute the "past corrections" prompt slot with redundant, low-signal rows.
+2. **`PATCH /transactions/{id}`** (Day 5): when the PATCH body contains a `category` different from the stored value. Keyed on the **new** normalized merchant if the PATCH also changed merchant; a merchant-only PATCH (no category change) does not touch this table.
+
+Both sites upsert as `(user_id, normalize_merchant(merchant), category, updated_at=now())` with `ON CONFLICT (user_id, merchant) DO UPDATE`. This is the sole write path; no other code should insert into `merchant_category`.
 
 ### 8.5 `user_memory`
 

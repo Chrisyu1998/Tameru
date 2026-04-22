@@ -23,6 +23,9 @@ User adds a subscription. Daily `pg_cron` SQL function inserts a transaction whe
 - Backend:
   - `app/routes/subscriptions.py`:
     - **`POST /subscriptions/confirm`** — body: `SubscriptionProposal` (name, card_id, amount, frequency, start_date, category, next_billing_date — computed from start_date + frequency by the `propose_subscription` tool in Day 9). Writes the row. Called after "looks right" on the chat parse card (UX frame 15 in `subscription` kind).
+        - **Validate `card_id` ownership** before insert: read `cards` via `supabase_for_user(user.jwt)` and reject with 422 if the id doesn't resolve for this user. The same rationale as Day 5's transaction confirm — the subscriptions RLS policy only enforces `user_id = auth.uid()`, not that `card_id` belongs to the authed user, so a tampered client could FK-link to another user's card id. RLS on `cards` prevents the read later, but not the write now.
+        - **Amount and frequency validation**: `amount > 0`, `frequency` in `{monthly, quarterly, annual, weekly}` (matches §8.3). 422 on miss.
+        - **No `client_request_id` idempotency.** Subscriptions are low-frequency (a handful per user) — same rationale as cards (Day 14). A rare offline-replay duplicate is recoverable by the user deleting one; the server-side idempotency machinery Day 5 uses for transactions is not proportionate here. If a user reports duplicated subscriptions in practice, revisit.
     - **No `POST /subscriptions` that accepts free-form user input** — adds go through chat → `propose_subscription` → `POST /subscriptions/confirm` (invariant 8).
     - `GET /subscriptions?status=` — list.
     - `PATCH /subscriptions/{id}` — pause (`status=paused`), resume (`status=active`), edit fields. Used by UX frame 22's "pause subscription" action and the edit sheet.

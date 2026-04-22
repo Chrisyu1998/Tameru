@@ -27,6 +27,7 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 
 - `POST /cards/lookup` — body: `{name}`. Calls Perplexity, returns the proposed card data + citations. Used by the onboarding flow *and* by the `propose_card` tool internals (Day 9).
 - **`POST /cards/confirm`** — body: `CardProposal` payload (network, last4, program, multipliers, annual_fee, source_urls, alias?). Inserts the row. Returns the created card. Called after "looks right" on either the onboarding screen or the chat parse card.
+  - **No `client_request_id` idempotency here.** Unlike transactions (Day 5 / §8.2), card proposals don't carry an idempotency key — cards are low-frequency (3–5 per user lifetime), and the worst case on offline-queue replay is a duplicate card row the user can delete. The idempotency cost is not proportionate. Don't add the column or the partial unique index "for consistency" with transactions.
 - **No `POST /cards` (direct write from a free-form user form).** The only commit path is `/confirm` after a proposal the user saw.
 - `GET /cards` — list active cards.
 - `PATCH /cards/{id}` — edit (used from the More → My Cards list, UX frame 18, tap-to-edit).

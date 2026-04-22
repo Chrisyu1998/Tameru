@@ -30,6 +30,7 @@ The insight is computed inside `POST /transactions/confirm` (Day 5) and returned
   3. Single-transaction notable ("highest single dining spend this month.")
   4. Card mismatch ("you've used Chase Freedom for dining 3 times this week — Amex Gold earns 4x there.")
 - Returns `None` when nothing meaningful applies (first transaction in a category, within-10%-of-baseline noise). Day 5's confirm endpoint passes the `None` through to the client, which then skips the insight bubble entirely.
+- **On idempotent replay** (a `POST /transactions/confirm` that matched an existing row by `client_request_id` — see Day 5), the confirm endpoint returns `insight: null` without calling `entry_moment_insight()` at all. The user either already saw the insight when the original confirm landed, or has long since moved past the conversation; re-firing stale context is worse than silence (Day 15 offline queue note).
 - **Deterministic Python — no AI call.** Keeps latency in the confirm response under ~150ms so the bubble appears fluidly after the parse-card "looks right" tap. Swapping to Haiku-generated prose is a post-launch experiment, not v1 scope.
 
 ### Frontend — dashboard
@@ -50,7 +51,7 @@ The insight is rendered as a quiet AI bubble below the just-committed transactio
 
 - `tests/test_baselines.py`: correct 3-month rolling avg with edge cases (gaps in months, single-day-spread data, new-user path).
 - `tests/test_entry_moment.py`: the right rule fires for synthetic transaction histories; `None` when nothing applies; priority order is respected when multiple rules match.
-- `tests/test_transactions.py` (extending Day 5): `POST /transactions/confirm` returns `{transaction, insight}` with `insight` populated or null per the rules.
+- `tests/test_transactions.py` (extending Day 5): `POST /transactions/confirm` returns `{transaction, insight}` with `insight` populated or null per the rules. On a replayed confirm (same `client_request_id`), `insight` is always `null` even when the rule set would otherwise fire.
 
 ## Don't
 
