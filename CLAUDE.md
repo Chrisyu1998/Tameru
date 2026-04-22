@@ -50,7 +50,7 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 
 | Task | Provider/model | Notes |
 |---|---|---|
-| Categorization, NL parse, CSV parse, receipt vision | `gemini-3.1-flash-lite-preview` | Configurable via `GEMINI_MODEL` env var. Paid tier only. **Preview model** — fall back to `gemini-2.5-flash` (GA) if Flash-Lite preview becomes unstable. Do not use Gemini 3.1 Pro — it's a reasoning model, overkill and expensive for simple extraction. |
+| Categorization, CSV parse, receipt vision | Gemini (env-resolved) | Resolved from `GEMINI_MODEL` (override) or `GEMINI_MODEL_DEFAULT` (platform default) at call time — **no hardcoded model strings in the code**. v1 production default: `GEMINI_MODEL_DEFAULT=gemini-2.5-flash` (GA, stable). The preview model `gemini-3.1-flash-lite-preview` is available via `GEMINI_MODEL` for eval experiments; observed to 503 intermittently, which is why it's not the default. Paid tier only. Do not use Gemini 3.1 Pro — it's a reasoning model, overkill and expensive for simple extraction. Rotate env vars (no code change) if Google deprecates either model. |
 | Card multiplier lookup | Perplexity Sonar | One call per card add. Citations stored as `cards.source_urls`. |
 | Chat agent | `claude-haiku-4-5` | Messages API + `tool_use`. Gemini 3.1 Flash-Lite was evaluated and rejected for v1 chat — see DESIGN.md §11.4. Re-evaluation is a planned post-launch A/B via the multi-hop eval suite. Do not switch unilaterally. |
 | Weekly digest narrative | `claude-sonnet-4-6` | Called weekly; prose quality matters |

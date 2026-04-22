@@ -25,6 +25,13 @@ from supabase import Client, create_client
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 
+# Module-level default so every test process has a Gemini model resolved
+# without requiring each developer to set an env var manually. Uses the
+# stable GA model — smoke tests against the preview model are opt-in via
+# an explicit `GEMINI_MODEL=gemini-3.1-flash-lite-preview` override.
+# `setdefault` respects any pre-existing env from CI / .env / shell.
+os.environ.setdefault("GEMINI_MODEL_DEFAULT", "gemini-2.5-flash")
+
 
 def _populate_env_from_supabase_status() -> None:
     """Fill in SUPABASE_* env vars from the local CLI if they're missing.

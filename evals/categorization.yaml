@@ -1,0 +1,68 @@
+# Categorization eval — 14-row skeleton, one per non-Other v2 category
+# (full 100 lands on Day 22).
+#
+# Shape: (merchant, amount) -> expected_category. Amount is a string so
+# decimal precision is preserved through YAML parse; the runner converts
+# to Decimal before calling categorize().
+#
+# Criteria for picking rows: each row should disambiguate against the
+# nearest-neighbor category (Starbucks = Coffee Shops not Dining; Uber =
+# Transit not Travel; CVS = Drugstores not Health). The full 100 on Day
+# 22 should deepen coverage — multiple merchants per category, price
+# ranges, ambiguous cases like airport Starbucks.
+
+- merchant: "Trader Joe's"
+  amount: "47.32"
+  expected_category: "Groceries"
+
+- merchant: "Nobu Malibu"
+  amount: "185.00"
+  expected_category: "Dining"
+
+- merchant: "Blue Bottle Coffee"
+  amount: "6.50"
+  expected_category: "Coffee Shops"
+
+- merchant: "Shell Gas Station #4412"
+  amount: "58.10"
+  expected_category: "Gas"
+
+- merchant: "Uber Trip"
+  amount: "18.43"
+  expected_category: "Transit"
+
+- merchant: "United Airlines"
+  amount: "412.00"
+  expected_category: "Travel"
+
+- merchant: "Netflix"
+  amount: "15.49"
+  expected_category: "Streaming"
+
+- merchant: "Notion Labs"
+  amount: "10.00"
+  expected_category: "Subscriptions"
+
+- merchant: "AMC Century City"
+  amount: "22.50"
+  expected_category: "Entertainment"
+
+- merchant: "Uniqlo San Francisco"
+  amount: "89.00"
+  expected_category: "Shopping"
+
+- merchant: "CVS Pharmacy"
+  amount: "12.89"
+  expected_category: "Drugstores"
+
+- merchant: "Home Depot"
+  amount: "143.27"
+  expected_category: "Home"
+
+- merchant: "PG&E"
+  amount: "178.42"
+  expected_category: "Utilities"
+
+- merchant: "Dr. Smith DDS"
+  amount: "220.00"
+  expected_category: "Health"

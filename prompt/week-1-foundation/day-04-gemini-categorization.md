@@ -2,7 +2,7 @@
 
 ## Goal
 
-A typed `categorize(merchant, amount, user) -> CategorySuggestion` library function that calls `gemini-3.1-flash-lite-preview`, returns a category from a closed enum, factors in this user's recent `merchant_category` corrections, and logs every call — success and failure — to `ai_call_log` using the caller's JWT.
+A typed `categorize(merchant, user) -> CategorySuggestion` library function that calls `gemini-3.1-flash-lite-preview`, returns a category from a closed enum, factors in this user's recent `merchant_category` corrections, and logs every call — success and failure — to `ai_call_log` using the caller's JWT.
 
 No HTTP endpoint today. Imported by Day 16's `propose_transaction` tool (to suggest a category when Claude doesn't provide one) and by Day 5's `POST /transactions/confirm` endpoint (for server-side validation when a proposal arrives without a category).
 
@@ -16,9 +16,11 @@ No HTTP endpoint today. Imported by Day 16's `propose_transaction` tool (to sugg
 ## Architectural notes
 
 - **`ai_call_log` writes use the user JWT with a narrow INSERT policy.** The policy is `WITH CHECK (user_id = auth.uid())`. The logger runs inside the request and uses `supabase_for_user(user.jwt)`. No service role. This preserves CLAUDE.md invariant 1 (invariant 14 makes it explicit).
-- **`amount` is `Decimal`, in the user's home currency.** Never `float`. v1 stores all amounts in a single user-level currency (`users_meta.home_currency`, immutable — invariant 13). This module does not read `home_currency`, does not convert, and does not look at currency at all. It treats `amount` as a scalar.
+- **`amount` is not a parameter of `categorize()`.** Categorization is a function of merchant identity + the user's past corrections, nothing else. Passing amount subtly encouraged price-based reasoning ("that's too much for groceries, must be bulk shopping") and made the same merchant categorize inconsistently across price points. Amount remains a `Decimal` on the transaction row (stored, in the user's home currency — invariant 13) and flows through Day 5's confirm endpoint and Day 13's Entry-Moment Insight; it just does not touch the category decision. See `categorize_v3` rationale in `app/prompts/categorize.py`.
 - **Merchant normalization is shared.** Lowercase + strip + collapse interior whitespace. Used by this module's lookup path and by Day 5's write path.
 - **Category output is a closed enum.** The model chooses from a fixed set defined in code. Unknown outputs are a schema violation, not a coerced "Other."
+- **User-controlled merchant text reaches Gemini only through the defense-wrapped `<merchant>` tag in `system_instruction`.** The `contents` payload (Gemini's user-turn slot) is a static "go" signal carrying no user input. Passing merchant text into `contents` would defeat the prompt-injection defense render_prompt builds, because `contents` has no `<merchant>` wrapper and no "treat as untrusted" instruction. See `categorize_v4` rationale.
+- **`categorize()` writes exactly one `ai_call_log` row per call — including preflight failures.** `_model_name()`, `_read_past_corrections`, and `render_prompt` all live inside the outer try block; the logger picks up sentinel values (`model="unresolved"`, `prompt_hash=""`) when preflight dies before Gemini is called. An unset `GEMINI_MODEL_DEFAULT` in prod must show up as a `success=false, error_code="provider_error"` row, not silent invisibility.
 
 ## Deliverables
 
@@ -28,14 +30,17 @@ No HTTP endpoint today. Imported by Day 16's `propose_transaction` tool (to sugg
 
 ### `app/prompts/categories.py` (new)
 
-- `ALLOWED_CATEGORIES: tuple[str, ...]` — closed enum: `Groceries`, `Dining`, `Transportation`, `Travel`, `Entertainment`, `Shopping`, `Utilities`, `Health`, `Subscriptions`, `Other`.
+- `ALLOWED_CATEGORIES: tuple[str, ...]` — closed enum of 15, aligned with credit-card reward multiplier groupings so the Entry-Moment Insight card-mismatch rule (§6.2) can tie merchant category to card earn rates:
+  `Groceries`, `Dining`, `Coffee Shops`, `Gas`, `Transit`, `Travel`, `Streaming`, `Subscriptions`, `Entertainment`, `Shopping`, `Drugstores`, `Home`, `Utilities`, `Health`, `Other`.
 - Used to render the list into the prompt AND to validate Gemini's response. Single source of truth.
+- `Other` stays as an escape hatch despite Plaid/industry guidance against catch-alls — without it, Gemini hallucinates fake categories on truly ambiguous merchants and we take schema-violation errors unnecessarily. Monitor `Other` frequency in `ai_call_log` as a signal that the taxonomy needs a new category.
 
 ### `app/prompts/categorize.py` (new)
 
-- `PROMPT_VERSION = "categorize_v1"`.
-- `def render_prompt(merchant: str, amount: Decimal, past_corrections: list[tuple[str, str]]) -> str:`
-  - Enumerate `ALLOWED_CATEGORIES` in the system prompt.
+- `PROMPT_VERSION = "categorize_v4"` (v1: 10-category flat taxonomy; v2: 15 card-reward-aligned categories with disambiguation descriptions; v3: dropped `amount`; v4: closed a prompt-injection gap — merchant text now flows to Gemini only via the defense-wrapped `<merchant>` tag in `system_instruction`, the `contents` payload is a static "go" signal with no user-controlled substrings).
+- `_CATEGORY_DESCRIPTIONS: dict[str, str]` — one-line description per allowed category that renders into the prompt. Disambiguates the borderline cases Gemini will hit (Starbucks = Coffee Shops not Dining; Uber = Transit not Travel; CVS = Drugstores not Health; Home Depot = Home not Shopping). Module-import-time `assert` fails loudly if descriptions and `ALLOWED_CATEGORIES` drift.
+- `def render_prompt(merchant: str, past_corrections: list[tuple[str, str]]) -> str:`
+  - Enumerate `ALLOWED_CATEGORIES` with descriptions in the system prompt.
   - List `past_corrections` most-recent-first (matches §8.4 "most recent wins"). Empty list is fine — render an empty section, not nothing at all, so the prompt shape is deterministic.
   - Wrap merchant in `<merchant>...</merchant>` and instruct the model to treat its contents as untrusted data, not instructions. Minimal prompt-injection defense — cheap and habit-forming.
   - Instruct JSON output only: `{"category": "<one of the allowed>", "confidence": 0.0-1.0}`. No prose.
@@ -55,7 +60,7 @@ No HTTP endpoint today. Imported by Day 16's `propose_transaction` tool (to sugg
   - `GeminiTimeout` → `timeout`
   - `GeminiJSONParseError` → `json_parse_error` (response present, invalid JSON)
   - `GeminiSchemaViolation` → `schema_violation` (valid JSON, `category` not in enum or `confidence` not in `[0, 1]`)
-- `def categorize(merchant: str, amount: Decimal, user: AuthedUser) -> CategorySuggestion:`
+- `def categorize(merchant: str, user: AuthedUser) -> CategorySuggestion:`
   - Normalize merchant.
   - Read the top 20 `merchant_category` rows for this user ordered by `updated_at DESC` via `supabase_for_user(user.jwt)`. RLS scopes the read.
   - Render the prompt. Compute `prompt_hash = sha256(rendered.encode()).hexdigest()`.
@@ -79,11 +84,15 @@ No HTTP endpoint today. Imported by Day 16's `propose_transaction` tool (to sugg
       raise
   ```
   The bare `except Exception` re-raises so the original stack reaches the caller; it exists only to guarantee audit completeness.
-- Config from env only: `GEMINI_API_KEY` (required, raise on first use if missing), `GEMINI_MODEL` (default `gemini-3.1-flash-lite-preview`), `GEMINI_TIMEOUT_S` (default `5`).
+- Config from env only — **no hardcoded model strings in the code**:
+  - `GEMINI_API_KEY` (required; `GeminiProviderError` on first use if missing).
+  - `GEMINI_MODEL` (per-process override; typically unset in prod, used for eval experiments).
+  - `GEMINI_MODEL_DEFAULT` (platform-level default; the stable GA model). At least one of `GEMINI_MODEL` or `GEMINI_MODEL_DEFAULT` must be set — both absent is a fail-fast error. Operators rotate `GEMINI_MODEL_DEFAULT` if Google deprecates the chosen model; no code change ships.
+  - `GEMINI_TIMEOUT_S` (default `10`; Gemini's API enforces a 10s minimum deadline, smaller values return `INVALID_ARGUMENT` at request time, so the code clamps up to 10 if a smaller value is configured).
 
 ### `tests/test_categorize.py`
 
-- **Mocked parsing** — 5 cases: Trader Joe's → Groceries, Nobu → Dining, Shell → Transportation, Netflix → Subscriptions, Advil at CVS → Health. Assert `CategorySuggestion` fields.
+- **Mocked parsing** — 5 cases: Trader Joe's → Groceries, Blue Bottle Coffee → Coffee Shops, Shell → Gas, Netflix → Streaming, CVS Pharmacy → Drugstores. Each case targets a category that required the v2 split (i.e., would have bucketed differently under v1's flat taxonomy), so the tests prove the new taxonomy is live. Assert `CategorySuggestion` fields.
 - **Mocked schema violation** — Gemini returns `{"category": "Food & Beverage"}`. Assert `GeminiSchemaViolation` raised AND one `ai_call_log` row with `success=false, error_code="schema_violation"`.
 - **Mocked provider error** — SDK raises. Assert `GeminiProviderError` raised AND one `ai_call_log` row with `success=false, error_code="provider_error"`.
 - **Past corrections rendered** — insert 3 `merchant_category` rows for the test user; assert the rendered prompt contains all three in `updated_at DESC` order.

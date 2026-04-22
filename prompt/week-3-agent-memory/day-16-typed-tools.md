@@ -51,6 +51,16 @@ Edits and deletes happen in the edit sheet (UX frame 11b), reached from the tran
 
 Wire all three into `app/agent/loop.py` between iterations.
 
+### System-prompt blocks — merchants + memory
+
+The agent's system prompt is assembled from static preamble + several user-specific blocks, concatenated once per turn. Day 19 adds `render_user_memory()` (cross-session facts). This day adds `render_user_merchants()` for **merchant canonicalization** on the chat-typed path.
+
+- `def render_user_merchants(user_jwt) -> str` — returns a system-prompt block listing this user's top 30 merchants by combined recency + frequency score, pulled from the user's `transactions` table via `supabase_for_user(user_jwt)`. Budget: ~300 tokens (each merchant plus a count is ~8 tokens; 30 × 8 ≈ 240 tokens plus a framing sentence). The block instructs Claude: *"When the user mentions a merchant that closely matches one of these, prefer the exact spelling here for `propose_transaction(merchant=...)`. This is how we avoid fragmenting the user's history across spelling variants."*
+- **Why this matters:** chat-based transaction entry is our only create surface (invariant 8). A user typing "spent $10 at KFC" in chat, or speaking the same via Web Speech API (UX frame 14), enters through the Claude agent loop. Claude is the point of write-side canonicalization — if it sees "Kentucky Fried Chicken" in the user's history, it fills `propose_transaction(merchant="Kentucky Fried Chicken", ...)` instead of creating a new `kfc` row. This is the v1 solution to merchant fragmentation; DESIGN.md §3.4 documents why the alternatives (autocomplete on a free-form chat input, or nightly Gemini merge jobs) don't fit v1.
+- **What it does NOT handle:** first-time merchants (no history to normalize against — accept it), CSV imports (not on the chat path — Phase 2 nightly merge job is the eventual fix), and the edit sheet (Day 12 — users who retype a merchant there can fragment; accept for v1).
+- Cache shape: cheap. Call once per turn start, not per tool iteration. The list changes slowly enough that aggressive caching (per-request memoization inside the loop) is fine; no need for cross-request cache at v1 scale.
+- Tests: seed 5 transactions with merchant `"Kentucky Fried Chicken"` for user A. Call `render_user_merchants(user_a.jwt)` and assert the returned block contains that exact string. Run a turn for "spent $10 at KFC" against a mocked Claude that echoes its system prompt back; assert the merchant block is present.
+
 ### Tests
 
 - `tests/test_tools.py` — for each read tool and each `propose_*` tool, an integration test that invokes it through the loop with a mocked Claude. For `propose_*`, assert that **no row is written to the underlying table** — only the proposal payload is returned.

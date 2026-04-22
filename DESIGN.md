@@ -147,6 +147,7 @@ Tameru v1 ships as an **invite-only project**. No public launch. No paid tier. N
 
 - Transfer bonus digest, SUB wishlist alerts.
 - Card recommender, proactive insights, recurring detection, receipt photo via Gemini Vision, retroactive rewards gap analysis.
+- **Merchant-merge cleanup job.** Users logging via chat will occasionally fragment merchants across spelling variants ("KFC" vs "Kentucky Fried Chicken"). v1 mitigates this on the write path — Claude's system prompt includes the user's top 30 merchants (Day 16 `render_user_merchants()`) and picks the existing canonical form when the user types or speaks a variant. This covers the chat-typed and voice-input paths well but does not cover CSV imports, first-time merchants, or cases where Claude guesses the wrong canonical. A nightly `pg_cron` job that runs Gemini over `merchant_category` row pairs, proposes merges ("'KFC' and 'Kentucky Fried Chicken' look like duplicates — merge?"), and surfaces them in a Settings screen for user confirm is the Phase 2 fix. Not built until real users at real scale produce enough fragmentation to bother them. Options (a) autocomplete on a free-form chat input and (b) deterministic server-side canonicalization via Gemini on every entry were both considered and rejected — (a) doesn't work because chat is free-form and voice has zero keystrokes; (b) is non-deterministic and adds latency to the confirm flow.
 - **Expo / React Native** — evaluated and rejected as a migration path. See §10.
 - **Native iOS via Swift** — admitted as a *possible* future migration if real user demand justifies the rewrite cost. Not on the roadmap. Trigger criteria is an open item (§16).
 - Android — out of scope until an iOS surface exists.
@@ -531,12 +532,14 @@ All API calls go through one Anthropic key, but this is not a bottleneck — the
 
 | Task | Model | Reason |
 |---|---|---|
-| Category inference | Gemini 3.1 Flash-Lite | High-frequency, sub-cent cost, speed > quality. Called from inside `propose_transaction` tool impl. |
-| Receipt photo parsing | Gemini 3.1 Flash-Lite (multimodal) | Image input supported up to 3,000/prompt. Bulk/async path, not chat. |
-| CSV header + batch parse | Gemini 3.1 Flash-Lite | Unstructured → structured, batched. Bulk/async path, not chat. |
+| Category inference | Gemini (env-resolved) | High-frequency, sub-cent cost, speed > quality. Called from inside `propose_transaction` tool impl. |
+| Receipt photo parsing | Gemini (env-resolved, multimodal) | Image input supported up to 3,000/prompt. Bulk/async path, not chat. |
+| CSV header + batch parse | Gemini (env-resolved) | Unstructured → structured, batched. Bulk/async path, not chat. |
 | Chat-based transaction extraction | Claude Haiku 4.5 | In v1, chat is the only user-initiated write surface (CLAUDE.md invariant 8). Claude reads the user's message and fills `propose_transaction(...)` args directly via `tool_use`. There is no separate Gemini NL-parse call in the chat path. Gemini remains the parser for CSV and receipt paths above, because those are bulk/async where per-call cost dominates and no agent loop is involved. |
 | Card multiplier lookup | Perplexity Sonar | Web-grounded, citations, single API call |
 | Chat agent | Claude Haiku 4.5 | Multi-step typed-tool reasoning. Public agentic data point: AIME 2025 with tools 96.3% (+16 vs no-tools). Gemini Flash-Lite considered and rejected — see §11.4 for full rationale. |
+
+**Gemini model resolution:** the exact Gemini model for every Gemini task above is resolved at call time from env vars (`GEMINI_MODEL` override, then `GEMINI_MODEL_DEFAULT`). **No model string is hardcoded in the code.** v1 production default is `GEMINI_MODEL_DEFAULT=gemini-2.5-flash` (GA, stable); `gemini-3.1-flash-lite-preview` is available via `GEMINI_MODEL` for eval experiments but is not the default because observed preview instability (503 UNAVAILABLE spikes during Day 4 smoke). Operators rotate the env var when Google deprecates or unstabilizes the current pick; no code ships. Same env-resolution pattern applies to receipt and CSV paths.
 | Spending narrative (digest) | Claude Sonnet 4.6 | Prose quality (called weekly) |
 | Memory distillation | Claude Haiku 4.5 | Fact extraction + scoring |
 

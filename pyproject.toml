@@ -26,3 +26,13 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 exclude = ["tests*", "evals*", "frontend*", "supabase*"]
+
+[tool.pytest.ini_options]
+markers = [
+  "smoke: opt-in real-API tests (Gemini, Anthropic). Require live network and API keys; not run by default.",
+]
+# Exclude smoke tests from the default run. To run smoke tests:
+#   pytest -o "addopts=" -m smoke
+# (Clearing addopts lets the CLI's -m winnow through instead of AND'ing
+# against the default filter below.)
+addopts = "-m 'not smoke'"
