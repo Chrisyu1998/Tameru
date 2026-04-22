@@ -11,12 +11,13 @@ A Playwright suite covers the golden path. PWA Lighthouse score holds ≥ 90. Pr
 ## Deliverables
 
 - `frontend/e2e/` (Playwright):
-  - Test 1 — **Sign in golden path:** philosophy → take tour → tour completes → sign in → land on home.
-  - Test 2 — **Log a transaction:** open AddTransaction → fill manually → assert categorization suggestion → confirm → see entry-moment toast → see new row in transaction list.
-  - Test 3 — **CSV import:** upload a fixture CSV → preview → confirm → progress events stream → final count matches.
-  - Test 4 — **Ask AI chat one question:** type "How much did I spend on groceries last week?" → see streaming → see answer with the right number → assert no console errors.
-  - Test 5 — **Add subscription, run cron, see auto-logged transaction:** add a sub with `next_billing_date = today` → manually invoke `autolog_subscriptions()` via a test endpoint → assert new transaction.
-  - Test 6 — **Sign out:** click sign out → land on `/signin` → reload → still signed out.
+  - Test 1 — **Sign in golden path (new user):** philosophy → take tour → tour completes → sign in with Google → confirm home currency (UX frame 3a) → add first card (frame 4) → skip CSV → land on home.
+  - Test 2 — **Log a transaction via chat:** tap chat → type "spent $47 at Trader Joe's on my Amex Gold" → parse card (frame 15) renders with five fields → tap "looks right" → row appears in the Breakdown list → entry-moment insight bubble renders inline in chat.
+  - Test 3 — **Edit a transaction via the list:** tap Breakdown → tap "Dining" → tap "see all dining" → tap a row → edit sheet opens → change amount → Save → list reflects the change.
+  - Test 4 — **CSV import:** upload a fixture CSV → preview → confirm → progress events stream → final count matches.
+  - Test 5 — **Ask AI chat one question:** type "how much did I spend on groceries last week?" → see streaming → see answer with the right number → assert no console errors.
+  - Test 6 — **Add subscription via chat, run cron, see auto-logged transaction:** in chat, say "add my Netflix subscription, $15/month, starts today" → confirm parse card → manually invoke `autolog_subscriptions()` via a test endpoint → assert new transaction with 🔄 badge.
+  - Test 7 — **Sign out:** click sign out → land on `/signin` → reload → still signed out.
 - `.github/workflows/e2e.yml`:
   - On push to `main`, after deploy to Railway, runs Playwright against the deployed URL.
   - Uses dedicated test users in the prod Supabase project (or a separate staging project — your call).
@@ -29,7 +30,7 @@ A Playwright suite covers the golden path. PWA Lighthouse score holds ≥ 90. Pr
   - Anthropic ZDR request filed.
   - Sentry receiving events.
   - PostHog receiving events.
-  - Eval harness latest run: categorization ≥ 88%, NL parse amount ≥ 93%.
+  - Eval harness latest run: categorization ≥ 88%, chat extraction amount+merchant ≥ 93%, multi-hop tool sequence ≥ 85%.
   - Domain bound, HTTPS valid.
   - `.env.example` matches actual required env vars.
   - Privacy disclosure copy matches reality.

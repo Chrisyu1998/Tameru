@@ -19,7 +19,7 @@ First-launch onboarding. Philosophy screen pitches intentional entry. The 4-scre
 - `frontend/src/pages/Tour.tsx`:
   - 4 swipeable screens (touch swipe + arrow buttons). Pagination dots at the bottom.
   - **Screen 1 — Dashboard:** render the actual `<Dashboard>` component (built Day 13) with hardcoded fixture props. Numbers from a constant: `Dining +$47 above average`, `Groceries within average`, etc.
-  - **Screen 2 — Entry-moment nudge:** a short looping animation showing a transaction form being submitted, then the one-sentence toast "4th dining transaction this week — you usually have 2."
+  - **Screen 2 — Entry-moment nudge:** a short looping animation showing the chat-based entry flow (UX frame 15 sequence) — user message "spent $47 at Trader Joe's" → parse card renders with five fields → "looks right" tap → confirmed transaction line → below it, the quiet AI insight bubble "4th dining transaction this week — you usually have 2." No toasts — in the chat-unified UX the nudge lives inline in the chat thread (CLAUDE.md invariant 8).
   - **Screen 3 — AI chat:** a static `<ChatThread>` (built Day 18) rendering one Q ("How much did I spend on dining last month?") and one A. No streaming, no API call.
   - **Screen 4 — Weekly digest:** a static rendering of the email layout with example numbers.
   - Final CTA: "This is Tameru with 3 months of data. Log your first transaction or import a CSV to get there." → `/signin`.

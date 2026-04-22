@@ -1,8 +1,19 @@
 """RLS contract suite — DESIGN.md §13.1.
 
 For every user-owned table: user A inserts, user B cannot read or update.
-For every SELECT-only audit table: service role inserts for user A, user B
-cannot read.
+
+For the `ai_call_log` audit table (SELECT + narrow INSERT, no UPDATE/DELETE —
+CLAUDE.md invariant 14):
+    - user B cannot read user A's rows;
+    - user A can insert a row with `user_id = auth.uid()` (the Day 4
+      in-handler logger path);
+    - user A cannot insert a row with `user_id = <user_b.id>` (the narrow
+      INSERT policy's `WITH CHECK` rejects it — the only protection against
+      a compromised JWT forging rows on another account);
+    - user A cannot UPDATE or DELETE their own audit rows (audit history is
+      not scrubbable).
+
+For `ai_call_log_daily` (SELECT only): user B cannot read user A's rows.
 
 The read assertion intentionally omits `user_id` from the `.select()` call.
 That is the whole point of the exercise: the app must not need a `WHERE
@@ -231,10 +242,13 @@ def test_user_b_cannot_update_user_a_users_meta(_seed_users_meta_once, user_a, u
 
 
 # ---------------------------------------------------------------------------
-# Audit tables — SELECT-only policy. We check that user B cannot read user A's
-# rows. INSERT/UPDATE/DELETE are unconditionally rejected by Postgres (no
-# policies exist for those verbs), so asserting their rejection is tautological
-# and not tested here.
+# Audit tables — `ai_call_log` has SELECT + narrow INSERT policies and NO
+# UPDATE/DELETE policies; `ai_call_log_daily` has SELECT only. Tests below
+# cover the full contract (CLAUDE.md invariant 14):
+#   - SELECT scoping across users;
+#   - narrow INSERT accepts own-row writes (the Day 4 logger path);
+#   - narrow INSERT rejects foreign-user writes (the forgery protection);
+#   - UPDATE and DELETE are rejected on own rows (history is not scrubbable).
 # ---------------------------------------------------------------------------
 
 
@@ -268,3 +282,99 @@ def test_user_b_cannot_read_user_a_ai_call_log_daily(admin_client, user_a, user_
     client_b = supabase_for_user(user_b.jwt)
     resp = client_b.table("ai_call_log_daily").select("*").execute()
     assert resp.data == [], "RLS leak: user B read user A's ai_call_log_daily rows"
+
+
+def _ai_call_log_row(user_id: str) -> dict:
+    # prompt_version tagged per row so we can find the exact row back later
+    # without worrying about other test rows for the same user.
+    return {
+        "user_id": user_id,
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "task_type": "chat_turn",
+        "prompt_version": f"rls-probe-{_tag()}",
+        "success": True,
+    }
+
+
+def test_user_a_can_insert_own_ai_call_log_row(user_a):
+    """Narrow INSERT policy accepts own-row writes — the Day 4 logger path."""
+    client_a = supabase_for_user(user_a.jwt)
+    row = _ai_call_log_row(user_a.id)
+    resp = client_a.table("ai_call_log").insert(row).execute()
+    assert resp.data, "narrow INSERT policy rejected user A's own-row write"
+    assert resp.data[0]["user_id"] == user_a.id
+
+
+def test_user_a_cannot_insert_foreign_ai_call_log_row(user_a, user_b):
+    """Narrow INSERT's WITH CHECK rejects a forged user_id — the protection
+    against a compromised JWT writing rows on another account."""
+    client_a = supabase_for_user(user_a.jwt)
+    forged = _ai_call_log_row(user_b.id)  # user A's client, user B's user_id
+    with pytest.raises(Exception):
+        client_a.table("ai_call_log").insert(forged).execute()
+
+    # Double-check: no row with this sentinel landed.
+    check = (
+        supabase_for_user(user_b.jwt)
+        .table("ai_call_log")
+        .select("id")
+        .eq("prompt_version", forged["prompt_version"])
+        .execute()
+    )
+    assert check.data == [], "RLS leak: a forged foreign-user row was persisted"
+
+
+def test_user_a_cannot_update_own_ai_call_log_row(user_a):
+    """No UPDATE policy on ai_call_log — users cannot mutate audit history."""
+    client_a = supabase_for_user(user_a.jwt)
+    row = _ai_call_log_row(user_a.id)
+    ins = client_a.table("ai_call_log").insert(row).execute()
+    row_id = ins.data[0]["id"]
+
+    resp = (
+        client_a.table("ai_call_log")
+        .update({"success": False})
+        .eq("id", row_id)
+        .execute()
+    )
+    assert resp.data == [], (
+        "ai_call_log UPDATE should affect zero rows (no UPDATE policy exists)"
+    )
+
+    # And the row is unchanged.
+    fetched = (
+        client_a.table("ai_call_log")
+        .select("success")
+        .eq("id", row_id)
+        .single()
+        .execute()
+    )
+    assert fetched.data["success"] is True, (
+        "ai_call_log row was mutated despite no UPDATE policy"
+    )
+
+
+def test_user_a_cannot_delete_own_ai_call_log_row(user_a):
+    """No DELETE policy on ai_call_log — users cannot scrub audit history."""
+    client_a = supabase_for_user(user_a.jwt)
+    row = _ai_call_log_row(user_a.id)
+    ins = client_a.table("ai_call_log").insert(row).execute()
+    row_id = ins.data[0]["id"]
+
+    resp = client_a.table("ai_call_log").delete().eq("id", row_id).execute()
+    assert resp.data == [], (
+        "ai_call_log DELETE should affect zero rows (no DELETE policy exists)"
+    )
+
+    # And the row is still there.
+    fetched = (
+        client_a.table("ai_call_log")
+        .select("id")
+        .eq("id", row_id)
+        .single()
+        .execute()
+    )
+    assert fetched.data["id"] == row_id, (
+        "ai_call_log row was deleted despite no DELETE policy"
+    )

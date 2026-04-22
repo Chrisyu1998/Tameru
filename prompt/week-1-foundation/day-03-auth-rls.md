@@ -49,7 +49,7 @@ End-to-end auth: user signs in with Google via Supabase, gets a JWT, FastAPI val
 
 ### `app/main.py`
 
-- `GET /me` endpoint protected by `get_current_user_jwt`. Returns `{"user_id": ..., "email": ...}` **directly from the JWT claims** — no DB round-trip, no `users_meta` SELECT. The JWT already has what we need, and adding a DB call on every auth ping is pointless latency.
+- `GET /me` endpoint protected by `get_current_user_jwt`. Returns `{"user_id": ..., "email": ...}` **directly from the JWT claims** — no DB round-trip, no `users_meta` SELECT. The JWT already has what we need. Day 9 extends this endpoint to also include `home_currency` (adding one `users_meta` SELECT), which is needed to render currency symbols in the UI; accept that extra round-trip when it lands. Not today.
 
 ### OAuth configuration
 
@@ -65,10 +65,12 @@ Target: local Supabase stack only. Tests must **not** point at the hosted projec
   - Insert a row as user A via `supabase_for_user(jwt_a)`.
   - As user B via `supabase_for_user(jwt_b)`, run `.select("*")` **without any `user_id` filter in the query** — this is the whole point of the test. RLS must return zero rows even when the app "forgot" the WHERE clause. **Assert: zero rows.**
   - As user B, attempt `.update(...)` on A's row id. **Assert: rejected / zero rows affected.**
-- For append-only audit tables — `ai_call_log`, `ai_call_log_daily` — the policy shape is different (SELECT-only, writes are service-role). Contract test:
-  - Using `supabase_admin()`, insert one audit row attributed to user A.
-  - As user B via `supabase_for_user(jwt_b)`, `.select("*")` on the table without a `user_id` filter. **Assert: zero rows.**
-  - Do not test INSERT/UPDATE/DELETE rejection here — there are no policies for those verbs, so Postgres rejects them unconditionally, which is the correct behavior but tautological to assert.
+- For append-only audit tables — `ai_call_log`, `ai_call_log_daily` — the policy shape is different (SELECT + narrow INSERT on `ai_call_log`; SELECT only on `ai_call_log_daily`; no UPDATE or DELETE anywhere). See CLAUDE.md invariant 14. Contract test:
+  - `ai_call_log` SELECT scoping: using `supabase_admin()`, insert one audit row attributed to user A. As user B via `supabase_for_user(jwt_b)`, `.select("*")` without a `user_id` filter. **Assert: zero rows.**
+  - `ai_call_log` narrow INSERT — success case: as user A via `supabase_for_user(jwt_a)`, `.insert({user_id: user_a.id, provider: 'anthropic', ...})`. **Assert: row inserted.** This proves the Day 4 `log_ai_call` helper works without service role.
+  - `ai_call_log` narrow INSERT — foreign-user rejection: as user A, `.insert({user_id: user_b.id, provider: 'anthropic', ...})`. **Assert: rejected by the `WITH CHECK (user_id = auth.uid())` policy.** This is the protection against a compromised JWT forging rows on another user's account.
+  - `ai_call_log` UPDATE/DELETE rejection: as user A on user A's own row, attempt UPDATE and DELETE. **Assert: both rejected** (no policy for those verbs; users cannot scrub their own audit history).
+  - `ai_call_log_daily` SELECT scoping: same as `ai_call_log` read test. No INSERT test — no policy exists for INSERT on `ai_call_log_daily` (rollup writes come from the service-role aggregator).
 
 ## Don't
 

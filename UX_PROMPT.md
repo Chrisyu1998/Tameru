@@ -1,10 +1,10 @@
 # Tameru — Claude Design Prompt (v3)
 
-You are generating a **single HTML artifact** showing 33 mobile UI frames for Tameru, a spending intelligence app.
+You are generating a **single HTML artifact** showing 36 mobile UI frames for Tameru, a spending intelligence app.
 
 ## Critical output instruction
 
-Generate ALL 33 frames. Do not stop early. If you are approaching your output limit, compress the remaining frames — reduce their detail — but never skip a frame entirely. Every frame in the list below must appear in the output with at minimum a placeholder showing its label, background color, and basic layout structure.
+Generate ALL 36 frames. Do not stop early. If you are approaching your output limit, compress the remaining frames — reduce their detail — but never skip a frame entirely. Every frame in the list below must appear in the output with at minimum a placeholder showing its label, background color, and basic layout structure. Frame 3a sits in Section 1 (Onboarding) between frames 3 and 4; frames 11a and 11b sit in Section 3 (Home) between frames 11 and 12.
 
 ## Canvas
 
@@ -42,7 +42,7 @@ Light/dark toggle fixed top-right. Default: light.
 
 ---
 
-## 33 Frames
+## 36 Frames
 
 Generate every frame below. Keep them simple and clean — wabi-sabi minimalism. If a frame is small enough, render it simply rather than skipping it.
 
@@ -53,6 +53,8 @@ Generate every frame below. Keep them simple and clean — wabi-sabi minimalism.
 **2. Philosophy** — back chevron, "why manual?" title, 4 short paragraphs explaining intentional entry, "continue" primary + "take the tour" text link.
 
 **3. Sign-In** — "tameru" wordmark centered, "sign in to begin" italic tagline, Google sign-in button, "or" divider, "continue with email" secondary, legal footer.
+
+**3a. Confirm Home Currency** — shown only on first sign-in, before frame 4. Top: small tertiary micro-label "SETUP · PREFERENCE". Title Fraunces lowercase "your home currency." Subtitle in secondary "this can't be changed later." Brief explainer paragraph in tertiary: "all your spending stays in this currency. for trips abroad, enter the amount your card statement will show." Centered currency selector — a single pill-shape dropdown showing the default (detected from browser locale, defaulting to "USD"); tapping opens a bottom sheet with the nine allowed currencies as rows (USD · EUR · GBP · CAD · AUD · JPY · CHF · SGD · TWD), each row showing the code and full name. "continue" primary below the selector (accent, full-width). Quiet reassurance footer in tertiary: "to change this later, you'll need to create a new account." No back chevron — once signed in, the user commits. No bottom nav.
 
 **4. Add First Card** — 2-step progress indicator (step 1 active, accent), "SETUP · STEP 1 OF 2" micro-label, "add your first card" title, brief subtitle, card search input (sunken, pill-shape, magnifying glass), 3 suggestion chips below, "add card" primary (disabled) + "skip for now" tertiary. Bottom nav.
 
@@ -72,7 +74,11 @@ Generate every frame below. Keep them simple and clean — wabi-sabi minimalism.
 
 **10. Home Breakdown** — separate screen reached by tapping "↗ Breakdown" on Home Default. Top bar: back chevron left + "breakdown" Fraunces lowercase centered. No toggle — its own destination. Donut chart in upper portion with moss-family segments + neutral for other, "$2,340 this month" in donut center. Tappable category list below: each row has colored dot + category name left, absolute amount + chevron-down right. Rows sorted by descending spend. Bottom nav.
 
-**11. Breakdown Expanded** — same screen, but "Dining" row tapped and expanded: row gets soft accent-tinted background, chevron rotates up. Exactly 3 inline transaction rows appear below it (Blue Bottle Coffee $6.50 · Nobu $85.00 · Tartine $24.00). Below those: "most recent 3. ask tameru for more." as a quiet accent link. All other rows unchanged and tappable. Back chevron still present. Bottom nav.
+**11. Breakdown Expanded** — same screen, but "Dining" row tapped and expanded: row gets soft accent-tinted background, chevron rotates up. Exactly 3 inline transaction rows appear below it (Blue Bottle Coffee $6.50 · Nobu $85.00 · Tartine $24.00). Below those: "most recent 3 · see all dining" as a quiet accent link (taps into frame 11a). All other rows unchanged and tappable. Back chevron still present. Bottom nav.
+
+**11a. Category Transaction List** — reached by tapping "see all" in a Breakdown Expanded row. Top bar: back chevron left + category name in Fraunces lowercase centered ("dining"). Filter chips row below the top bar: month-selector pill ("apr 2026" with down-chevron, accent when current, secondary when past) · "all cards" pill with down-chevron. Below the chips: sunken pill-shape search bar with magnifying glass, placeholder "search merchant…" in tertiary. Main area: scrollable list of transaction rows — each row has date-day left in tertiary micro ("Apr 18"), merchant name primary center-left, amount right-aligned with tabular-nums, card last-4 in tertiary micro below the merchant. Hairline dividers between rows. Infinite-scroll behavior implied (show ~8 rows fitting on screen). One row in mid-swipe-left state revealing a terracotta delete panel to hint at the swipe affordance. Bottom nav.
+
+**11b. Edit Transaction Sheet** — category transaction list (frame 11a) behind scrim. Bottom sheet with drag handle + close-X. Title row: "edit transaction" Fraunces lowercase left. Five editable field rows, same order as the chat parse card: merchant (text) · amount (numeric keyboard affordance implied, tabular-nums, home-currency symbol inline) · date (pill with calendar glyph) · card (pill with card name) · category (pill with down-chevron opening the closed enum: Groceries / Dining / Transportation / Travel / Entertainment / Shopping / Utilities / Health / Subscriptions / Other). Each row has a subtle pencil glyph on the right. Action row at the bottom of the sheet: "save" primary (accent, shown in disabled state since nothing is changed yet) · "cancel" secondary · "delete" in terracotta as a quieter text link on the far right. Save is disabled until any field changes — a core affordance of the edit sheet is knowing when you've actually edited.
 
 ### SECTION 4 — Chat
 

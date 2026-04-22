@@ -22,13 +22,15 @@ User adds a subscription. Daily `pg_cron` SQL function inserts a transaction whe
 - `SELECT cron.schedule('autolog-subscriptions', '0 6 * * *', 'SELECT autolog_subscriptions();');` — runs daily at 06:00 UTC.
 - Backend:
   - `app/routes/subscriptions.py`:
-    - `POST /subscriptions` (name, card_id, amount, frequency, start_date, category) — also computes initial `next_billing_date` from start_date.
+    - **`POST /subscriptions/confirm`** — body: `SubscriptionProposal` (name, card_id, amount, frequency, start_date, category, next_billing_date — computed from start_date + frequency by the `propose_subscription` tool in Day 16). Writes the row. Called after "looks right" on the chat parse card (UX frame 15 in `subscription` kind).
+    - **No `POST /subscriptions` that accepts free-form user input** — adds go through chat → `propose_subscription` → `POST /subscriptions/confirm` (invariant 8).
     - `GET /subscriptions?status=` — list.
-    - `PATCH /subscriptions/{id}` — pause (`status=paused`), resume (`status=active`), edit fields.
+    - `PATCH /subscriptions/{id}` — pause (`status=paused`), resume (`status=active`), edit fields. Used by UX frame 22's "pause subscription" action and the edit sheet.
     - `DELETE /subscriptions/{id}` — soft cancel (`status=cancelled`).
-- Frontend:
-  - `frontend/src/pages/Subscriptions.tsx`: list with name, amount, next billing date, pause/resume button.
-  - Add subscription form. The "Add via chat" path is built Day 18 (chat).
+- Frontend (UX frames 21, 22):
+  - `frontend/src/pages/Subscriptions.tsx`: list with name, amount, next billing date, auto-logged 🔄 badge on the next-to-bill row, pause/resume button. Paused rows at reduced opacity. Empty state footer hint: "add a new subscription via tameru ai →".
+  - `frontend/src/components/SubscriptionDetail.tsx` (frame 22): bottom sheet with detail fields, "pause subscription" secondary, "cancel subscription" destructive text, "to edit, ask tameru ai" micro-text.
+  - **No "Add subscription" form.** Adds are chat-only. The list page's only add affordance is the "add via tameru ai" hint, which deep-links to the chat.
 - Tests:
   - `tests/test_autolog.py`:
     - Seed a subscription with `next_billing_date = today - 1 day`. Run `SELECT autolog_subscriptions();`. Assert one transaction inserted, `next_billing_date` advanced.

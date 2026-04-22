@@ -4,11 +4,17 @@
 -- user context). ON DELETE SET NULL preserves audit history across account
 -- deletions.
 --
--- RLS shape intentionally differs from user-owned tables:
---   * SELECT policy so users can see their own rows if we expose a usage view.
---   * NO INSERT/UPDATE/DELETE policies. All writes are made by the backend
---     logger and the pg_cron aggregator using the service role, which bypasses
---     RLS. A compromised user JWT cannot forge or scrub audit entries.
+-- RLS shape (revised from §8.8 original, preserves CLAUDE.md invariant 1):
+--   * SELECT policy: users see their own rows.
+--   * INSERT policy: users can only insert rows where user_id = auth.uid().
+--     The application logger runs inside request handlers with the user's
+--     JWT, not the service role. Invariant 1 stays intact.
+--   * NO UPDATE or DELETE policies. A user cannot scrub their own audit
+--     history. They can forge token-spend rows on their own account, which
+--     is not a meaningful threat — a user attacking their own account has
+--     no one to deceive but themselves.
+--   * System-level callers with user_id NULL (pg_cron aggregator, future
+--     digest jobs) use the service role, which bypasses RLS entirely.
 
 CREATE TABLE ai_call_log (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,3 +49,7 @@ ALTER TABLE ai_call_log FORCE  ROW LEVEL SECURITY;
 CREATE POLICY ai_call_log_owner_read ON ai_call_log
     FOR SELECT
     USING (user_id = auth.uid());
+
+CREATE POLICY ai_call_log_owner_insert ON ai_call_log
+    FOR INSERT
+    WITH CHECK (user_id = auth.uid());

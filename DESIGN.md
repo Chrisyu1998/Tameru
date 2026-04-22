@@ -128,7 +128,8 @@ Personal finance in 2026 splits into three buckets:
 ### 3.2 Non-Goals (v1, permanent)
 
 - Net worth, investments, credit score, budgeting forecasts.
-- Multi-currency or international card support.
+- **Per-transaction multi-currency and FX conversion.** v1 supports a single home currency per user (chosen at signup, immutable — see §8.7, CLAUDE.md invariant 13). Transactions made abroad are logged as they will appear on the user's card statement in home currency. No per-transaction currency selector, no FX API, no card-statement reconciliation.
+- International card support (non-US reward multipliers, non-USD statement currencies).
 
 ### 3.3 Scope limit — invite-only (v1)
 
@@ -302,14 +303,21 @@ If Perplexity returns ambiguous or low-confidence results, fall back to manual e
 
 ### 6.2 Spending Tracker
 
-Manual entry is intentional. The 10-second friction of logging a purchase builds awareness that is itself valuable.
+Manual entry is intentional. The 10-second friction of logging a purchase builds awareness that is itself valuable. All user-initiated writes — transactions, cards, subscriptions — go through a **single chat surface** (UX_PROMPT.md, frames 12–15). There is no separate `+`-button entry form in v1; see CLAUDE.md invariant 8.
 
-**Entry flow:**
+**Entry flow (chat-based):**
 
-1. Tap **+** on home screen.
-2. Enter merchant, amount, date (defaults to today), card.
-3. Gemini suggests a category. User confirms in one tap or selects from dropdown.
-4. Transaction saved. If offline, queued in IndexedDB; synced on reconnect.
+1. User taps the center chat button in the bottom nav.
+2. User types or speaks: "spent $47 at Trader Joe's on my Amex Gold."
+3. Claude Haiku receives the message and calls `propose_transaction(...)` via `tool_use`, filling merchant / amount / date / card_name from its own read of the message (not Gemini — see §7.4).
+4. The tool implementation resolves `card_name → card_id` from the user's cards, calls `categorize()` (Gemini Flash-Lite — §7.4) for a category suggestion, and returns a `TransactionProposal` payload. **No DB write happens inside the tool.**
+5. The React client renders the proposal as an inline parse card in the chat (UX frame 15): merchant, amount, date, card, category — each editable.
+6. User taps "looks right" → client calls `POST /transactions/confirm` with the proposal. The server writes the row and fires the Entry-Moment Insight (below) in the same response.
+7. If offline, the confirm call queues in IndexedDB and syncs on reconnect.
+
+This **propose-then-confirm** shape — tool returns proposal, UI commits — is the invariant mutation pattern for all user-facing writes. The same flow applies to `propose_card` and `propose_subscription`. It matches the Intent Preview pattern from agentic-UX design and guarantees no row is written without explicit UI confirmation.
+
+**Currency:** amounts are entered in the user's home currency — a single currency chosen at signup and immutable thereafter (§8.7, CLAUDE.md invariant 13). For foreign purchases, users enter the amount their card statement will show in home currency; v1 does not fetch FX rates or convert on the user's behalf. Per-transaction multi-currency is explicitly out of scope (§3.2).
 
 #### Dashboard — design philosophy
 
@@ -338,12 +346,30 @@ Rules: one sentence max. No numbers beyond one. No buttons. Auto-dismiss at 3s. 
 
 Anything not on the dashboard lives in the chat. Generative charts, trend analysis, what-if scenarios, all on demand.
 
-#### Transaction list UX
+#### Transaction list UX — edit / delete surface
 
-- Paginated, 50 rows at a time, infinite scroll.
+Chat is sufficient for high-confidence mutations ("delete my last transaction" → one turn). It is **not** sufficient for ambiguous retrieval ("change that $10 coffee from two weeks ago" when there are ten coffees in that window) — the resulting disambiguation turns are a known failure mode of chat-first design (2026 consensus; see §7.7 for how chat still contributes via inline candidate lists). v1 therefore ships a dedicated per-category transaction list reached from the Breakdown drill.
+
+**Entry points:**
+
+- Tap a category in Breakdown → expand to show 3 most recent (UX frame 11) → tap "see all <category>" → per-category transaction list (UX frame 11a).
+- In chat, when Claude detects ambiguity, it calls `get_transactions(...)` and the tool result is rendered as tappable candidate cards inline; tapping a card opens the same edit sheet (UX frame 11b) used by the list surface.
+
+**List surface (UX frame 11a):**
+
+- Default filter: current month. Filter chips: month selector (`apr 2026` / `mar 2026` / `last 90d` / `all time`), card.
 - Search bar (substring match on merchant).
-- Filter chips: card, category, date range.
-- Tap row to edit. Long-press / swipe-left → delete confirmation.
+- Infinite scroll, 50 rows at a time.
+- Tap row → edit sheet (UX frame 11b).
+- Swipe-left on a row → inline delete confirm.
+
+**Edit sheet (UX frame 11b):**
+
+- Same 5-field layout as the chat parse card (merchant / amount / date / card / category). Each field editable.
+- "Save" (accent, disabled until a change is made) · "Delete" (terracotta text) · "Cancel" (secondary).
+- Delete from the edit sheet goes through the same confirm dialog as swipe-delete.
+
+Bulk operations ("delete all my Starbucks from last month") are **out of scope for v1** — user can delete one-by-one in the list. Adding bulk delete is a Phase 2 call if real users ask for it.
 
 ### 6.3 Baseline Comparisons
 
@@ -448,18 +474,34 @@ Phase 1 uses typed tools only. A read-only `run_query(sql)` tool may be added in
 
 **Tool definitions (Phase 1):**
 
-- `get_transactions({ category?, card_id?, date_from?, date_to?, limit? }) → Transaction[]`
+**Reads** — return data directly, no user confirmation:
+
+- `get_transactions({ category?, card_id?, merchant_contains?, date_from?, date_to?, amount_min?, amount_max?, limit? }) → Transaction[]`
 - `calculate_total({ category?, card_id?, date_from?, date_to? }) → { total, count }`
 - `get_subscriptions({ status? }) → Subscription[]`
-- `add_transaction({ merchant, amount, date, card_id, category, notes? }) → Transaction`
 - `get_spending_summary({ months? }) → CategoryBreakdown[]`
 - `get_cards() → Card[]`
-- `set_goal({ category?, amount, period }) → Goal`
 
-**Example trace:** "How much more did I spend on dining in March vs February?"
+**Writes (propose-then-confirm)** — the tool returns a proposal payload; the React client renders it as a preview card; a separate `POST /<resource>/confirm` endpoint writes the row after the user taps "looks right." No write happens inside the tool itself (§6.2 entry flow).
+
+- `propose_transaction({ merchant, amount, date, card_id?, category?, notes? }) → TransactionProposal`
+- `propose_card({ network, last4, program, alias? }) → CardProposal`
+- `propose_subscription({ name, amount, frequency, start_date, category?, card_id? }) → SubscriptionProposal`
+- `set_goal({ category?, amount, period }) → Goal` — direct write; goals are low-risk, reversible, and not on the transaction ledger.
+
+**Why propose-then-confirm instead of a direct-write tool?** Transactions, cards, and subscriptions are visible on the user's ledger. Writing on `tool_use` would mean Claude could create a row from a misread vague message before the user sees what it parsed. The proposal pattern makes the UI the point of commit: no row exists until the user taps a button. It also matches the Intent Preview pattern from 2026 agentic-UX design literature.
+
+**Edits and deletes are not chat tools.** The user edits by tapping a transaction (either in a chat-rendered candidate list or in the list surface, UX frame 11a) to open the edit sheet (UX frame 11b). Deletes happen via swipe-left on a row or the delete button on the edit sheet. Chat's role in edits is retrieval — calling `get_transactions(...)` and rendering candidate cards inline when the user is specific enough to narrow but too vague to uniquely identify a row. See §6.2 "Transaction list UX" for the full rationale.
+
+**Example trace — read:** "How much more did I spend on dining in March vs February?"
 → `calculate_total(category="Dining", date_from="2026-03-01", date_to="2026-03-31")`
 → `calculate_total(category="Dining", date_from="2026-02-01", date_to="2026-02-28")`
 → Computes delta, responds in prose. Both tool calls logged to `AICallLog`.
+
+**Example trace — write:** "spent $47 at Trader Joe's on my Amex Gold"
+→ `propose_transaction(merchant="Trader Joe's", amount=47.00, date=today, card_id=<resolved from "Amex Gold">)`
+→ tool impl calls `categorize()` (Gemini) for category suggestion → returns `TransactionProposal`
+→ Client renders the parse card (UX frame 15) → user taps "looks right" → `POST /transactions/confirm` writes the row and returns the Entry-Moment Insight.
 
 ### 7.2.1 Context window — Haiku 4.5's 200K is sufficient
 
@@ -489,10 +531,10 @@ All API calls go through one Anthropic key, but this is not a bottleneck — the
 
 | Task | Model | Reason |
 |---|---|---|
-| Category inference | Gemini 3.1 Flash-Lite | High-frequency, sub-cent cost, speed > quality |
-| Receipt photo parsing | Gemini 3.1 Flash-Lite (multimodal) | Image input supported up to 3,000/prompt |
-| CSV header + batch parse | Gemini 3.1 Flash-Lite | Unstructured → structured, batched |
-| NL transaction parse | Gemini 3.1 Flash-Lite | Structured field extraction |
+| Category inference | Gemini 3.1 Flash-Lite | High-frequency, sub-cent cost, speed > quality. Called from inside `propose_transaction` tool impl. |
+| Receipt photo parsing | Gemini 3.1 Flash-Lite (multimodal) | Image input supported up to 3,000/prompt. Bulk/async path, not chat. |
+| CSV header + batch parse | Gemini 3.1 Flash-Lite | Unstructured → structured, batched. Bulk/async path, not chat. |
+| Chat-based transaction extraction | Claude Haiku 4.5 | In v1, chat is the only user-initiated write surface (CLAUDE.md invariant 8). Claude reads the user's message and fills `propose_transaction(...)` args directly via `tool_use`. There is no separate Gemini NL-parse call in the chat path. Gemini remains the parser for CSV and receipt paths above, because those are bulk/async where per-call cost dominates and no agent loop is involved. |
 | Card multiplier lookup | Perplexity Sonar | Web-grounded, citations, single API call |
 | Chat agent | Claude Haiku 4.5 | Multi-step typed-tool reasoning. Public agentic data point: AIME 2025 with tools 96.3% (+16 vs no-tools). Gemini Flash-Lite considered and rejected — see §11.4 for full rationale. |
 | Spending narrative (digest) | Claude Sonnet 4.6 | Prose quality (called weekly) |
@@ -529,25 +571,25 @@ Categories: `spending_pattern | preference | active_context | card_preference | 
 
 ### 7.7 Natural Language Transaction Entry (text + voice)
 
-The user can describe a transaction by typing or speaking. Both inputs flow through the same Gemini parse path.
+The user describes a transaction by typing or speaking **in the chat surface**. Both inputs reach the same Claude Haiku agent loop (§7.1); Claude extracts the fields via `tool_use` args — there is no separate Gemini NL-parse call in the chat path (§7.4, CLAUDE.md invariant 8).
 
 **Examples:**
 
-- "Spent $47 at Trader Joe's on my Amex Gold just now" → Gemini parses merchant, amount, date, card, category.
-- "Lunch at Nobu, $85, split with a friend so my half was $42, CSR" → parses split amount.
-- Ambiguous input falls back to a pre-filled form with missing fields highlighted.
+- "Spent $47 at Trader Joe's on my Amex Gold just now" → Claude calls `propose_transaction(merchant="Trader Joe's", amount=47.00, date=today, card_id=<resolved from "Amex Gold">)`. Category suggestion is added by the tool impl via `categorize()` (Gemini).
+- "Lunch at Nobu, $85, split with a friend so my half was $42, CSR" → Claude recognizes the split and fills `amount=42.00`.
+- Ambiguous input (e.g. "coffee yesterday") → Claude replies in prose asking one targeted question ("how much?") rather than proposing a transaction with holes. No separate fallback form UI — the chat itself is the fallback.
 
-**Text trigger:** parse fires on **submit or blur**, not on keystroke debounce. One Gemini call per entry, predictable cost.
+**Text trigger:** the chat message submit button is the trigger. One Claude turn per user message. Gemini is not called in this path (it remains in `categorize()` and in CSV / receipt bulk paths).
 
 **Voice trigger:**
 
-- Tap mic → Web Speech API (`window.SpeechRecognition` / `webkitSpeechRecognition`) starts on-device speech recognition.
+- Tap mic in the chat input → Web Speech API (`window.SpeechRecognition` / `webkitSpeechRecognition`) starts on-device speech recognition.
 - Browser shows a live transcript as the user speaks. Stop button or 1.5s of silence ends recording.
-- Final transcript is treated identically to typed input — same `parse_nl_entry()` call, same confirm screen.
-- Web Speech API is used (not Gemini audio input) because: it's free, runs on-device (transcription audio never leaves the user's phone — privacy bonus), works in iOS Safari 14.5+ and all major desktop browsers, and the audio quality of short transaction utterances is well within its capability.
+- Final transcript auto-submits into the chat — identical to typed input from that point on. Same Claude turn, same `propose_transaction` path, same parse card (UX frame 15).
+- Web Speech API (not Gemini audio input) because: it's free, runs on-device (audio never leaves the user's phone — privacy bonus), works in iOS Safari 14.5+ and all major desktop browsers, and the audio quality of short transaction utterances is well within its capability.
 - If `SpeechRecognition` is unavailable (rare in 2026, but possible on older browsers), the mic button is hidden and the user is told voice isn't supported in their browser. No silent failures.
 
-**Cost:** voice transcription is free (browser-native). The downstream Gemini parse call is the same one a typed entry triggers — no incremental cost from voice as input mode.
+**Cost:** voice transcription is free (browser-native). Downstream token cost is the same Claude chat turn a typed message would trigger — voice adds no incremental LLM cost over typed input.
 
 ### 7.8 Generative Charts
 
@@ -642,7 +684,7 @@ Enum-like text fields carry `CHECK` constraints enforcing the allowed values lis
 | card_id | UUID | FK → cards (nullable) |
 | subscription_id | UUID | FK → subscriptions (nullable) |
 | merchant | text | As entered or parsed |
-| amount | numeric | USD |
+| amount | numeric | In the user's `users_meta.home_currency` (§8.7). Stored as `numeric` for money-safe arithmetic — never `float`. |
 | date | date | Transaction date |
 | category | text | User-confirmed or auto-assigned |
 | gemini_suggestion | text | Raw suggestion before user confirm |
@@ -718,6 +760,7 @@ Powers the "past corrections" field in the Gemini categorization prompt. Most re
 | user_id | UUID | PK / FK → auth.users |
 | active_device_id | text | Most recently signed-in device |
 | analytics_opted_out | boolean | Default false |
+| home_currency | text | User's single home currency. CHECK constraint on the allowed set (`USD`, `EUR`, `GBP`, `CAD`, `AUD`, `JPY`, `CHF`, `SGD`, `TWD`). Default `USD`. **Immutable** — enforced by a BEFORE UPDATE trigger, not a CHECK, because a CHECK cannot compare OLD to NEW. See CLAUDE.md invariant 13. |
 | created_at | timestamptz | |
 
 **Forward-plan additions (only migrated if the scaling-to-100 decision is made — §17):**
@@ -752,7 +795,7 @@ Append-only audit log of every Gemini, Claude, and Perplexity API call.
 | success | boolean | |
 | error_code | text | Nullable |
 
-**RLS shape:** `SELECT`-only policy (`USING (user_id = auth.uid())`). **No** INSERT/UPDATE/DELETE policies — all writes come from the backend logger and the `pg_cron` aggregator via the service role, which bypasses RLS. A compromised user JWT cannot forge or scrub audit entries.
+**RLS shape:** `SELECT` policy (`USING (user_id = auth.uid())`) and a narrow `INSERT` policy (`WITH CHECK (user_id = auth.uid())`). **No** UPDATE or DELETE policies. This preserves CLAUDE.md invariant 1 — the in-handler logger writes with the user's JWT, not the service role. A compromised user JWT can forge token-spend rows on the attacker's own account (not a meaningful threat) but cannot scrub or alter existing audit history. System-level callers that have no user JWT (the `pg_cron` daily rollup, future digest jobs) use the service role, which bypasses RLS entirely.
 
 ### 8.9 `ai_call_log_daily` (rollup)
 
@@ -963,11 +1006,11 @@ Tameru is planned as invite-only. No Pro tier, no Stripe, no scaling beyond clos
 | Sentry | $0.00 | Free tier (5K errors/month) |
 | Resend | $0.00 | Free up to 3K emails/month |
 | PostHog | $0.00 | Free up to 1M events/month |
-| Gemini 3.1 Flash-Lite — categorization | $0.05 | 900 calls/month, 200 in + 5 out each |
-| Gemini 3.1 Flash-Lite — CSV (amortized) | $0.01 | 1 import/user/6 months, 150 tx × 500 in |
-| Gemini 3.1 Flash-Lite — NL parse | $0.02 | 1 call per submitted entry, ~200 tx/user/month |
+| Gemini 3.1 Flash-Lite — categorization | $0.05 | 900 calls/month, 200 in + 5 out each. Called from inside `propose_transaction` tool impl. |
+| Gemini 3.1 Flash-Lite — CSV (amortized) | $0.01 | 1 import/user/6 months, 150 tx × 500 in. Bulk/async path. |
+| Gemini 3.1 Flash-Lite — chat NL parse | $0.00 | **Removed in chat-unified UX** — chat-based NL parse folds into Claude `tool_use` arg extraction (§7.4, §7.7, invariant 8). Gemini is no longer in the chat path. |
 | Perplexity — card lookup | $0.05 | ≤10 lookups per user lifetime, amortized |
-| Claude Haiku — agent chat | $27.00 | 1,500 turns/month (150/user × 10), ~$0.018/turn with caching |
+| Claude Haiku — agent chat | $27.00 | Estimate carried over from pre-unified-chat model (150 Q&A turns/user × 10 users, ~$0.018/turn with caching). **Revisit before scaling (§11.6):** unified chat now also carries transaction-entry turns (previously free on the Gemini path). Transaction turns are short 1-tool-call turns, not multi-hop reasoning, so per-turn cost is below the $0.018 blend. Rough upper bound if ~200 tx turns/user/month land in this bucket: +$10–$15/month. Within the daily cap (§11.2) either way; not a v1 blocker. |
 | Claude Haiku — memory distill | $0.20 | 1 distillation per session per user |
 | Claude Sonnet — weekly digest | $0.07 | 4 calls/user/month |
 | **Total (10 users)** | **~$37.40/month** | **~$3.74 per user per month** |

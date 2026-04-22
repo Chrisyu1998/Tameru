@@ -28,7 +28,9 @@ Every table from `DESIGN.md` §8 created via Supabase CLI migrations checked int
 - `..._merchant_category.sql` — including `UNIQUE (user_id, merchant)`.
 - `..._user_memory.sql` — including index `(user_id, relevance_score DESC)` for memory retrieval.
 - `..._mcp_tokens.sql` — including `UNIQUE (token_hash)`.
-- `..._users_meta.sql`.
+- `..._users_meta.sql` — including:
+  - `home_currency text NOT NULL DEFAULT 'USD'` with a CHECK constraint on the allowed set (`USD, EUR, GBP, CAD, AUD, JPY, CHF, SGD, TWD`). CLAUDE.md invariant 13.
+  - A `BEFORE UPDATE` trigger that raises if `home_currency` changes (immutability enforcement — a CHECK can't compare OLD to NEW). `WHEN (OLD.home_currency IS DISTINCT FROM NEW.home_currency)` in the trigger clause.
 - `..._ai_call_log.sql` — including index `(user_id, timestamp DESC)` for cost queries.
 - `..._ai_call_log_daily.sql`.
 
@@ -52,19 +54,23 @@ Every table from `DESIGN.md` §8 created via Supabase CLI migrations checked int
 
 ### `ai_call_log` and `ai_call_log_daily` — audit tables, different policy shape
 
-These tables are append-only audit logs. Users must not be able to forge or scrub their own entries.
+These tables are append-only audit logs. Users must not be able to scrub or edit their own entries. CLAUDE.md invariant 14.
 
 - `user_id UUID NULL REFERENCES auth.users(id) ON DELETE SET NULL` — nullable for system-level calls (§8.8); SET NULL preserves audit history after account deletion.
 - `ENABLE ROW LEVEL SECURITY;` + `FORCE ROW LEVEL SECURITY;`.
-- **`SELECT`-only policy**, not `FOR ALL`:
+- **Two policies: SELECT and a narrow INSERT.** No UPDATE or DELETE policies.
 
   ```sql
   CREATE POLICY ai_call_log_owner_read ON ai_call_log
     FOR SELECT
     USING (user_id = auth.uid());
+
+  CREATE POLICY ai_call_log_owner_insert ON ai_call_log
+    FOR INSERT
+    WITH CHECK (user_id = auth.uid());
   ```
 
-  No `INSERT`/`UPDATE`/`DELETE` policies. All writes come from the backend logger and the `pg_cron` aggregator, both using the service role. A compromised user JWT cannot tamper with the audit trail.
+  **Why INSERT at all?** The audit logger (Day 4 `log_ai_call`) runs inside request handlers with the user's JWT, not the service role — this keeps invariant 1 intact. The `WITH CHECK (user_id = auth.uid())` means a compromised JWT can only forge rows on its own account (no one to deceive but themselves). The absence of UPDATE/DELETE policies means the attacker cannot scrub existing audit history. System-level callers with no user JWT in scope (the `pg_cron` aggregator, future digest jobs) use the service role and bypass RLS. Same policy shape on `ai_call_log_daily`, minus the INSERT (users never write rollup rows — those come from the aggregator).
 
 ### Enum-like fields — CHECK constraints
 
@@ -77,6 +83,7 @@ Add `CHECK` constraints on text fields whose values are enumerated in `DESIGN.md
 - `ai_call_log.provider IN ('anthropic','google','perplexity')`.
 - `ai_call_log.task_type IN ('categorization','nl_parse','chat_turn','memory_distill','card_lookup','receipt_parse','csv_import','digest')`.
 - `cards.program IN ('UR','MR','TYP','Bilt','Other')`.
+- `users_meta.home_currency IN ('USD','EUR','GBP','CAD','AUD','JPY','CHF','SGD','TWD')`.
 
 ### Seed
 
@@ -94,13 +101,13 @@ Add `CHECK` constraints on text fields whose values are enumerated in `DESIGN.md
 - Don't create any tables in the dashboard SQL editor. Migrations only (invariant 6).
 - Don't add CRUD endpoints today — Day 5 owns the transactions API.
 - Don't seed fake data; demo mode is a guided tour with frontend fixtures (Day 10), not DB rows (invariant 10).
-- Don't write `INSERT/UPDATE/DELETE` policies on `ai_call_log` or `ai_call_log_daily`. Users read their own rows; writes are service-role only.
+- Don't write `UPDATE` or `DELETE` policies on `ai_call_log` or `ai_call_log_daily` — audit rows must not be mutable or scrubbable by users. A narrow `INSERT` policy on `ai_call_log` with `WITH CHECK (user_id = auth.uid())` is correct and intended (invariant 14). `ai_call_log_daily` has no INSERT policy — rollup rows come from the service-role aggregator only.
 - Don't schedule any `pg_cron` jobs today — the extension is installed, but the first scheduled job lands with its feature (Day 4 aggregator, Day 5+ subscription auto-logger).
 
 ## Done when
 
 - `supabase db reset` rebuilds the schema from migrations with zero errors on a fresh machine.
 - Connecting to local Postgres as an authenticated (non-`service_role`) user with no JWT claims shows zero rows from any user-owned table — RLS blocks it.
-- A quick sanity check as authenticated user A cannot `INSERT` an `ai_call_log` row claiming `user_id = auth.uid()` — the missing write policy rejects it. (Service role can; confirm by inserting one via `psql` as `postgres` with RLS bypassed.)
+- As authenticated user A, `INSERT INTO ai_call_log (user_id, ...) VALUES (auth.uid(), ...)` succeeds (narrow INSERT policy). `INSERT` with `user_id = <user_b.id>` is rejected by the `WITH CHECK` clause. `UPDATE` and `DELETE` against any `ai_call_log` row are rejected (no policy granting either).
 - `FORCE ROW LEVEL SECURITY` is set on every table (`SELECT relname, relforcerowsecurity FROM pg_class WHERE relnamespace = 'public'::regnamespace` shows `t` for all app tables).
 - Every `user_id` FK cascades on user delete: `SELECT conname, confdeltype FROM pg_constraint WHERE contype='f' AND confrelid='auth.users'::regclass` shows `c` (CASCADE) for user-owned tables and `n` (SET NULL) for `ai_call_log`/`ai_call_log_daily`.
