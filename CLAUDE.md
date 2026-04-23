@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Stack
 
-React PWA (Vite + Tailwind + Zustand) · FastAPI (Python) · Supabase (Postgres + Auth + RLS) · Anthropic API (Messages + `tool_use`) · Google Gemini 3.1 Flash-Lite (`gemini-3.1-flash-lite-preview`, currently in preview) · Perplexity Sonar · Resend · PostHog · Sentry · Railway hosting · Postgres `pg_cron`.
+React PWA (Vite + Tailwind + Zustand) · FastAPI (Python) · Supabase (Postgres + Auth + RLS) · Anthropic API (Messages + `tool_use`) · Google Gemini 3.1 Flash-Lite (`gemini-3.1-flash-lite-preview`, currently in preview) · Perplexity Sonar · Resend · PostHog · Sentry · Railway (backend) + Vercel (frontend, static + CDN; cross-origin via CORS with Bearer-token auth — DESIGN.md §5.3, §9.3) · Postgres `pg_cron`.
 
 Stripe is documented in the forward plan only — not a v1 dependency.
 

@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+/*
+ * Tameru theme — palette locked in UX_PROMPT.md (lines 17-35 of that file).
+ * Do not invent new tokens without updating UX_PROMPT.md in the same change.
+ *
+ * Base rules: no drop shadows · no gradients · no pure black/white ·
+ * no sharp corners · Fraunces for display/numbers (lowercase for titles) ·
+ * Inter for body/buttons.
+ */
+
+/*
+ * Dark mode is triggered by the `dark` class on <html> or any ancestor.
+ * Day 6 does not yet wire a toggle or honor prefers-color-scheme — the shell
+ * renders in light mode. Dark-mode tokens are defined so downstream days can
+ * add the toggle without palette work.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Light-mode palette (UX_PROMPT.md). */
+  --tameru-canvas: #f5efe4;
+  --tameru-surface: #fbf6ec;
+  --tameru-elevated: #fffbf2;
+  --tameru-sunken: #ede5d5;
+
+  --tameru-text-primary: #2a2620;
+  --tameru-text-secondary: #5c564c;
+  --tameru-text-tertiary: #8a8377;
+  --tameru-text-quaternary: #b8b0a0;
+
+  --tameru-border-hairline: rgba(42, 38, 32, 0.08);
+  --tameru-border-soft: rgba(42, 38, 32, 0.12);
+  --tameru-scrim: rgba(42, 38, 32, 0.32);
+
+  /*
+   * Accent — muted earthy moss, four tints.
+   * Tuned to read as "on-brand, quietly active" on #FBF6EC surface.
+   * Swap hex values if the accent calibration changes; consumers
+   * reference semantic names only (bg-accent, text-accent-emphasis, etc.).
+   */
+  --tameru-accent-base: #6c8a6b;
+  --tameru-accent-emphasis: #53704f;
+  --tameru-accent-soft: #c2d3be;
+  --tameru-accent-wash: #e7ede3;
+
+  /* Semantic — delta-state colors (DESIGN.md §6.2 dashboard tiles). */
+  --tameru-warn: #b9872f; /* warm aged amber */
+  --tameru-over: #b15a47; /* muted terracotta */
+  --tameru-under: #6c8a6b; /* same as accent-base */
+  --tameru-neutral: #8a8377; /* mid-gray / tertiary text */
+}
+
+.dark {
+  /* Dark-mode palette (UX_PROMPT.md). */
+  --tameru-canvas: #1c1a17;
+  --tameru-surface: #252320;
+  --tameru-elevated: #2e2b27;
+  --tameru-sunken: #17150f;
+
+  --tameru-text-primary: #f0eadc;
+  --tameru-text-secondary: #c4bdac;
+  --tameru-text-tertiary: #8a8377;
+  --tameru-text-quaternary: #5c564c;
+
+  --tameru-border-hairline: rgba(240, 234, 220, 0.08);
+  --tameru-border-soft: rgba(240, 234, 220, 0.14);
+  --tameru-scrim: rgba(0, 0, 0, 0.56);
+
+  --tameru-accent-base: #8ba687;
+  --tameru-accent-emphasis: #a7bea3;
+  --tameru-accent-soft: #44554a;
+  --tameru-accent-wash: #2a3530;
+
+  --tameru-warn: #d4a352;
+  --tameru-over: #d07a65;
+  --tameru-under: #8ba687;
+  --tameru-neutral: #8a8377;
+}
+
+/*
+ * Tokens exposed to Tailwind. `@theme inline` lets us keep CSS-variable
+ * swapping for dark mode while still generating utility classes
+ * (bg-canvas, text-primary, font-display, etc.).
+ */
+@theme inline {
+  --color-canvas: var(--tameru-canvas);
+  --color-surface: var(--tameru-surface);
+  --color-elevated: var(--tameru-elevated);
+  --color-sunken: var(--tameru-sunken);
+
+  --color-primary: var(--tameru-text-primary);
+  --color-secondary: var(--tameru-text-secondary);
+  --color-tertiary: var(--tameru-text-tertiary);
+  --color-quaternary: var(--tameru-text-quaternary);
+
+  --color-accent: var(--tameru-accent-base);
+  --color-accent-emphasis: var(--tameru-accent-emphasis);
+  --color-accent-soft: var(--tameru-accent-soft);
+  --color-accent-wash: var(--tameru-accent-wash);
+
+  --color-warn: var(--tameru-warn);
+  --color-over: var(--tameru-over);
+  --color-under: var(--tameru-under);
+  --color-neutral: var(--tameru-neutral);
+
+  --color-hairline: var(--tameru-border-hairline);
+  --color-soft: var(--tameru-border-soft);
+  --color-scrim: var(--tameru-scrim);
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+/*
+ * Base rules. These override Tailwind Preflight where needed to enforce the
+ * "no shadows / no gradients / no pure black-white / no sharp corners" stance.
+ */
+@layer base {
+  html,
+  body {
+    background-color: var(--tameru-canvas);
+    color: var(--tameru-text-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Tabular numerics for any currency / % / stats element.
+     Components opt in via .tnum or by default on inputs with type=number. */
+  .tnum,
+  input[type="number"] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Fraunces titles: lowercase per UX_PROMPT.md. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    text-transform: lowercase;
+    font-weight: 500;
+  }
+}

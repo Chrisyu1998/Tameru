@@ -100,7 +100,21 @@ Schema changes are **always** made by editing or adding a migration under
 `supabase/migrations/` and running `supabase db reset` to verify. Never use
 the Supabase dashboard SQL editor for schema changes (CLAUDE.md invariant 6).
 
-The frontend lives under `frontend/` starting Day 6.
+## Frontend (PWA)
+
+The Vite + React + Tailwind v4 + Zustand PWA lives under `frontend/` (scaffolded Day 6). It is served statically on Vercel in production and talks to the FastAPI backend on Railway cross-origin via CORS with Bearer-token auth (`DESIGN.md` §5.3).
+
+```bash
+cd frontend
+cp .env.example .env.local     # .env.local is gitignored; fill in VITE_API_URL + Supabase
+npm install
+npm run dev                    # http://localhost:5173, proxies API calls to VITE_API_URL
+npm run build                  # outputs dist/ (what Vercel deploys)
+npm run preview                # serves the built dist/ for Lighthouse runs / offline shell tests
+npm run icons                  # regenerate public/icon-192.png etc. after a palette change
+```
+
+CORS allowlist in production: set `FRONTEND_ORIGIN=https://tameru.app` (or whatever the Vercel domain is) in Railway. Local dev always allows `http://localhost:5173`. Never use wildcards — Day 11 deploys the Vercel frontend alongside the Railway backend.
 
 ## Google OAuth setup
 
@@ -117,7 +131,7 @@ Sign-in is Google OAuth via Supabase Auth; magic link is the fallback
 4. Copy the Client ID and Client Secret into the Supabase provider form.
 
 The frontend initiates sign-in with `supabase.auth.signInWithOAuth({ provider:
-"google" })` (lands Day 6). The backend never talks to Google directly — it
+"google" })` (lands Day 7). The backend never talks to Google directly — it
 only validates the JWT Supabase issues after the user completes the flow.
 
 ## JWT validation

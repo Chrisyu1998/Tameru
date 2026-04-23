@@ -189,7 +189,8 @@ V1 begins with one user (Chris). The data model and auth are designed for multi-
 | Agent runtime | `anthropic` Python SDK — Messages API with `tool_use` blocks. Loop runs in FastAPI. | Custom typed tools, JWT in scope for RLS, full control over middleware (logging, rate limit backoff, cost gating) |
 | MCP | `mcp` Python SDK (HTTP+SSE transport) | Exposes spending data to Claude.ai / Claude Code |
 | Streaming | FastAPI SSE + EventSource | Token-by-token Claude responses |
-| Hosting | Railway | Persistent FastAPI service, GitHub-native CI/CD |
+| Backend hosting | Railway | Persistent FastAPI service (SSE streams, 4–6s agent loops, `pg_cron`), GitHub-native CI/CD. ~$10/month. |
+| Frontend hosting | Vercel | Static hosting + edge CDN for the Vite-built PWA. Free tier covers v1 and the §17 scaling plan. PR preview URLs for UI iteration. Talks to the Railway API cross-origin via CORS with Bearer-token auth (no cookies). |
 | Cron | Postgres `pg_cron` (Supabase) | Daily subscription auto-logger; survives API deploys |
 | Observability | `AICallLog` (Postgres) + Sentry (free tier) | AI calls in `AICallLog`; non-AI exceptions in Sentry |
 | Product analytics | PostHog | Structural events only — no question text, no financial data |
@@ -199,15 +200,21 @@ V1 begins with one user (Chris). The data model and auth are designed for multi-
 
 Multi-user write concurrency, RLS at the DB layer, built-in auth, hosted backups, and the dashboard all come for free. Migration cost from SQLite later would be high. Free tier handles Phase 1 and Phase 2 entirely.
 
-### 5.3 Why Railway over Vercel
+### 5.3 Hosting split: Railway for backend, Vercel for frontend
 
-Vercel is frontend-first; FastAPI on Vercel runs as serverless functions, which breaks three things:
+**Backend on Railway, not Vercel.** FastAPI on Vercel runs as serverless functions, which breaks three things:
 
 - Persistent processes — needed for SSE streaming.
 - Cold starts — make token-by-token streaming unreliable.
-- Long-running agent loops — managed agent loops can take 4–6 seconds; serverless timeouts are aggressive.
+- Long-running agent loops — agent loops can take 4–6 seconds; serverless timeouts are aggressive.
 
-Railway runs FastAPI as a persistent service from a Dockerfile or Procfile. ~$10/month. CI/CD from GitHub.
+Railway runs FastAPI as a persistent service from a Dockerfile. ~$10/month. CI/CD from GitHub.
+
+**Frontend on Vercel, not co-located on Railway.** The Vite-built PWA is static assets; Vercel's edge CDN gives materially better first-paint for global users (the v1 user base includes people outside the US), and Vercel's Git-native deploys provide per-PR preview URLs useful while iterating on the web surface. Co-locating the frontend on Railway would lose both and save effectively nothing — Vercel's free tier covers v1 and the §17 scaling target. A PWA shell is a natural CDN workload: after first load the Service Worker serves it locally anyway, so the edge wins first-paint without adding privacy surface.
+
+**How the two origins talk.** Frontend at `https://tameru.app` (Vercel); API at `https://api.tameru.app` (Railway). FastAPI's `CORSMiddleware` explicitly allowlists the frontend origin (§9.3). Authentication is Bearer token in the `Authorization` header — never cookies — so `allow_credentials=False` and there is no SameSite or third-party-cookie complexity. This is the same shape a future Swift iOS client expects (one API host, multiple clients, no frontend-specific branching — invariant 12), which means the web/iOS split in §10 reuses this boundary rather than re-litigating it.
+
+**Reversibility.** The frontend is a static `dist/` directory; moving it off Vercel to Cloudflare Pages, Netlify, or Railway static hosting is under an hour of work and changes nothing on the backend. This keeps the hosting-split decision cheap to revisit.
 
 ### 5.4 Onboarding Philosophy
 
@@ -893,7 +900,7 @@ Application-handler code never uses the service role. This is enforced by code r
 
 - HTTPS enforced on Railway. Service Worker and PWA install require TLS.
 - CSP: `script-src 'self'`. No external script CDNs. Everything bundled via Vite.
-- CORS: FastAPI restricts allowed origins to the app's own Railway domain. No wildcards.
+- CORS: FastAPI's `CORSMiddleware` allowlists an explicit set of origins — the Vercel frontend (`https://tameru.app` in prod, via the `FRONTEND_ORIGIN` env var) plus `http://localhost:5173` for the Vite dev server. No wildcards; no `*.vercel.app` catch-all (any Vercel tenant could then reach the API). `allow_credentials=False` because we authenticate via Bearer token in the `Authorization` header, not cookies — this sidesteps SameSite and third-party-cookie complications entirely. Allowed headers: `Authorization`, `X-Device-Id`, `Content-Type`. Preview-deploy URLs (Vercel PR previews) are not reachable from prod API in v1; if preview-against-prod ever becomes necessary, it goes through a staging backend, not a CORS wildcard.
 
 ### 9.4 Privacy Posture & AI Provider Data Retention
 
@@ -1021,7 +1028,8 @@ Tameru is planned as invite-only. No Pro tier, no Stripe, no scaling beyond clos
 
 | Service | Cost | Notes |
 |---|---|---|
-| Railway | $10.00 | Hobby plan, persistent FastAPI service |
+| Railway | $10.00 | Hobby plan, persistent FastAPI service (backend only) |
+| Vercel | $0.00 | Free (Hobby) tier — static hosting + edge CDN for the PWA; 100 GB-month bandwidth covers v1 with wide margin (§5.3) |
 | Supabase | $0.00 | Free tier (500 MAU, 500MB DB) — covers invite-only indefinitely |
 | Google OAuth | $0.00 | Free |
 | Sentry | $0.00 | Free tier (5K errors/month) |
@@ -1074,6 +1082,7 @@ Linear-scale projection from §11.3, assuming the same per-user usage profile an
 | Service | Cost at 100 users | Notes |
 |---|---|---|
 | Railway Starter | $20.00 | Upgrade from Hobby required — removes sleep, adds RAM headroom. |
+| Vercel | $0.00 | Hobby tier still fits ~100 users of a PWA (mostly cached after first load). Upgrade to Pro ($20/mo) only if bandwidth or team seats become a constraint — not projected at this scale. |
 | Supabase Pro | $25.00 | Mandatory. Free tier caps at 500 MAU / 500MB; Pro unlocks PITR, PgBouncer, and daily backups. |
 | Google OAuth | $0.00 | Free. |
 | Sentry | $0.00 | Free tier fits with headroom. |
