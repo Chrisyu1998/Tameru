@@ -1,0 +1,1339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Tameru — web wireframes (preview · v2)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --canvas: #F5EFE4;
+    --surface: #FBF6EC;
+    --elevated: #FFFBF2;
+    --sunken: #EDE5D5;
+    --text-1: #2A2620;
+    --text-2: #5C564C;
+    --text-3: #8A8377;
+    --text-4: #B8B0A0;
+    --border-hair: rgba(42,38,32,0.08);
+    --border-soft: rgba(42,38,32,0.12);
+    --scrim: rgba(42,38,32,0.32);
+    --moss: #7F8F6A;
+    --moss-emph: #5E6D4A;
+    --moss-soft: #C4CFB4;
+    --moss-wash: rgba(127,143,106,0.10);
+    --amber: #C69453;
+    --amber-wash: rgba(198,148,83,0.14);
+    --terracotta: #B6694F;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #E8E1D2;
+    font-family: 'Inter', system-ui, sans-serif;
+    color: var(--text-1);
+    padding: 48px 0 96px;
+  }
+
+  .page-title {
+    max-width: 1280px;
+    margin: 0 auto 12px;
+    padding: 0 16px;
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 28px;
+    letter-spacing: -0.01em;
+  }
+  .page-title em { color: var(--text-3); font-weight: 400; font-style: italic; font-size: 18px; }
+  .page-note {
+    max-width: 720px;
+    margin: 0 auto 36px;
+    padding: 0 16px;
+    color: var(--text-3);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .page-note code { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-2); }
+  .page-note b { color: var(--text-2); font-weight: 500; }
+
+  .frame-label {
+    max-width: 1280px;
+    margin: 56px auto 12px;
+    padding: 0 16px;
+    color: var(--text-3);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .frame-label b { color: var(--text-2); font-weight: 600; letter-spacing: 0; text-transform: none; font-family: 'Fraunces', serif; font-weight: 500; font-size: 15px; margin-left: 10px; }
+  .frame-label .mini { color: var(--text-4); margin-left: 14px; font-family: 'Inter'; font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; font-style: italic; }
+
+  .frame {
+    width: 1280px;
+    height: 760px;
+    margin: 0 auto;
+    background: var(--canvas);
+    border: 1px solid var(--border-soft);
+    border-radius: 14px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* browser chrome */
+  .chrome {
+    height: 40px;
+    background: #EAE3D4;
+    border-bottom: 1px solid var(--border-hair);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+  }
+  .chrome .dots { display: flex; gap: 6px; }
+  .chrome .dots span { width: 10px; height: 10px; border-radius: 50%; background: rgba(42,38,32,0.14); }
+  .chrome .url {
+    flex: 1;
+    max-width: 380px;
+    margin: 0 auto;
+    height: 22px;
+    background: var(--surface);
+    border: 1px solid var(--border-hair);
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-3);
+    font-size: 11px;
+  }
+  .chrome .right { width: 60px; display: flex; gap: 6px; justify-content: flex-end; }
+  .chrome .right span { width: 14px; height: 14px; border-radius: 4px; background: rgba(42,38,32,0.08); }
+
+  .app { display: flex; height: calc(760px - 40px); }
+
+  /* sidebar (no Ask Tameru button — composer at bottom is the entry point) */
+  .sidebar {
+    width: 272px;
+    padding: 28px 20px 20px;
+    border-right: 1px solid var(--border-hair);
+    background: var(--canvas);
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    flex-shrink: 0;
+  }
+  .sidebar .brand { display: flex; align-items: baseline; gap: 10px; padding-left: 6px; }
+  .sidebar .brand .kanji {
+    font-family: 'Fraunces', serif;
+    font-size: 22px;
+    color: var(--moss-emph);
+  }
+  .sidebar .brand .word {
+    font-family: 'Fraunces', serif;
+    font-size: 16px;
+    letter-spacing: 0.01em;
+  }
+  .nav-items { display: flex; flex-direction: column; gap: 2px; }
+  .nav-items a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    color: var(--text-3);
+    text-decoration: none;
+    font-size: 14px;
+    border-left: 2px solid transparent;
+  }
+  .nav-items a.active {
+    color: var(--text-1);
+    font-weight: 500;
+    border-left-color: var(--moss);
+    background: var(--moss-wash);
+    border-radius: 0 8px 8px 0;
+  }
+  .nav-divider { height: 1px; background: var(--border-hair); margin: 8px 6px; }
+  .sidebar .spacer { flex: 1; }
+  .user-block {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 14px 6px 0;
+    border-top: 1px solid var(--border-hair);
+  }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 999px;
+    background: var(--moss-soft);
+    color: var(--moss-emph);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Fraunces', serif; font-weight: 500; font-size: 13px;
+    flex-shrink: 0;
+  }
+  .user-block .name { font-size: 13px; color: var(--text-1); line-height: 1.15; }
+  .user-block .email { font-size: 11px; color: var(--text-3); }
+  .signout { color: var(--terracotta); font-size: 11px; text-decoration: none; margin-left: auto; flex-shrink: 0; }
+
+  /* main pane */
+  .main {
+    flex: 1;
+    padding: 40px 56px 96px; /* extra bottom padding for composer */
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    min-width: 0;
+  }
+  .main.narrow { align-items: center; }
+  .main .col { width: 100%; max-width: 840px; }
+  .main .col-wide { width: 100%; max-width: 1040px; }
+
+  .top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+  }
+  .top-bar h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 32px;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .top-bar .right {
+    color: var(--moss-emph);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .top-bar .right .muted { color: var(--text-3); }
+
+  .back {
+    color: var(--text-3);
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+    margin-bottom: 8px;
+  }
+
+  /* ============================================================ */
+  /* PERSISTENT BOTTOM COMPOSER */
+  /* ============================================================ */
+  .bottom-composer {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(640px, calc(100% - 80px));
+    height: 52px;
+    background: var(--elevated);
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 12px 0 22px;
+    z-index: 10;
+  }
+  .bottom-composer .placeholder {
+    flex: 1;
+    color: var(--text-3);
+    font-style: italic;
+    font-size: 14px;
+    transition: opacity 200ms ease;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .bottom-composer .mic {
+    color: var(--moss-emph);
+    font-size: 13px;
+    width: 32px; height: 32px;
+    border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--moss-wash);
+    flex-shrink: 0;
+  }
+  .bottom-composer .kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-4);
+    padding: 4px 8px;
+    border: 1px solid var(--border-hair);
+    border-radius: 5px;
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .bottom-composer.highlighted {
+    border-color: var(--moss);
+    box-shadow: 0 0 0 4px var(--moss-wash);
+  }
+
+  /* dashboard */
+  .hero-amount {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 88px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    margin: 16px 0 14px;
+  }
+  .delta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--amber-wash);
+    color: #8A6334;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .observation {
+    font-style: italic;
+    color: var(--text-2);
+    font-size: 15px;
+    margin: 14px 0 28px;
+    max-width: 60ch;
+    line-height: 1.5;
+  }
+  .section-label {
+    color: var(--text-3);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .tile-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    max-width: 840px;
+  }
+  .tile {
+    background: var(--surface);
+    border: 1px solid var(--border-hair);
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .tile .cat { font-size: 14px; color: var(--text-2); }
+  .tile .dt {
+    font-family: 'Fraunces', serif;
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tile.warn .dt { color: #8A6334; }
+  .tile.moss .dt { color: var(--moss-emph); }
+  .tile.over .dt { color: var(--terracotta); }
+
+  /* shrunken hero (for frames where composer + drawer + hero coexist) */
+  .home-mini .hero-amount { font-size: 64px; margin: 8px 0 10px; }
+  .home-mini .observation { margin: 10px 0 20px; }
+  .home-mini .tile-grid { gap: 10px; }
+  .home-mini .tile { padding: 14px 18px; }
+
+  /* breakdown / donut */
+  .donut-row { display: flex; gap: 48px; align-items: flex-start; margin-bottom: 28px; }
+  .donut-svg { width: 240px; height: 240px; flex-shrink: 0; }
+  .donut-center {
+    font-family: 'Fraunces', serif;
+    font-size: 16px;
+    fill: var(--text-1);
+    font-variant-numeric: tabular-nums;
+  }
+  .donut-sub { font-size: 10px; fill: var(--text-3); }
+  .cat-list { flex: 1; }
+  .cat-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 4px;
+    border-bottom: 1px solid var(--border-hair);
+    font-size: 14px;
+  }
+  .cat-row .dot { width: 10px; height: 10px; border-radius: 999px; }
+  .cat-row .name { flex: 1; }
+  .cat-row .amt { font-variant-numeric: tabular-nums; color: var(--text-2); }
+  .cat-row .chev { color: var(--text-4); font-size: 12px; }
+  .cat-row.expanded { background: var(--moss-wash); border-radius: 8px; border-bottom-color: transparent; }
+
+  /* transaction list */
+  .filter-row { display: flex; gap: 10px; margin-bottom: 14px; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border-hair);
+    border-radius: 999px;
+    font-size: 13px;
+    color: var(--text-2);
+  }
+  .pill.active { background: var(--moss-wash); color: var(--moss-emph); border-color: transparent; }
+  .search {
+    width: 100%;
+    background: var(--sunken);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 10px 18px;
+    font-size: 13px;
+    color: var(--text-3);
+    margin-bottom: 6px;
+  }
+  .tx-row {
+    display: grid;
+    grid-template-columns: 70px 1fr auto 80px;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 10px;
+    border-bottom: 1px solid var(--border-hair);
+    font-size: 14px;
+    position: relative;
+  }
+  .tx-row .date { color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .tx-row .merch { font-family: 'Fraunces', serif; font-weight: 500; }
+  .tx-row .last4 { color: var(--text-3); font-size: 11px; margin-top: 2px; }
+  .tx-row .amt { font-variant-numeric: tabular-nums; text-align: right; }
+  .tx-row.hovered { background: var(--surface); border-radius: 10px; border-bottom-color: transparent; }
+  .tx-row .actions { position: absolute; right: 14px; display: flex; gap: 8px; opacity: 0; }
+  .tx-row.hovered .actions { opacity: 1; }
+  .icon-btn {
+    width: 30px; height: 30px; border-radius: 999px;
+    background: var(--elevated);
+    border: 1px solid var(--border-hair);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    color: var(--text-2);
+  }
+  .icon-btn.destructive { color: var(--terracotta); }
+  .fade-bottom {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 100px;
+    background: linear-gradient(to bottom, transparent, var(--canvas));
+    pointer-events: none;
+  }
+
+  /* ============================================================ */
+  /* RIGHT DRAWER (frame 15) */
+  /* ============================================================ */
+  .drawer {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: 440px;
+    background: var(--elevated);
+    border-left: 1px solid var(--border-soft);
+    display: flex;
+    flex-direction: column;
+    z-index: 30;
+  }
+  .drawer-top {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-hair);
+  }
+  .drawer-top .title { font-family: 'Fraunces', serif; font-size: 14px; }
+  .drawer-top .ic { color: var(--text-3); font-size: 13px; display: flex; gap: 14px; align-items: center; }
+  .drawer-top .ic .expand { color: var(--moss-emph); }
+  .drawer-body {
+    flex: 1;
+    padding: 20px 18px;
+    display: flex; flex-direction: column; gap: 12px;
+    overflow: hidden;
+  }
+  .bubble-user {
+    align-self: flex-end;
+    background: var(--moss-wash);
+    color: var(--text-1);
+    padding: 10px 14px;
+    border-radius: 16px 16px 4px 16px;
+    font-size: 13px;
+    max-width: 85%;
+    line-height: 1.45;
+  }
+  .bubble-ai {
+    align-self: flex-start;
+    color: var(--text-1);
+    font-size: 13px;
+    max-width: 92%;
+    line-height: 1.5;
+  }
+  .parse-card {
+    background: var(--surface);
+    border: 1px solid var(--border-hair);
+    border-radius: 12px;
+    padding: 14px 16px;
+    align-self: stretch;
+  }
+  .parse-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 16px;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-hair);
+    font-size: 12px;
+  }
+  .parse-row:last-of-type { border-bottom: none; }
+  .parse-row .k { color: var(--text-3); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .parse-row .v { font-family: 'Fraunces', serif; font-size: 13px; }
+  .parse-row .pencil { color: var(--text-4); font-size: 11px; }
+  .parse-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: flex-end; }
+  .btn {
+    border-radius: 999px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--moss); color: #FBF6EC; }
+  .btn.secondary { background: transparent; color: var(--text-2); border: 1px solid var(--border-soft); }
+
+  .drawer-composer {
+    margin: 0 16px 16px;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 0 10px 0 18px;
+    height: 46px;
+    flex-shrink: 0;
+  }
+  .drawer-composer .placeholder { flex: 1; color: var(--text-3); font-style: italic; font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .drawer-composer .mic {
+    color: var(--moss-emph);
+    font-size: 12px;
+    width: 28px; height: 28px;
+    border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--moss-wash);
+    flex-shrink: 0;
+  }
+  .drawer-composer .kbd {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-4);
+    padding: 3px 7px;
+    border: 1px solid var(--border-hair);
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  /* settings two-pane */
+  .settings-layout { display: flex; gap: 32px; height: 100%; }
+  .settings-rail { width: 240px; border-right: 1px solid var(--border-hair); padding-right: 20px; }
+  .settings-id { display: flex; gap: 12px; margin-bottom: 18px; align-items: center; }
+  .settings-id .name { font-size: 14px; }
+  .settings-id .email { font-size: 11px; color: var(--text-3); }
+  .settings-rail-items { display: flex; flex-direction: column; gap: 2px; }
+  .settings-rail-items a {
+    padding: 9px 12px;
+    font-size: 13px;
+    color: var(--text-3);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    border-radius: 0 8px 8px 0;
+  }
+  .settings-rail-items a.active {
+    color: var(--text-1);
+    border-left-color: var(--moss);
+    background: var(--moss-wash);
+    font-weight: 500;
+  }
+  .settings-pane { flex: 1; max-width: 560px; padding-top: 4px; }
+  .settings-pane h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 500;
+    font-size: 24px;
+    margin: 0 0 16px;
+  }
+  .setting-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border-hair);
+    font-size: 14px;
+  }
+  .setting-row .k { color: var(--text-2); }
+  .setting-row .v { color: var(--text-1); font-family: 'Fraunces', serif; }
+  .setting-row .v .muted { color: var(--text-3); font-family: 'Inter', sans-serif; font-size: 11px; margin-left: 8px; font-style: italic; }
+
+  /* cards list */
+  .cards-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .card-row {
+    background: var(--surface);
+    border: 1px solid var(--border-hair);
+    border-radius: 14px;
+    padding: 16px 22px 16px 26px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    position: relative;
+  }
+  .card-row::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 14px; bottom: 14px;
+    width: 4px;
+    border-radius: 4px;
+  }
+  .card-row.csr::before { background: #4A5D3E; }
+  .card-row.amex::before { background: #8A7E5A; }
+  .card-row.bilt::before { background: #6C5B48; }
+  .card-row .identity { flex: 1; }
+  .card-row .name { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 500; }
+  .card-row .last4 { color: var(--text-3); font-size: 11px; margin-top: 3px; }
+  .card-row .mults { display: flex; gap: 6px; margin-top: 6px; }
+  .card-row .mult {
+    background: var(--moss-wash);
+    color: var(--moss-emph);
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+  }
+  .card-row .program {
+    background: var(--sunken);
+    color: var(--text-2);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .ai-hint {
+    margin-top: 16px;
+    color: var(--text-3);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  /* landing + auth */
+  .center-bleed {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .hero-col { width: 100%; max-width: 520px; text-align: center; padding: 0 16px; }
+  .hero-col .kanji-big {
+    font-family: 'Fraunces', serif;
+    font-size: 92px;
+    color: var(--moss-emph);
+    line-height: 1;
+    margin-bottom: 12px;
+  }
+  .hero-col .wordmark {
+    font-family: 'Fraunces', serif;
+    font-size: 36px;
+    letter-spacing: -0.01em;
+  }
+  .hero-col .tagline {
+    font-style: italic;
+    color: var(--text-2);
+    font-size: 15px;
+    margin: 10px 0 28px;
+  }
+  .hero-col .lede {
+    color: var(--text-2);
+    font-size: 14px;
+    line-height: 1.55;
+    margin: 0 auto 36px;
+    max-width: 440px;
+  }
+  .hero-actions { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .btn.primary.wide { padding: 14px 36px; font-size: 14px; min-width: 320px; }
+  .text-link { color: var(--text-3); font-size: 13px; text-decoration: none; }
+  .text-link u { text-decoration-color: var(--border-soft); text-underline-offset: 3px; }
+
+  /* sign in */
+  .auth-col { width: 100%; max-width: 420px; }
+  .auth-col .wordmark { font-family: 'Fraunces', serif; font-size: 32px; text-align: center; }
+  .auth-col .tagline { font-style: italic; color: var(--text-2); font-size: 14px; text-align: center; margin: 8px 0 32px; }
+  .google-btn {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 13px 16px;
+    font-size: 14px;
+    color: var(--text-1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .google-g { width: 18px; height: 18px; border-radius: 50%; background: conic-gradient(#4285F4 0 25%, #34A853 25% 50%, #FBBC05 50% 75%, #EA4335 75% 100%); filter: saturate(0.75); opacity: 0.85; }
+  .or-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 18px 0;
+    color: var(--text-3);
+    font-size: 12px;
+  }
+  .or-divider::before, .or-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border-hair);
+  }
+  .secondary-btn {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 13px 16px;
+    font-size: 14px;
+    color: var(--text-1);
+  }
+  .legal {
+    text-align: center;
+    color: var(--text-3);
+    font-size: 11px;
+    margin-top: 28px;
+  }
+  .legal u { text-decoration-color: var(--border-soft); text-underline-offset: 3px; }
+
+  /* empty state */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding-bottom: 40px;
+  }
+  .empty-state .icon { font-size: 48px; color: var(--text-4); margin-bottom: 16px; }
+  .empty-state .title { font-family: 'Fraunces', serif; font-size: 24px; margin-bottom: 8px; }
+  .empty-state .sub { color: var(--text-2); font-size: 14px; margin-bottom: 16px; max-width: 320px; }
+  .empty-state .arrow { font-size: 32px; color: var(--moss); margin-top: 8px; opacity: 0.6; }
+
+  .section-h {
+    max-width: 1280px;
+    margin: 64px auto 0;
+    padding: 0 16px;
+    font-family: 'Fraunces', serif;
+    font-size: 18px;
+    color: var(--text-2);
+    border-top: 1px solid var(--border-hair);
+    padding-top: 24px;
+  }
+</style>
+</head>
+<body>
+
+<h1 class="page-title">tameru · <em>web wireframes · v2 (persistent composer)</em></h1>
+<p class="page-note">
+Updated to the persistent-bottom-composer pattern. The chat entry point is now <b>always visible</b> at the bottom of every core screen — no sidebar button, no "click to open." Just type. The placeholder rotates through real example prompts every few seconds (try waiting and watching) so new users learn what they can ask.<br><br>
+On submit, a 440px right drawer slides in <b>without dimming</b> the rest of the page — the dashboard stays visible and clickable. Frame 15 shows that end state. The composer "morphs" from bottom-center into the drawer's bottom; static frames can't show the animation, so think of it as one element that relocates.<br><br>
+Frames at 1280×760 (production: 1440×900). Full spec in <code>UX_WEB_PROMPT.md</code>.
+</p>
+
+<!-- ============================================================ -->
+<!-- FRAME 1 — Landing -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 1 <b>landing</b><span class="mini">no sidebar, no composer — full bleed</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <div class="main" style="padding:0; align-items:center; justify-content:center;">
+      <div class="hero-col">
+        <div class="kanji-big">貯</div>
+        <div class="wordmark">tameru</div>
+        <div class="tagline">the mindful ledger</div>
+        <div class="lede">a spending app that asks you to log what you spend — because 10 seconds of friction is what builds awareness. the ai handles the rest.</div>
+        <div class="hero-actions">
+          <button class="btn primary wide">get started</button>
+          <a class="text-link" href="#"><u>take the tour</u></a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 3 — Sign-in -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 3 <b>sign-in</b><span class="mini">no sidebar, no composer</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app/signin</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <div class="main" style="padding:0; align-items:center; justify-content:center;">
+      <div class="auth-col">
+        <div class="wordmark">tameru</div>
+        <div class="tagline">sign in to begin</div>
+        <button class="google-btn"><span class="google-g"></span>continue with google</button>
+        <div class="or-divider">or</div>
+        <button class="secondary-btn">continue with email</button>
+        <div class="legal">by signing in you agree to our <u>terms</u> and <u>privacy policy</u>.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section-h">core app — composer is persistent at bottom of every screen</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 9 — Empty state -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 9 <b>home · empty state</b><span class="mini">first sign-in, no transactions yet · composer ringed to draw the eye</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#" class="active">home</a>
+        <a href="#">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="empty-state">
+        <div class="icon">𓊝</div>
+        <div class="title">your ledger is empty</div>
+        <div class="sub">type your first transaction below — tameru handles the rest.</div>
+        <div class="arrow">↓</div>
+      </div>
+      <div class="bottom-composer highlighted">
+        <span class="placeholder">spent $47 at trader joe's on my amex gold</span>
+        <div class="mic">🎤</div>
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 8 — Home Default -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 8 <b>home · default</b><span class="mini">composer at rest · placeholder rotates every 3.2s</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#" class="active">home</a>
+        <a href="#">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main home-mini">
+      <div class="col">
+        <div class="top-bar">
+          <h1>home</h1>
+          <div class="right">
+            <span class="muted">apr 2026</span>
+            <a href="#" style="color:inherit;text-decoration:none">↗ breakdown</a>
+          </div>
+        </div>
+        <div class="hero-amount">$2,340</div>
+        <div class="delta-pill">↑ +14% vs your avg</div>
+        <div class="observation">april is running warmer than your usual — dining is doing most of the lifting, with travel close behind.</div>
+        <div class="section-label">categories</div>
+        <div class="tile-grid">
+          <div class="tile warn"><span class="cat">dining</span><span class="dt">+$47</span></div>
+          <div class="tile moss"><span class="cat">groceries</span><span class="dt">−$12</span></div>
+          <div class="tile over"><span class="cat">travel</span><span class="dt">+$120</span></div>
+          <div class="tile moss"><span class="cat">subscriptions</span><span class="dt">−$5</span></div>
+        </div>
+      </div>
+      <div class="bottom-composer">
+        <span class="placeholder">ask tameru or log a transaction…</span>
+        <div class="mic">🎤</div>
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 10 — Home Breakdown -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 10 <b>home · breakdown</b><span class="mini">drill-in from frame 8</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app/breakdown</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#" class="active">home</a>
+        <a href="#">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="col">
+        <a href="#" class="back">‹ back</a>
+        <div class="top-bar" style="margin-bottom:20px">
+          <h1 style="text-align:center;flex:1">breakdown</h1>
+        </div>
+        <div class="donut-row">
+          <svg class="donut-svg" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="44" fill="none" stroke="#EDE5D5" stroke-width="18" />
+            <circle cx="60" cy="60" r="44" fill="none" stroke="#7F8F6A" stroke-width="18"
+              stroke-dasharray="110 276" stroke-dashoffset="0" transform="rotate(-90 60 60)" />
+            <circle cx="60" cy="60" r="44" fill="none" stroke="#5E6D4A" stroke-width="18"
+              stroke-dasharray="70 276" stroke-dashoffset="-110" transform="rotate(-90 60 60)" />
+            <circle cx="60" cy="60" r="44" fill="none" stroke="#C4CFB4" stroke-width="18"
+              stroke-dasharray="50 276" stroke-dashoffset="-180" transform="rotate(-90 60 60)" />
+            <circle cx="60" cy="60" r="44" fill="none" stroke="#B8B0A0" stroke-width="18"
+              stroke-dasharray="46 276" stroke-dashoffset="-230" transform="rotate(-90 60 60)" />
+            <text x="60" y="60" text-anchor="middle" class="donut-center">$2,340</text>
+            <text x="60" y="72" text-anchor="middle" class="donut-sub">this month</text>
+          </svg>
+          <div class="cat-list">
+            <div class="cat-row expanded">
+              <div class="dot" style="background:#7F8F6A"></div>
+              <div class="name">dining</div>
+              <div class="amt">$935</div>
+              <div class="chev">▴</div>
+            </div>
+            <div style="padding:8px 24px 4px; font-size:12px; color:var(--text-2); background:var(--moss-wash); border-radius:0 0 8px 8px; margin-top:-1px;">
+              <div style="display:flex;justify-content:space-between;padding:5px 0"><span>apr 18 · blue bottle coffee</span><span style="font-variant-numeric:tabular-nums">$6.50</span></div>
+              <div style="display:flex;justify-content:space-between;padding:5px 0"><span>apr 17 · nobu</span><span style="font-variant-numeric:tabular-nums">$85.00</span></div>
+              <div style="display:flex;justify-content:space-between;padding:5px 0"><span>apr 16 · tartine</span><span style="font-variant-numeric:tabular-nums">$24.00</span></div>
+              <div style="padding:6px 0 4px"><a href="#" style="color:var(--moss-emph);text-decoration:none;font-size:11px">most recent 3 · see all dining →</a></div>
+            </div>
+            <div class="cat-row">
+              <div class="dot" style="background:#5E6D4A"></div>
+              <div class="name">travel</div>
+              <div class="amt">$720</div>
+              <div class="chev">▾</div>
+            </div>
+            <div class="cat-row">
+              <div class="dot" style="background:#C4CFB4"></div>
+              <div class="name">groceries</div>
+              <div class="amt">$340</div>
+              <div class="chev">▾</div>
+            </div>
+            <div class="cat-row">
+              <div class="dot" style="background:#B8B0A0"></div>
+              <div class="name">other</div>
+              <div class="amt">$345</div>
+              <div class="chev">▾</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-composer">
+        <span class="placeholder">how is my spending in march?</span>
+        <div class="mic">🎤</div>
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 11a — Category Transaction List -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 11a <b>category transaction list</b><span class="mini">one row hovered → reveals edit + delete glyphs</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app/dining</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#" class="active">home</a>
+        <a href="#">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="col-wide">
+        <a href="#" class="back">‹ breakdown</a>
+        <div class="top-bar" style="margin-bottom:14px">
+          <h1>dining</h1>
+        </div>
+        <div class="filter-row">
+          <span class="pill active">apr 2026 ▾</span>
+          <span class="pill">all cards ▾</span>
+        </div>
+        <div class="search">🔍  search merchant…</div>
+        <div style="margin-top:8px">
+          <div class="tx-row">
+            <div class="date">apr 18</div>
+            <div><div class="merch">blue bottle coffee</div><div class="last4">amex gold · 1008</div></div>
+            <div class="amt">$6.50</div>
+            <div></div>
+          </div>
+          <div class="tx-row hovered">
+            <div class="date">apr 17</div>
+            <div><div class="merch">nobu</div><div class="last4">chase sapphire reserve · 4421</div></div>
+            <div class="amt">$85.00</div>
+            <div class="actions">
+              <div class="icon-btn">✎</div>
+              <div class="icon-btn destructive">🗑</div>
+            </div>
+          </div>
+          <div class="tx-row">
+            <div class="date">apr 16</div>
+            <div><div class="merch">tartine</div><div class="last4">amex gold · 1008</div></div>
+            <div class="amt">$24.00</div>
+            <div></div>
+          </div>
+          <div class="tx-row">
+            <div class="date">apr 14</div>
+            <div><div class="merch">sweetgreen</div><div class="last4">bilt · 5519</div></div>
+            <div class="amt">$16.40</div>
+            <div></div>
+          </div>
+          <div class="tx-row">
+            <div class="date">apr 12</div>
+            <div><div class="merch">din tai fung</div><div class="last4">chase sapphire reserve · 4421</div></div>
+            <div class="amt">$62.80</div>
+            <div></div>
+          </div>
+          <div class="tx-row">
+            <div class="date">apr 10</div>
+            <div><div class="merch">blue bottle coffee</div><div class="last4">amex gold · 1008</div></div>
+            <div class="amt">$6.50</div>
+            <div></div>
+          </div>
+        </div>
+      </div>
+      <div class="fade-bottom"></div>
+      <div class="bottom-composer">
+        <span class="placeholder">delete the nobu charge from apr 17</span>
+        <div class="mic">🎤</div>
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 15 — Drawer open with parse card · main pane stays visible -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 15 <b>drawer · transaction confirmation</b><span class="mini">composer morphed into drawer · main pane stays live (no scrim) · click outside to close</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#" class="active">home</a>
+        <a href="#">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main home-mini" style="padding-bottom:40px">
+      <!-- main pane: unchanged dashboard, fully visible -->
+      <div class="col">
+        <div class="top-bar">
+          <h1>home</h1>
+          <div class="right">
+            <span class="muted">apr 2026</span>
+            <a href="#" style="color:inherit;text-decoration:none">↗ breakdown</a>
+          </div>
+        </div>
+        <div class="hero-amount">$2,340</div>
+        <div class="delta-pill">↑ +14% vs your avg</div>
+        <div class="observation">april is running warmer than your usual — dining is doing most of the lifting.</div>
+        <div class="section-label">categories</div>
+        <div class="tile-grid" style="max-width:480px">
+          <div class="tile warn"><span class="cat">dining</span><span class="dt">+$47</span></div>
+          <div class="tile moss"><span class="cat">groceries</span><span class="dt">−$12</span></div>
+          <div class="tile over"><span class="cat">travel</span><span class="dt">+$120</span></div>
+          <div class="tile moss"><span class="cat">subscriptions</span><span class="dt">−$5</span></div>
+        </div>
+      </div>
+      <!-- composer is NOT here — it has morphed into the drawer -->
+
+      <!-- right drawer -->
+      <div class="drawer">
+        <div class="drawer-top">
+          <div class="ic">✕</div>
+          <div class="title">tameru</div>
+          <div class="ic"><span>＋</span><span class="expand">↗</span></div>
+        </div>
+        <div class="drawer-body">
+          <div class="bubble-user">spent forty seven at trader joe's on my amex gold</div>
+          <div class="bubble-ai">got it — here's what i parsed:</div>
+          <div class="parse-card">
+            <div class="parse-row"><div class="k">merchant</div><div class="v">trader joe's</div><div class="pencil">✎</div></div>
+            <div class="parse-row"><div class="k">amount</div><div class="v">$47.00</div><div class="pencil">✎</div></div>
+            <div class="parse-row"><div class="k">date</div><div class="v">apr 24, 2026</div><div class="pencil">✎</div></div>
+            <div class="parse-row"><div class="k">card</div><div class="v">amex gold · 1008</div><div class="pencil">✎</div></div>
+            <div class="parse-row"><div class="k">category</div><div class="v">groceries</div><div class="pencil">✎</div></div>
+            <div class="parse-actions">
+              <button class="btn secondary">let me fix it</button>
+              <button class="btn primary">looks right</button>
+            </div>
+          </div>
+          <div style="color:var(--text-3); font-size:11px; font-style:italic; align-self:flex-start">or just tell me what to change</div>
+          <div class="bubble-ai" style="margin-top:4px"><em>that's your 3rd grocery run this week — a bit more than usual.</em></div>
+        </div>
+        <div class="drawer-composer">
+          <span class="placeholder">reply or log another…</span>
+          <div class="mic">🎤</div>
+          <span class="kbd">↵</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 17 — Settings -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 17 <b>settings</b><span class="mini">two-pane · composer still present</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app/settings</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#">home</a>
+        <a href="#">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#" class="active">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="settings-layout">
+        <div class="settings-rail">
+          <div class="settings-id">
+            <div class="avatar">CY</div>
+            <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+          </div>
+          <div class="settings-rail-items">
+            <a href="#" class="active">account</a>
+            <a href="#">integrations</a>
+            <a href="#">notifications</a>
+            <a href="#">privacy</a>
+            <a href="#">import data</a>
+            <a href="#">export data</a>
+          </div>
+        </div>
+        <div class="settings-pane">
+          <h2>account</h2>
+          <div class="setting-row"><span class="k">email</span><span class="v">chrisyu0620@gmail.com</span></div>
+          <div class="setting-row"><span class="k">home currency</span><span class="v">USD<span class="muted">immutable</span></span></div>
+          <div class="setting-row"><span class="k">joined</span><span class="v">apr 22, 2026</span></div>
+          <div class="setting-row" style="border-bottom:none; margin-top:24px">
+            <span class="k" style="color:var(--terracotta)">delete account</span>
+            <span class="v" style="color:var(--terracotta); font-family:'Inter';font-size:12px">→</span>
+          </div>
+        </div>
+      </div>
+      <div class="bottom-composer">
+        <span class="placeholder">what's my top category this month?</span>
+        <div class="mic">🎤</div>
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FRAME 18 — Cards -->
+<!-- ============================================================ -->
+<div class="frame-label">frame 18 <b>my cards</b><span class="mini">composer placeholder shows the "add a card" rotation</span></div>
+<div class="frame">
+  <div class="chrome">
+    <div class="dots"><span></span><span></span><span></span></div>
+    <div class="url">tameru.app/cards</div>
+    <div class="right"><span></span><span></span></div>
+  </div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="kanji">貯</span><span class="word">tameru</span></div>
+      <nav class="nav-items">
+        <a href="#">home</a>
+        <a href="#" class="active">my cards</a>
+        <a href="#">subscriptions</a>
+        <a href="#">ai memory</a>
+        <div class="nav-divider"></div>
+        <a href="#">settings</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="user-block">
+        <div class="avatar">CY</div>
+        <div><div class="name">chris yu</div><div class="email">chrisyu0620@gmail.com</div></div>
+        <a href="#" class="signout">sign out</a>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="col-wide">
+        <div class="top-bar">
+          <h1>my cards</h1>
+          <div class="right"><span class="muted">3 cards</span></div>
+        </div>
+        <div class="cards-list">
+          <div class="card-row csr">
+            <div class="identity">
+              <div class="name">chase sapphire reserve</div>
+              <div class="last4">• • • 4421</div>
+              <div class="mults">
+                <span class="mult">4x dining</span>
+                <span class="mult">3x travel</span>
+                <span class="mult">1x other</span>
+              </div>
+            </div>
+            <span class="program">UR</span>
+          </div>
+          <div class="card-row amex">
+            <div class="identity">
+              <div class="name">amex gold</div>
+              <div class="last4">• • • 1008</div>
+              <div class="mults">
+                <span class="mult">4x dining</span>
+                <span class="mult">4x groceries</span>
+                <span class="mult">1x other</span>
+              </div>
+            </div>
+            <span class="program">MR</span>
+          </div>
+          <div class="card-row bilt">
+            <div class="identity">
+              <div class="name">bilt mastercard</div>
+              <div class="last4">• • • 5519</div>
+              <div class="mults">
+                <span class="mult">3x dining</span>
+                <span class="mult">2x travel</span>
+                <span class="mult">1x rent</span>
+              </div>
+            </div>
+            <span class="program">Bilt</span>
+          </div>
+        </div>
+        <div class="ai-hint">type below to add a new card · "add my chase sapphire preferred"</div>
+      </div>
+      <div class="bottom-composer">
+        <span class="placeholder">add netflix $15.99 monthly on my amex gold</span>
+        <div class="mic">🎤</div>
+        <span class="kbd">⌘K</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // rotating placeholder — runs across all .bottom-composer instances
+  const placeholders = [
+    'ask tameru or log a transaction…',
+    'how is my spending in march?',
+    "spent $47 at trader joe's on my amex gold",
+    "what's my top category this month?",
+    'add netflix $15.99 monthly on my amex gold'
+  ];
+  // each composer keeps its own rotation index, seeded from its initial text
+  const composers = Array.from(document.querySelectorAll('.bottom-composer .placeholder'));
+  composers.forEach(el => {
+    const start = placeholders.indexOf(el.textContent.trim());
+    el.dataset.idx = start >= 0 ? start : 0;
+  });
+  function tick() {
+    composers.forEach(el => {
+      const next = (parseInt(el.dataset.idx, 10) + 1) % placeholders.length;
+      el.style.opacity = '0';
+      setTimeout(() => {
+        el.textContent = placeholders[next];
+        el.dataset.idx = next;
+        el.style.opacity = '1';
+      }, 180);
+    });
+  }
+  setInterval(tick, 3200);
+</script>
+
+</body>
+</html>
