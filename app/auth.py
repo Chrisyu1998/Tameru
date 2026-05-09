@@ -16,6 +16,14 @@ pin `algorithms=["ES256"]` rather than accepting the wider `["ES256",
 published can't mount an algorithm-confusion attack. `PyJWKClient` caches
 the JWKS and refreshes on a `kid` miss, so verification is in-process
 with no per-request round trip.
+
+Two dependency variants live here. `get_current_user_jwt` is the bare JWT
+verifier — used on the small set of routes that intentionally run before
+the device gate (the ones that establish or query device state). Every
+other authenticated route uses `get_current_user_with_device`, which
+additionally enforces single-active-device per user (DESIGN.md §9.1,
+CLAUDE.md invariant 5) by comparing the request's `X-Device-Id` header
+to `users_meta.active_device_id`.
 """
 
 from __future__ import annotations
@@ -25,8 +33,10 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import jwt
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from jwt import PyJWKClient
+
+from app.db import supabase_for_user
 
 _JWT_ALGORITHMS = ["ES256"]
 _JWT_AUDIENCE = "authenticated"
@@ -98,3 +108,58 @@ def get_current_user_jwt(request: Request) -> AuthedUser:
         raise _unauthorized("token missing sub/email")
 
     return AuthedUser(jwt=token, user_id=UUID(sub), email=email)
+
+
+def _device_displaced() -> HTTPException:
+    """401 with the structured `DEVICE_DISPLACED` payload the frontend
+    branches on to render the displacement modal (Day 7 prompt). The
+    `MISSING_DEVICE_ID` branch is the same status code so a frontend that
+    forgets to send the header surfaces the same modal — a missing header
+    is, from the user's seat, indistinguishable from a stale session and
+    the only safe action is to sign in again.
+    """
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "DEVICE_DISPLACED", "message": "session ended on this device"},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _missing_device() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "MISSING_DEVICE_ID", "message": "X-Device-Id header required"},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def get_current_user_with_device(
+    request: Request,
+    user: AuthedUser = Depends(get_current_user_jwt),
+) -> AuthedUser:
+    """JWT-verified user + single-active-device enforcement.
+
+    Used on every authenticated route except the small set that legitimately
+    runs before a device claim exists: `/me` (the frontend reads it to decide
+    whether to bootstrap or claim) and the `/auth/*` device endpoints
+    themselves. Putting the device check in those routes would deadlock the
+    new-user flow — the very call meant to set `active_device_id` would 401
+    because no device was claimed yet.
+
+    Failure modes both return 401 with `code=DEVICE_DISPLACED` (or
+    `MISSING_DEVICE_ID`). The frontend's `apiFetch` wrapper inspects the
+    body's `code` and pops the displacement modal — see frontend/src/lib/api.ts.
+    """
+    device_id = request.headers.get("x-device-id")
+    if not device_id:
+        raise _missing_device()
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("users_meta")
+        .select("active_device_id")
+        .eq("user_id", str(user.user_id))
+        .execute()
+    )
+    if not resp.data or resp.data[0].get("active_device_id") != device_id:
+        raise _device_displaced()
+    return user

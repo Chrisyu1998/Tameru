@@ -8,9 +8,11 @@ import { useAppStore } from '../store';
  * credentials are explicitly omitted. FastAPI's CORSMiddleware allowlists
  * the frontend origin (DESIGN.md §9.3) and accepts Authorization + X-Device-Id.
  *
- * TODO(Day 7): jwt and deviceId are populated from the Supabase session after
- * sign-in, and X-Device-Id header enforcement on the backend lands in Day 7
- * (single-active-device, DESIGN.md §9.1).
+ * Day 7: every authenticated route except /me and /auth/* runs through the
+ * single-active-device gate. A 401 with `detail.code === 'DEVICE_DISPLACED'`
+ * (or 'MISSING_DEVICE_ID') signals the user's session was displaced by a
+ * sign-in on another browser; we latch the store flag here so the modal
+ * pops globally rather than each caller having to handle it.
  */
 
 const API_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
@@ -67,6 +69,24 @@ export async function apiFetch(
   });
 }
 
+function maybeFlagDisplacement(status: number, body: unknown): void {
+  if (status !== 401) return;
+  // FastAPI puts our structured error under `detail`. We accept either the
+  // wrapped or raw form so a future move to a non-FastAPI shape doesn't
+  // silently bypass the latch.
+  const detail =
+    body && typeof body === 'object' && 'detail' in (body as object)
+      ? (body as { detail: unknown }).detail
+      : body;
+  const code =
+    detail && typeof detail === 'object' && 'code' in (detail as object)
+      ? (detail as { code: unknown }).code
+      : undefined;
+  if (code === 'DEVICE_DISPLACED' || code === 'MISSING_DEVICE_ID') {
+    useAppStore.getState().setDisplaced(true);
+  }
+}
+
 export async function apiJson<T>(
   path: string,
   options: FetchOptions = {},
@@ -75,6 +95,7 @@ export async function apiJson<T>(
   const text = await response.text();
   const parsed: unknown = text ? JSON.parse(text) : null;
   if (!response.ok) {
+    maybeFlagDisplacement(response.status, parsed);
     throw new ApiError(
       response.status,
       parsed,

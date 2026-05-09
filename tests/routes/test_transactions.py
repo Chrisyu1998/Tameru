@@ -36,7 +36,13 @@ from app.util.merchant import normalize_merchant
 
 
 def _auth(user) -> dict[str, str]:
-    return {"Authorization": f"Bearer {user.jwt}"}
+    # Day 7 — every authenticated route except /me and /auth/* runs through
+    # `get_current_user_with_device`, which 401s without `X-Device-Id`. The
+    # session-scoped fixtures pre-populate `device_id`.
+    return {
+        "Authorization": f"Bearer {user.jwt}",
+        "X-Device-Id": user.device_id or "",
+    }
 
 
 def _tag() -> str:

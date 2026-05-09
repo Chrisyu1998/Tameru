@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent.parent / "app"
+APP_DIR = Path(__file__).resolve().parent.parent.parent / "app"
 ALLOWED_SUBDIRS = {"cron", "scripts"}  # scripts lives at repo root, kept here for parity
 
 _FORBIDDEN_PATTERNS = [

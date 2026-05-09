@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
-from app.auth import AuthedUser, get_current_user_jwt
+from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
 from app.models.transactions import (
     DEFAULT_LIMIT,
@@ -104,7 +104,7 @@ def _upsert_merchant_correction(
 @router.post("/confirm", response_model=TransactionConfirmResponse)
 def confirm_transaction(
     proposal: TransactionConfirmRequest,
-    user: AuthedUser = Depends(get_current_user_jwt),
+    user: AuthedUser = Depends(get_current_user_with_device),
 ) -> TransactionConfirmResponse:
     # Preflight — if we've already committed this client_request_id, return
     # the prior row untouched. `insight` stays None even after Day 13 wires
@@ -167,7 +167,7 @@ def confirm_transaction(
 
 @router.get("", response_model=TransactionListResponse)
 def get_transactions(
-    user: AuthedUser = Depends(get_current_user_jwt),
+    user: AuthedUser = Depends(get_current_user_with_device),
     card_id: UUID | None = Query(default=None),
     category: str | None = Query(default=None),
     merchant_contains: str | None = Query(default=None),
@@ -198,7 +198,7 @@ def get_transactions(
 @router.get("/{transaction_id}", response_model=TransactionRow)
 def get_transaction(
     transaction_id: UUID,
-    user: AuthedUser = Depends(get_current_user_jwt),
+    user: AuthedUser = Depends(get_current_user_with_device),
 ) -> TransactionRow:
     client = supabase_for_user(user.jwt)
     resp = (
@@ -216,7 +216,7 @@ def get_transaction(
 def patch_transaction(
     transaction_id: UUID,
     patch: TransactionPatchRequest,
-    user: AuthedUser = Depends(get_current_user_jwt),
+    user: AuthedUser = Depends(get_current_user_with_device),
 ) -> TransactionRow:
     client = supabase_for_user(user.jwt)
 
@@ -305,7 +305,7 @@ def patch_transaction(
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_transaction(
     transaction_id: UUID,
-    user: AuthedUser = Depends(get_current_user_jwt),
+    user: AuthedUser = Depends(get_current_user_with_device),
 ) -> Response:
     client = supabase_for_user(user.jwt)
     client.table("transactions").delete().eq("id", str(transaction_id)).execute()

@@ -92,6 +92,12 @@ class TestUser:
     email: str
     password: str
     jwt: str
+    # Per-user device id baked into the fixture so tests can include the
+    # `X-Device-Id` header that authenticated routes (post-Day-7) require.
+    # Populated for the bootstrapped session-scoped users_a/_b; left None on
+    # raw users (`user_unbootstrapped`) so auth-route tests can exercise the
+    # pre-bootstrap state.
+    device_id: str | None = None
 
 
 @pytest.fixture(scope="session")
@@ -133,6 +139,30 @@ def _make_user(admin_client: Client, anon_url: str, anon_key: str, tag: str) -> 
     return TestUser(id=user_id, email=email, password=password, jwt=jwt)
 
 
+def _bootstrap_user(user: TestUser, device_id: str, currency: str = "USD") -> TestUser:
+    """Insert the user's `users_meta` row so the Day 7 device gate accepts
+    requests from this fixture. We bypass the HTTP layer and write
+    directly via the user's RLS-scoped client — same write the
+    `/auth/bootstrap` route makes, just without the round trip."""
+    from app.db import supabase_for_user
+
+    client = supabase_for_user(user.jwt)
+    client.table("users_meta").insert(
+        {
+            "user_id": user.id,
+            "active_device_id": device_id,
+            "home_currency": currency,
+        }
+    ).execute()
+    return TestUser(
+        id=user.id,
+        email=user.email,
+        password=user.password,
+        jwt=user.jwt,
+        device_id=device_id,
+    )
+
+
 def _delete_user(admin_client: Client, user_id: str) -> None:
     try:
         admin_client.auth.admin.delete_user(user_id)
@@ -143,16 +173,34 @@ def _delete_user(admin_client: Client, user_id: str) -> None:
 
 @pytest.fixture(scope="session")
 def user_a(admin_client, supabase_env):
-    user = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "a")
+    raw = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "a")
+    user = _bootstrap_user(raw, device_id=f"dev-a-{uuid.uuid4().hex[:8]}")
     yield user
     _delete_user(admin_client, user.id)
 
 
 @pytest.fixture(scope="session")
 def user_b(admin_client, supabase_env):
-    user = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "b")
+    raw = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "b")
+    user = _bootstrap_user(raw, device_id=f"dev-b-{uuid.uuid4().hex[:8]}")
     yield user
     _delete_user(admin_client, user.id)
+
+
+@pytest.fixture
+def user_unbootstrapped(admin_client, supabase_env):
+    """Function-scoped fresh user with no `users_meta` row — used by the
+    auth-route tests that exercise the bootstrap / claim_device / 409
+    paths. Cleaned up after each test so a single suite run can spin up
+    several without bumping into stale state."""
+    raw = _make_user(
+        admin_client,
+        supabase_env["url"],
+        supabase_env["anon_key"],
+        f"fresh-{uuid.uuid4().hex[:6]}",
+    )
+    yield raw
+    _delete_user(admin_client, raw.id)
 
 
 # Per-user card fixtures — shared across the RLS contract suite and the

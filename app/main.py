@@ -4,6 +4,8 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import AuthedUser, get_current_user_jwt
+from app.db import supabase_for_user
+from app.routes import auth as auth_routes
 from app.routes import transactions as transactions_routes
 
 app = FastAPI(title="Tameru")
@@ -38,6 +40,7 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+app.include_router(auth_routes.router)
 app.include_router(transactions_routes.router)
 
 
@@ -47,5 +50,27 @@ def healthz() -> dict[str, bool]:
 
 
 @app.get("/me")
-def me(user: AuthedUser = Depends(get_current_user_jwt)) -> dict[str, str]:
-    return {"user_id": str(user.user_id), "email": user.email}
+def me(user: AuthedUser = Depends(get_current_user_jwt)) -> dict[str, str | None]:
+    """Returns the verified JWT identity plus the user's home currency.
+
+    `home_currency` is null when no `users_meta` row exists yet (new user
+    who hasn't completed onboarding's currency picker). The frontend keys
+    its dispatch off this — null routes to ConfirmHomeCurrency, non-null
+    routes through claim_device into the app. Stays outside the device
+    gate (uses `get_current_user_jwt`, not `get_current_user_with_device`)
+    because the frontend has to read this *before* it knows whether to
+    bootstrap or claim — see app/auth.py.
+    """
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("users_meta")
+        .select("home_currency")
+        .eq("user_id", str(user.user_id))
+        .execute()
+    )
+    home_currency = resp.data[0]["home_currency"] if resp.data else None
+    return {
+        "user_id": str(user.user_id),
+        "email": user.email,
+        "home_currency": home_currency,
+    }
