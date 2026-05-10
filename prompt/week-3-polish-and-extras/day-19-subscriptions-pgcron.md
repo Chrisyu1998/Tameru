@@ -4,6 +4,8 @@
 
 User adds a subscription. Daily `pg_cron` SQL function inserts a transaction whenever `next_billing_date <= today` and advances `next_billing_date`. Idempotent under retries. Survives Railway deploys (because it doesn't run in FastAPI).
 
+This day also lands the `propose_subscription` agent tool and registers it in `TOOL_REGISTRY`. The tool registration deliberately waited until the `POST /subscriptions/confirm` endpoint exists — registering a tool whose confirm endpoint returns 404 means the user taps "looks right" on a perfect-looking parse card and gets a backend error. Tools that can't end-to-end commit are not in the registry.
+
 ## Read first
 
 - `DESIGN.md` §6.5 (subscription auto-logger), §14.3 (pg_cron rationale).
@@ -22,11 +24,16 @@ User adds a subscription. Daily `pg_cron` SQL function inserts a transaction whe
 - `SELECT cron.schedule('autolog-subscriptions', '0 6 * * *', 'SELECT autolog_subscriptions();');` — runs daily at 06:00 UTC.
 - Backend:
   - `app/routes/subscriptions.py`:
-    - **`POST /subscriptions/confirm`** — body: `SubscriptionProposal` (name, card_id, amount, frequency, start_date, category, next_billing_date — computed from start_date + frequency by the `propose_subscription` tool in Day 9). Writes the row. Called after "looks right" on the chat parse card (UX frame 15 in `subscription` kind).
+    - **`POST /subscriptions/confirm`** — body: `SubscriptionProposal` (name, card_id, amount, frequency, start_date, category, next_billing_date — computed from start_date + frequency by the `propose_subscription` tool, registered in this day's `TOOL_REGISTRY` update). Writes the row. Called after "looks right" on the chat parse card (UX frame 15 in `subscription` kind).
         - **Validate `card_id` ownership** before insert: read `cards` via `supabase_for_user(user.jwt)` and reject with 422 if the id doesn't resolve for this user. The same rationale as Day 5's transaction confirm — the subscriptions RLS policy only enforces `user_id = auth.uid()`, not that `card_id` belongs to the authed user, so a tampered client could FK-link to another user's card id. RLS on `cards` prevents the read later, but not the write now.
         - **Amount and frequency validation**: `amount > 0`, `frequency` in `{monthly, quarterly, annual, weekly}` (matches §8.3). 422 on miss.
         - **No `client_request_id` idempotency.** Subscriptions are low-frequency (a handful per user) — same rationale as cards (Day 14). A rare offline-replay duplicate is recoverable by the user deleting one; the server-side idempotency machinery Day 5 uses for transactions is not proportionate here. If a user reports duplicated subscriptions in practice, revisit.
     - **No `POST /subscriptions` that accepts free-form user input** — adds go through chat → `propose_subscription` → `POST /subscriptions/confirm` (invariant 8).
+- `propose_subscription` agent tool — `app/agent/tools.py`:
+  - Shape: `propose_subscription({name, amount, frequency, start_date, category?, card_id?}) → SubscriptionProposal`.
+  - Computes `next_billing_date` from `start_date + frequency` and returns the proposal. **Does not `.insert()`** into `subscriptions` — the invariant-guard test from Day 9b enforces this (`propose_subscription` must not be in `ALLOWED_DIRECT_WRITE_TOOLS`).
+  - Add to `TOOL_REGISTRY`. Update the system prompt's tool descriptions to include `propose_subscription` and bump `PROMPT_VERSION`.
+  - No `client_request_id` on subscription proposals — same low-frequency rationale as `propose_card`.
     - `GET /subscriptions?status=` — list.
     - `PATCH /subscriptions/{id}` — pause (`status=paused`), resume (`status=active`), edit fields. Used by UX frame 22's "pause subscription" action and the edit sheet.
     - `DELETE /subscriptions/{id}` — soft cancel (`status=cancelled`).
@@ -45,6 +52,8 @@ User adds a subscription. Daily `pg_cron` SQL function inserts a transaction whe
 - Don't add an APScheduler / FastAPI background task. `pg_cron` only.
 - Don't catch exceptions inside `autolog_subscriptions()` and silently continue — let them surface in Postgres logs.
 - Don't run the cron job in Phase 1 dev; only schedule it in production. Use a manual `SELECT autolog_subscriptions();` in tests/dev.
+- Don't write to `subscriptions` from inside `propose_subscription`. The tool returns a proposal; `POST /subscriptions/confirm` commits. The invariant-guard test from Day 9b will fail if it doesn't.
+- Don't register `propose_subscription` in `TOOL_REGISTRY` before `POST /subscriptions/confirm` exists. Partial tool registration produces a worse UX than no tool.
 
 ## Done when
 

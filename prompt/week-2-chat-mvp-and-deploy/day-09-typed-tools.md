@@ -1,92 +1,143 @@
-# Day 9 — All typed tools (reads + propose-then-confirm writes) + middleware
+# Day 9a — Read tools + middleware (cap, 429 backoff, system prompt rewrite)
+
+## Scope split
+
+Day 9 was originally a single day covering read tools, propose tools, `set_goal`, merchant canonicalization, and three middleware components. That bundle was too large — a regression in any one piece would force reverting all of them — and contained at least three latent bugs (cap-check timing, double audit logging, prompt-cache invalidation by per-user system blocks). Day 9 is now split:
+
+- **9a (this prompt):** read tools, middleware (usage cap + 429 backoff), and a system-prompt rewrite that documents the new tool surface.
+- **9b (separate prompt):** `propose_transaction`, `set_goal` with a safe-upsert `goals` migration, and the invariant-guard test that protects "only `set_goal` writes from inside `tool_use`."
+- **9c (separate prompt):** `render_user_merchants` and the two-block system-prompt assembly with an Anthropic prompt-cache breakpoint between the static preamble and the per-user merchants block.
+
+`propose_card` and `propose_subscription` are **not** part of any 9x sub-day. Their schemas and registry entries land on **Day 14** and **Day 19** respectively, alongside the Perplexity lookup and the `pg_cron` auto-logger that make those tools end-to-end usable. Registering a tool whose confirm endpoint or upstream dependency does not yet exist would mean Claude calls a tool that returns a user-visible error — worse UX than not having the tool. See "Don't" below.
 
 ## Goal
 
-Implement the full tool surface from `DESIGN.md` §7.2. Reads return data. Writes follow the **propose-then-confirm** pattern (CLAUDE.md invariant 8): the tool returns a proposal payload the React client renders as a preview card, and a separate confirm endpoint writes the row only after the user taps "looks right." Add middleware around tool execution: `ai_call_log` write per call (user-JWT path — invariant 14), per-user daily usage cap check, 429 retry with backoff.
+Implement the read half of the typed tool surface from `DESIGN.md` §7.2. Reads return data; no `propose_*` tools today. Wire two pieces of middleware around the Claude call: a per-user daily token cap (checked at turn entry, lenient mid-turn) and a 429 retry-once-then-fail wrapper. Rewrite the system prompt to disambiguate the now-overlapping tools and bump `PROMPT_VERSION` so audit rows segregate cleanly across the change.
 
 ## Read first
 
-- `DESIGN.md` §7.1 (middleware section), §7.2 (full tool list + propose-then-confirm rationale), §7.3 (concurrency + 429 handling), §6.2 (chat-based write flow).
-- `CLAUDE.md` invariants 1, 2, 8, 14.
+- `DESIGN.md` §7.1 (loop sketch + middleware), §7.2 (typed-tool list and rationale), §7.2.1 (context-window math), §7.3 (concurrency + 429 handling), §11.2 (daily cap), §14.1 (90-day rollup rule).
+- `CLAUDE.md` invariants 1, 2, 14.
+- Day 8's existing loop at `app/agent/loop.py` — read carefully; the per-`messages.create()` `ai_call_log` row already covers what we need for the cap. Do not add a second per-tool log; see "Don't."
 
 ## Deliverables
 
-### `app/agent/tools.py` — reads
+### Read tools — `app/agent/tools.py`
 
-These return data directly, no user confirmation step.
+All read tools return data directly. Each one delegates to a service-layer function or uses the user's JWT (`supabase_for_user(user.jwt)`) so RLS is the safety net. Hard caps are enforced inside the tool, not relied on from the model.
 
-- `get_transactions({category?, card_id?, merchant_contains?, date_from?, date_to?, amount_min?, amount_max?, limit?})` → `Transaction[]`. **Hard cap:** `limit` defaults to 50, max 500. Clamps silently and includes `truncated: true` when it does. **Implementation:** this tool delegates to `app/services/transactions.py::list_transactions(user, filters)` (Day 5) — the same function `GET /transactions` wraps. Do not re-implement the query builder here; drift between the tool shape and the HTTP shape is a real failure mode the service-layer extraction exists to prevent. The ambiguity parameters (`merchant_contains`, `amount_min/max`) power chat-based disambiguation: when the user says "change that $10 coffee from last week," the agent calls `get_transactions` with narrow filters and the React chat UI renders the result as tappable candidate cards (v1 UX, §6.2). Tapping a card opens the edit sheet (Day 15) for the mutation. A post-launch inline confirm card for exact-1 matches is documented in §6.2 but not built in v1.
-- `calculate_total({...})` → `{total, count, truncated?}` — already done Day 8. Day 9 may extract a shared filter builder shared with `get_transactions` once both exist, since both apply the same filter shape against `transactions`.
-- `get_subscriptions({status?})` → `Subscription[]`. Hard cap: 200 rows.
-- `get_spending_summary({months?})` → `CategoryBreakdown[]`. Bounded by category count (~20 max).
-- `get_cards()` → `Card[]`. Bounded by user's card count (typically <10).
+- `get_transactions(filters: TransactionFilters) → {items: TransactionRow[], has_more: bool}`. **Implementation:** delegate to `list_transactions` in `app/services/transactions.py` (Day 5). Do not re-implement the query builder; one query surface, two callers (HTTP + agent). The tool's schema mirrors `TransactionFilters` exactly (`card_id`, `category`, `merchant_contains`, `date_from`, `date_to`, `amount_min`, `amount_max`, `limit`, `offset`). `limit` defaults to 50, clamped to `MAX_LIMIT=500` silently with `has_more=true` when more rows exist. The ambiguity parameters (`merchant_contains`, `amount_min/max`) are what power chat-based disambiguation: when the user says "change that $10 coffee from last week," the agent calls `get_transactions` with narrow filters and the Day 10 chat UI renders the rows as tappable candidate cards (§6.2).
 
-**Why hard caps matter:** Haiku's 200K context is plenty for normal turns (~5K per turn — see DESIGN.md §7.2.1) but a pathological tool call returning 10K transaction rows would blow the budget. Caps are enforced inside the tool function, not relied on from the model.
+- `calculate_total(filters: TransactionFilters) → {total, count, truncated}` — **already exists from Day 8 but must be widened.** Today it accepts only `{category, card_id, date_from, date_to}`. After this day it accepts the full `TransactionFilters` shape so "how much did I spend at Trader Joe's this month?" routes correctly to this tool instead of forcing Claude into `get_transactions` + in-head summation. Update the schema, the executor signature, and the existing tests.
 
-### `app/agent/tools.py` — writes (propose-then-confirm)
+- `get_subscriptions({status?}) → Subscription[]`. Hard cap: 200 rows.
+- `get_spending_summary({months?: int = 1}) → CategoryBreakdown[]`. `months` is "last N calendar months including the current one"; default 1 (this month only). Bounded by category count (~20 max). Spec it deterministically — pick the rolling-window definition now so future drift is impossible.
+- `get_cards() → Card[]`. Bounded by the user's card count (typically <10).
 
-**No write happens inside the tool.** Each of these returns a proposal payload; the React client renders the preview card; a separate `POST /<resource>/confirm` endpoint (Day 5 for transactions, Day 14 for cards, Day 19 for subscriptions) writes the row after the user taps "looks right."
+**Shared filter builder — required, not optional.** Extract `apply_transaction_filters(query, filters: TransactionFilters)` in `app/services/transactions.py` and route both `list_transactions` (the existing service function) and `calculate_total` (in `app/agent/tools.py`) through it. Today's `calculate_total` has a divergent filter implementation; consolidating it now prevents drift between "filters available on the HTTP list endpoint" and "filters available to the agent."
 
-- `propose_transaction({merchant, amount, date, card_id?, category?, notes?})` → `TransactionProposal`. Tool impl normalizes the merchant (Day 4 `normalize_merchant`), calls `categorize()` (Day 4) to fill `category` if not provided, resolves `card_id` from a card name if Claude passed one, **generates a fresh `client_request_id` (UUIDv4) for offline-replay idempotency** (DESIGN.md §8.2), and returns the structured proposal. Import `TransactionProposal` from `app/models/transactions.py` (Day 5) — do not redefine the shape here. **Does not INSERT.**
-- `propose_card({network, last4, program, alias?})` → `CardProposal`. Tool impl calls Perplexity (Day 14 `lookup_card`) to populate multipliers and source_urls, returns the proposal. **Does not INSERT.** No `client_request_id` on card proposals — cards are low-frequency (a user adds 3–5 ever), and a rare offline-replay duplicate is an acceptable UX bug the user can resolve with a delete. The idempotency cost is not proportionate here. **Stub note:** Day 14 (`lookup_card`) lands after this day in the reordered plan. Ship `propose_card` today as a stub that returns `{error: "card_lookup_unavailable", message: "Card add will work once Day 14 ships."}` wrapped in the tool response. Claude will surface that text to the user. Day 14 replaces the stub with the real Perplexity-backed impl in a one-line change.
-- `propose_subscription({name, amount, frequency, start_date, category?, card_id?})` → `SubscriptionProposal`. Tool impl computes `next_billing_date` from `start_date + frequency`, returns the proposal. **Does not INSERT.** No `client_request_id` on subscription proposals — same rationale as `propose_card`: low-frequency, duplicate-on-replay is recoverable by a delete. **Stub note:** Day 19 ships the `POST /subscriptions/confirm` endpoint. `propose_subscription` can ship fully today (it only computes a payload), but the end-to-end "looks right" tap will fail until Day 19 lands. That's fine — either stub the same way as `propose_card` above, or leave the tool live and accept a 404 on confirm until Day 19.
-- `set_goal({category?, amount, period})` → `Goal`. **Direct write** — goals are low-risk, reversible, and not on the transaction ledger. The propose-confirm ceremony is not worth it here.
+**Why hard caps matter:** Haiku 4.5's 200K context is ample for normal turns (~5K per turn — §7.2.1) but a pathological `get_transactions(limit=10000)` would blow the budget. Caps live inside the tool function.
 
-**Why propose-then-confirm for the ledger writes?** Transactions, cards, and subscriptions show up on the user's ledger; a row written from a misread message erodes trust. The proposal pattern makes the UI the point of commit: no row exists until the user taps a button. Matches the Intent Preview pattern from 2026 agentic-UX design literature.
+### Middleware — `app/agent/middleware.py`
 
-### `app/agent/tools.py` — no direct-mutate tools for ledger rows
+The loop is sync (Day 8's decision; see its prompt for rationale). Middleware below is plain functions.
 
-The agent does **not** have `edit_transaction`, `delete_transaction`, or any `add_*` tool. Its ledger-mutation role is limited to `propose_*` creates and `get_transactions(...)` retrieval. Claude cannot silently edit or delete rows via `tool_use` — that is the load-bearing invariant (CLAUDE.md 8).
+#### `assert_within_usage_cap(user)` — fires once at turn entry
 
-In v1, the chat delete/update flow is: agent calls `get_transactions(...)` → UI renders tappable candidate cards (including the single-row case) → user taps a card → edit sheet opens (Day 15) → user taps Save or Delete → client fires `PATCH /transactions/{id}` or `DELETE /transactions/{id}` (Day 5). Zero matches → Claude asks a clarifying question in prose; no card rendered.
+Checked **at turn entry only**, before the first `messages.create()`. If the user is already at or above their daily cap, raise `UsageCapExceeded` and the route handler returns the structured error described below. If they pass the entry check, the turn runs to completion even if intermediate iterations push them over the cap — aborting mid-turn produces partial responses for at most one turn (~19K tokens, ~$0.018) of overshoot, which is a better trade than confusing UX.
 
-A future enhancement (not v1 scope) adds `propose_delete_transaction` / `propose_update_transaction` tools and a MutationConfirmCard UI component to collapse the exact-1-match case to a single tap — see §6.2 "Post-launch enhancement." Don't build either this day.
+**Query shape** (raw `ai_call_log`, *not* the rollup):
 
-### New migration
+```sql
+SELECT COALESCE(SUM(input_tokens + output_tokens), 0)
+FROM ai_call_log
+WHERE user_id = auth.uid()
+  AND task_type = 'chat_turn'
+  AND timestamp >= date_trunc('day', now() AT TIME ZONE 'UTC');
+```
 
-- `goals(id, user_id, category, amount, period, created_at)` with RLS.
+- **User JWT path only** — `supabase_for_user(user.jwt)`. RLS scopes the read. Never reach for the service role (invariant 1, invariant 14).
+- **UTC midnight** explicitly. Matches user-facing copy ("resets at midnight UTC"). Don't rely on `CURRENT_DATE`, which is server-timezone-sensitive.
+- **`task_type='chat_turn'` filter** — Gemini categorization tokens (`task_type='categorization'`) are written by the propose-transaction path but do not count against the chat cap.
+- **Don't query `ai_call_log_daily`** — that's the >90-day archive (§14.1). Today's data is never in the rollup. Add a one-line comment in the implementation explaining this so a future "optimization" doesn't break the cap silently.
 
-### `app/agent/middleware.py`
+**Cap value:** read from `os.environ.get("CHAT_USAGE_CAP_TOKENS_PER_DAY")`, default `200_000` (DESIGN.md §11.2).
 
-The loop is sync (Day 8 established this — see Day 8 prompt for rationale). Middleware below is plain function calls, not coroutines.
+**Error shape** surfaced to the route handler and to Day 10's UI:
 
-- `log_tool_call(user_jwt, tool_use_block)` — writes a row to `ai_call_log` before tool execution, via Day 4's `log_ai_call` helper. **Uses the user JWT path** (`supabase_for_user` + narrow INSERT policy — invariant 14). Captures the model's reasoning by hashing the prompt that produced the call.
-- `assert_within_usage_cap(user_jwt)` — sums today's `chat_turn` input+output tokens for this user; raises `UsageCapExceeded` if over the configured limit. Initial cap: 200K tokens/day per user (`CHAT_USAGE_CAP_TOKENS_PER_DAY`). See DESIGN.md §11.2.
-- On cap exceeded: surface `{"code": "DAILY_CAP_EXCEEDED", "message": "You've used your daily AI quota — resets at midnight UTC."}` for Day 10's UI.
-- `with_429_backoff(call: Callable[[], T]) -> T` — invokes `call()`, catches Anthropic 429, `time.sleep(2)`, retries once, then re-raises as a structured error. Sync helper; no `async`/`await`.
+```python
+{"code": "DAILY_CAP_EXCEEDED",
+ "message": "You've used your daily AI quota — resets at midnight UTC."}
+```
 
-Wire all three into `app/agent/loop.py` between iterations.
+#### `with_429_backoff(call: Callable[[], T]) -> T`
 
-### System-prompt blocks — merchants + memory
+Wraps the `messages.create()` call. Catches **only** `anthropic.RateLimitError`. One retry after `time.sleep(2)`. On the second failure, raise `AgentLoopError("AI_PROVIDER_RATE_LIMITED")`. Other exceptions (`anthropic.BadRequestError`, network errors, anything non-429) must propagate unchanged — swallowing them hides real bugs.
 
-The agent's system prompt is assembled from static preamble + several user-specific blocks, concatenated once per turn. Day 16 adds `render_user_memory()` (cross-session facts). This day adds `render_user_merchants()` for **merchant canonicalization** on the chat-typed path.
+```python
+def with_429_backoff(call: Callable[[], T]) -> T:
+    try:
+        return call()
+    except anthropic.RateLimitError:
+        time.sleep(2)
+        try:
+            return call()
+        except anthropic.RateLimitError as exc:
+            raise AgentLoopError("AI_PROVIDER_RATE_LIMITED") from exc
+```
 
-- `def render_user_merchants(user_jwt) -> str` — returns a system-prompt block listing this user's top 30 merchants by combined recency + frequency score, pulled from the user's `transactions` table via `supabase_for_user(user_jwt)`. Budget: ~300 tokens (each merchant plus a count is ~8 tokens; 30 × 8 ≈ 240 tokens plus a framing sentence). The block instructs Claude: *"When the user mentions a merchant that closely matches one of these, prefer the exact spelling here for `propose_transaction(merchant=...)`. This is how we avoid fragmenting the user's history across spelling variants."*
-- **Why this matters:** chat-based transaction entry is our only create surface (invariant 8). A user typing "spent $10 at KFC" in chat, or speaking the same via Web Speech API (UX frame 14), enters through the Claude agent loop. Claude is the point of write-side canonicalization — if it sees "Kentucky Fried Chicken" in the user's history, it fills `propose_transaction(merchant="Kentucky Fried Chicken", ...)` instead of creating a new `kfc` row. This is the v1 solution to merchant fragmentation; DESIGN.md §3.4 documents why the alternatives (autocomplete on a free-form chat input, or nightly Gemini merge jobs) don't fit v1.
-- **What it does NOT handle:** first-time merchants (no history to normalize against — accept it), CSV imports (not on the chat path — Phase 2 nightly merge job is the eventual fix), and the edit sheet (Day 15 — users who retype a merchant there can fragment; accept for v1).
-- Cache shape: cheap. Call once per turn start, not per tool iteration. The list changes slowly enough that aggressive caching (per-request memoization inside the loop) is fine; no need for cross-request cache at v1 scale.
-- Tests: seed 5 transactions with merchant `"Kentucky Fried Chicken"` for user A. Call `render_user_merchants(user_a.jwt)` and assert the returned block contains that exact string. Run a turn for "spent $10 at KFC" against a mocked Claude that echoes its system prompt back; assert the merchant block is present.
+Wire it around the `client.messages.create(...)` call at `app/agent/loop.py:198`. The existing `ai_call_log` write at `app/agent/loop.py:230` still fires on success and on caught-and-re-raised exceptions (the bare `except Exception` branch at `app/agent/loop.py:210`), so the audit trail covers both attempts.
+
+#### No `log_tool_call` middleware
+
+Originally proposed in the unified Day 9 prompt. Dropped because:
+- Day 8 already writes one `ai_call_log` row per `messages.create()` call (`task_type='chat_turn'`) at `app/agent/loop.py:230`. That row carries the only thing the cap actually needs — token counts from `response.usage`.
+- A per-`tool_use` row would either double-count tokens (the tool didn't make an LLM call) or write meaningless `0/0` rows.
+- Worse, `task_type='tool_use'` would violate the CHECK constraint at `supabase/migrations/20260421120800_ai_call_log.sql:35-39` and every tool call would fail.
+- The per-turn tool trace the UI needs is already in `AssistantTurn.tool_calls` (`app/agent/loop.py:109`) and persisted via `chat_turn_trace.messages` — `ai_call_log` would be a third copy in the wrong table.
+
+### System prompt rewrite — `app/prompts/chat.py`
+
+The prompt today (`SYSTEM_PROMPT` at `app/prompts/chat.py:29`) mentions only `calculate_total`. After this day Claude has five tools (`calculate_total`, `get_transactions`, `get_subscriptions`, `get_spending_summary`, `get_cards`) — several of which overlap in plausible-use space. Without disambiguation prose, Haiku will sometimes pull rows via `get_transactions` and sum in its head, producing slow + occasionally wrong totals.
+
+**Rewrite goals:**
+
+- Describe each tool in one sentence and pin **when to pick which**. Concretely call out: *aggregate / total / "how much" → `calculate_total`; list / find / "which ones" / disambiguation → `get_transactions`.*
+- Document the `truncated: true` and `has_more: true` flags and instruct Claude to surface them.
+- Preserve the existing "ask one short clarifying question instead of guessing" guidance.
+- **No mention of propose_* tools yet** — those land in 9b and Claude shouldn't be told about a tool surface that isn't registered.
+
+**Bump `PROMPT_VERSION` to `"chat_v2"`** at `app/prompts/chat.py:26`. This is mechanical but load-bearing: every `ai_call_log` row carries `prompt_version`, and grouping cost/regression queries by prompt version is the only way to detect "did rewriting the prompt change Haiku's tool-selection rate" once you have a few days of data on each side.
+
+`render_system_prompt()` keeps its zero-argument signature today. The `user_jwt` parameter and the two-block cache-aware structure both land in 9c.
 
 ### Tests
 
-- `tests/test_tools.py` — for each read tool and each `propose_*` tool, an integration test that invokes it through the loop with a mocked Claude. For `propose_*`, assert that **no row is written to the underlying table** — only the proposal payload is returned.
-- `tests/test_tools.py` — disambiguation path: seed 3 "coffee" transactions, call `get_transactions(merchant_contains="coffee")` through the loop, assert 3 rows returned in candidate-card shape.
-- `tests/test_usage_cap.py` — seed `ai_call_log` with high token counts; assert the next turn raises `UsageCapExceeded`.
+- `tests/test_tools.py` — for each new read tool, an integration test that invokes it through `execute_tool()` with a fake `AuthedUser` against a seeded supabase fixture (or mocked client, matching Day 8's test style). Assert filter shapes match `TransactionFilters`, hard caps clamp silently, and `truncated`/`has_more` flags fire correctly.
+- `tests/test_tools.py` — disambiguation path: seed 3 "coffee" transactions, call `get_transactions(merchant_contains="coffee")`, assert 3 rows returned in row shape (no in-tool summarization).
+- `tests/test_tools.py` — alignment test: `calculate_total(merchant_contains="Trader Joe's")` returns the same sum that a parallel `list_transactions` + manual sum would produce. This catches divergence between the two tools' filter handling.
+- `tests/test_apply_transaction_filters.py` — direct unit test on the extracted filter helper. Parametrize over each filter field; assert one absent field produces no constraint.
+- `tests/test_usage_cap.py` — seed `ai_call_log` with high `chat_turn` token counts dated today; assert the next turn raises `UsageCapExceeded` before any `messages.create()` fires. Counter-test: seed the same volume dated yesterday (UTC); the turn must proceed.
+- `tests/test_usage_cap.py` — categorization-tokens-don't-count: seed `ai_call_log` rows with `task_type='categorization'` totaling above the cap; the turn must proceed (only `chat_turn` rows count).
+- `tests/test_429_backoff.py` — mock the Anthropic client to raise `RateLimitError` once then return a normal response; assert the loop succeeds with exactly one retry. Mock to raise `RateLimitError` twice; assert `AgentLoopError("AI_PROVIDER_RATE_LIMITED")` propagates and no third call fires.
 
 ## Don't
 
-- Don't give Claude a direct-write `add_transaction`, `add_card`, or `add_subscription` tool. All ledger creates go through propose → UI confirm → server write.
-- Don't give Claude `edit_transaction` or `delete_transaction` tools. The agent's mutation role is retrieval + proposal only; the HTTP `PATCH` / `DELETE` call always originates from a user tap in the UI (v1: edit sheet or swipe). The future `propose_delete_transaction` / `propose_update_transaction` tools documented in §6.2 are also read-only in effect (they return proposal payloads, not mutations) — but they are not v1 scope.
-- Don't re-implement the `get_transactions` query builder. Import `list_transactions` from `app/services/transactions.py` (Day 5). One query surface, two callers (HTTP + agent tool).
-- Don't expose a `run_query(sql)` tool. Phase 2.
-- Don't bypass `supabase_for_user(user_jwt)` in any tool — RLS is the safety net.
-- Don't use `supabase_admin` to write `ai_call_log` rows from the middleware. User-JWT + narrow INSERT policy only (invariant 14).
-- Don't make the usage cap a soft warning — hard fail. Users see usage in Settings later.
+- Don't register `propose_transaction`, `propose_card`, `propose_subscription`, or `set_goal` today. Those are 9b / Day 14 / Day 19 / 9b respectively. Registering an unimplemented tool means Claude calls something whose result is a user-visible error.
+- Don't add `merchant_contains` to `calculate_total` as a special case; widen its schema to the full `TransactionFilters` shape via the shared filter builder.
+- Don't add a `log_tool_call` middleware (see rationale above). The existing per-`messages.create()` `ai_call_log` row is sufficient.
+- Don't check the cap between iterations. Entry-only, lenient thereafter.
+- Don't query `ai_call_log_daily` for the cap. Today's data is only ever in raw `ai_call_log`.
+- Don't catch generic `Exception` in `with_429_backoff`. Only `anthropic.RateLimitError`.
+- Don't use `supabase_admin` anywhere in this day's code. Read paths use `supabase_for_user(user.jwt)`; the cap query is the same. Invariant 1 + invariant 14.
+- Don't bypass the shared filter builder once it exists. Future tools that filter transactions must use it.
 
 ## Done when
 
-- `pytest tests/test_tools.py` passes for all reads and `propose_*` tools.
-- A turn that asks "How much on dining this month?" calls `get_spending_summary` or `calculate_total` and returns the right number.
-- A turn that says "spent $47 at Trader Joe's on my Amex Gold" calls `propose_transaction` and returns a `TransactionProposal` payload — **and no row exists in `transactions` until `POST /transactions/confirm` is separately called.**
-- A turn that says "change that $10 coffee from last week" (with multiple matches seeded) calls `get_transactions(merchant_contains="coffee", amount_min=9, amount_max=11, date_from=...)` and returns multiple rows for UI disambiguation.
-- A user past their token cap gets the `DAILY_CAP_EXCEEDED` error instead of a turn.
+- `pytest tests/test_tools.py tests/test_apply_transaction_filters.py tests/test_usage_cap.py tests/test_429_backoff.py` passes.
+- A turn that asks "How much on dining this month?" calls `calculate_total` (not `get_transactions`) and returns the right number.
+- A turn that asks "What did I spend at Trader Joe's last week?" calls `calculate_total(merchant_contains="Trader Joe's", date_from=...)` — proving the shared filter shape works end-to-end.
+- A user whose `ai_call_log` shows they've already used the cap gets `DAILY_CAP_EXCEEDED` instead of any Anthropic call firing.
+- A mocked `RateLimitError` on the first Anthropic call results in a 2-second pause and a second attempt; if that also 429s, the loop surfaces `AI_PROVIDER_RATE_LIMITED`.
+- `ai_call_log.prompt_version` for any chat turn after this day reads `"chat_v2"`.
+- `git grep -n 'propose_' app/agent/tools.py` returns nothing — proves no propose tool leaked into 9a.

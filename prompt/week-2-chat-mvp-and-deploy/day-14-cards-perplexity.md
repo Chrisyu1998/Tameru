@@ -5,13 +5,17 @@
 Users add cards two ways:
 
 1. **Onboarding (UX frame 4 — "Add First Card")** — a dedicated setup screen during first-run. Text input + suggestion chips, then lookup/confirm inline on that screen.
-2. **Post-onboarding — via chat.** User says "add my Chase Sapphire Reserve"; Claude calls the `propose_card` tool (Day 9); the tool impl runs the Perplexity lookup and returns a `CardProposal`; React renders the proposal as a parse card in the chat; user taps "looks right" → `POST /cards/confirm` writes the row.
+2. **Post-onboarding — via chat.** User says "add my Chase Sapphire Reserve"; Claude calls the `propose_card` tool (registered in this day's `TOOL_REGISTRY` update); the tool impl runs the Perplexity lookup and returns a `CardProposal`; React renders the proposal as a parse card in the chat; user taps "looks right" → `POST /cards/confirm` writes the row.
+
+**Tool registration moved here from Day 9.** Day 9's earlier plan would have registered `propose_card` as a stub returning `"card_lookup_unavailable"` until this day landed. That would have meant 5–6 days of Claude seeing `propose_card` in its tool list and calling it with no working backend, surfacing tool-result errors to users. Registering the tool **only when the Perplexity lookup and `POST /cards/confirm` both exist** is the cleaner contract: tools that can't end-to-end commit are not in `TOOL_REGISTRY`.
 
 Both paths use the same Perplexity lookup and the same `POST /cards/confirm` endpoint. There is no standalone `AddCard.tsx` page after onboarding — "add via tameru ai" is the post-onboarding affordance (UX frames 18 and 20).
 
 ## Read first
 
 - `DESIGN.md` §6.1 (Perplexity card lookup), §8.1 (`cards` schema — note `source_urls` field), §7.2 (`propose_card` tool shape).
+- `CLAUDE.md` invariant 8 (the propose-then-confirm pattern this day implements for cards).
+- Day 9b's `propose_transaction` for the propose-tool template — `propose_card` follows the same shape: tool returns a proposal, does not `.insert()`.
 - `UX_PROMPT.md` frames 4 (Add First Card — onboarding), 18 (Cards List), 20 (Cards Empty).
 - `CLAUDE.md` invariant 8.
 
@@ -25,7 +29,7 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 
 ### `app/routes/cards.py`
 
-- `POST /cards/lookup` — body: `{name}`. Calls Perplexity, returns the proposed card data + citations. Used by the onboarding flow *and* by the `propose_card` tool internals (Day 9).
+- `POST /cards/lookup` — body: `{name}`. Calls Perplexity, returns the proposed card data + citations. Used by the onboarding flow *and* by the `propose_card` tool internals (registered in this day's `TOOL_REGISTRY` update — see below).
 - **`POST /cards/confirm`** — body: `CardProposal` payload (network, last4, program, multipliers, annual_fee, source_urls, alias?). Inserts the row. Returns the created card. Called after "looks right" on either the onboarding screen or the chat parse card.
   - **No `client_request_id` idempotency here.** Unlike transactions (Day 5 / §8.2), card proposals don't carry an idempotency key — cards are low-frequency (3–5 per user lifetime), and the worst case on offline-queue replay is a duplicate card row the user can delete. The idempotency cost is not proportionate. Don't add the column or the partial unique index "for consistency" with transactions.
 - **No `POST /cards` (direct write from a free-form user form).** The only commit path is `/confirm` after a proposal the user saw.
@@ -55,7 +59,23 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 - Empty state (UX frame 20): card icon + "no cards yet" + "add via tameru ai" primary (deep-links to the chat half-sheet pre-seeded with a "let's add your first card" suggestion chip).
 - AI hint footer on the populated list: "✨ add a new card via tameru ai →" (taps into chat).
 
-**There is no standalone `AddCard.tsx` page after onboarding.** The post-onboarding add path is chat-only. Day 9's `propose_card` tool is the entry point; Day 10's `ParseCard` component renders the preview.
+**There is no standalone `AddCard.tsx` page after onboarding.** The post-onboarding add path is chat-only. This day's `propose_card` tool is the entry point; Day 10's `ParseCard` component renders the preview.
+
+### `propose_card` — `app/agent/tools.py` (new, deferred from Day 9)
+
+```text
+propose_card({network, last4, program, alias?}) → CardProposal
+```
+
+Tool implementation:
+
+1. Call `lookup_card(name=program)` (Perplexity, above) to fill multipliers, annual_fee, and source_urls. If `lookup_card` returns `{needs_manual: true, ...}`, return the proposal with empty multipliers and `needs_manual=true` so the parse card surfaces the manual-fill path.
+2. Build and return a `CardProposal` (define in `app/models/cards.py` if not already present — mirrors the Day 5 `TransactionProposal` pattern).
+3. **Does not `.insert()` into `cards`.** The invariant-guard test from Day 9b covers this — `propose_card` must not be in `ALLOWED_DIRECT_WRITE_TOOLS`.
+
+No `client_request_id` on card proposals — cards are low-frequency (3–5 per user lifetime), and a duplicate from an offline-queue replay is recoverable by a single delete. The idempotency cost is not proportionate. Don't add the column or the partial unique index "for consistency" with transactions.
+
+Add `propose_card` to `TOOL_REGISTRY` in this day. Update the system prompt's tool descriptions to include `propose_card` and bump `PROMPT_VERSION`.
 
 ### Tests
 
@@ -69,7 +89,8 @@ Both paths use the same Perplexity lookup and the same `POST /cards/confirm` end
 - Don't expose Perplexity's raw response to the user — parse to structured JSON.
 - Don't store citation URLs as a single string; use the `text[]` column.
 - Don't build a standalone `AddCard.tsx` page for post-onboarding use. Chat is the add surface after onboarding (invariant 8).
-- Don't write to `cards` from inside `propose_card` (Day 9). The tool returns a proposal; `POST /cards/confirm` commits.
+- Don't write to `cards` from inside `propose_card`. The tool returns a proposal; `POST /cards/confirm` commits. The invariant-guard test from Day 9b will fail if `propose_card` calls `.insert()`.
+- Don't register `propose_card` in `TOOL_REGISTRY` before this day's `lookup_card` + `POST /cards/confirm` exist. Partial tool registration produces a worse UX than no tool.
 
 ## Done when
 
