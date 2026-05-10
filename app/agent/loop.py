@@ -29,8 +29,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import anthropic
 from anthropic import Anthropic
 
+from app.agent.middleware import (
+    ProviderRateLimited,
+    UsageCapExceeded,
+    assert_within_usage_cap,
+)
 from app.agent.tools import execute_tool, tool_schemas
 from app.auth import AuthedUser
 from app.integrations.aicalllog import log_ai_call
@@ -39,6 +45,17 @@ from app.prompts.chat import (
     render_system_prompt,
     system_prompt_hash,
 )
+
+__all__ = [
+    "AgentLoopError",
+    "AgentLoopLimitExceeded",
+    "AssistantTurn",
+    "MAX_LOOP_ITERATIONS",
+    "ProviderRateLimited",
+    "ToolCallRecord",
+    "UsageCapExceeded",
+    "run_turn",
+]
 
 # Hard ceiling on loop iterations. A pathological prompt (deliberate or
 # bug-induced) where Claude keeps requesting tool calls without converging
@@ -154,6 +171,62 @@ def _coerce_input(raw: Any) -> dict[str, Any]:
     raise TypeError(f"tool_use.input must be dict or JSON string, got {type(raw).__name__}")
 
 
+def _call_and_log(
+    *,
+    client: Anthropic,
+    user: AuthedUser,
+    model: str,
+    prompt_hash: str,
+    create_kwargs: dict[str, Any],
+) -> Any:
+    """One messages.create attempt + one ai_call_log row.
+
+    The audit row is written in a `finally` block so success and failure
+    each produce exactly one row per attempt. Day 8's load-bearing
+    invariant — "one ai_call_log row per messages.create call" — must
+    hold even on the retry path; otherwise rate-limit incidents and
+    provider latency disappear from cost / reliability analytics
+    (DESIGN.md §8.8).
+
+    This helper encapsulates what was previously inline at the top of
+    each loop iteration. Pulling it out lets the retry path (a second
+    call on `RateLimitError`) reuse the exact same logging shape
+    without duplicating the try/except/log code, and without collapsing
+    two API calls into one row the way `with_429_backoff` did.
+    """
+    start = time.perf_counter()
+    success = False
+    error_code: str | None = None
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        response = client.messages.create(**create_kwargs)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        success = True
+        return response
+    except Exception as exc:
+        error_code = type(exc).__name__
+        raise
+    finally:
+        log_ai_call(
+            user.jwt,
+            user_id=user.user_id,
+            provider="anthropic",
+            model=model,
+            task_type="chat_turn",
+            prompt_version=PROMPT_VERSION,
+            prompt_hash=prompt_hash,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            success=success,
+            error_code=error_code,
+        )
+
+
 def run_turn(
     user: AuthedUser,
     conversation_history: list[dict[str, Any]],
@@ -166,9 +239,20 @@ def run_turn(
     The route handler is responsible for loading and capping it (the 5-
     turn cap from DESIGN.md §7.2.1 lives there, not here).
 
-    Returns AssistantTurn. Raises AgentLoopLimitExceeded if the 8-turn
-    cap fires.
+    Raises:
+      * `UsageCapExceeded` if the user is already at/over their daily
+        token cap. Checked once at entry — once a turn begins, it runs
+        to completion even if mid-turn iterations push past the cap
+        (overshoot bounded at one turn per DESIGN.md §11.2).
+      * `ProviderRateLimited` if Anthropic returns 429 on two consecutive
+        attempts (initial + one retry after 2s, per DESIGN.md §7.3).
+      * `AgentLoopLimitExceeded` if the 8-iteration cap fires.
     """
+    # Day 9a: entry-only cap check. Lenient mid-turn by design — finishing
+    # a started turn for ~$0.02 of overshoot is better UX than aborting
+    # halfway with a partial response.
+    assert_within_usage_cap(user)
+
     client = _anthropic_client()
     model = _model_name()
     schemas = tool_schemas()
@@ -189,58 +273,38 @@ def run_turn(
     final_text = ""
 
     for _ in range(MAX_LOOP_ITERATIONS):
-        start = time.perf_counter()
-        success = False
-        error_code: str | None = None
-        input_tokens = 0
-        output_tokens = 0
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=4096,
-                system=system,
-                tools=schemas,
-                messages=messages,
-            )
-            usage = getattr(response, "usage", None)
-            if usage is not None:
-                input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-                output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-            success = True
-        except Exception as exc:
-            error_code = type(exc).__name__
-            # Log the failed call before re-raising so the audit trail
-            # covers the failure too, not just successes.
-            log_ai_call(
-                user.jwt,
-                user_id=user.user_id,
-                provider="anthropic",
-                model=model,
-                task_type="chat_turn",
-                prompt_version=PROMPT_VERSION,
-                prompt_hash=prompt_hash,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                latency_ms=int((time.perf_counter() - start) * 1000),
-                success=False,
-                error_code=error_code,
-            )
-            raise
-
-        log_ai_call(
-            user.jwt,
-            user_id=user.user_id,
-            provider="anthropic",
+        create_kwargs: dict[str, Any] = dict(
             model=model,
-            task_type="chat_turn",
-            prompt_version=PROMPT_VERSION,
-            prompt_hash=prompt_hash,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            latency_ms=int((time.perf_counter() - start) * 1000),
-            success=True,
-            error_code=None,
+            max_tokens=4096,
+            system=system,
+            tools=schemas,
+            messages=messages,
         )
+        try:
+            response = _call_and_log(
+                client=client,
+                user=user,
+                model=model,
+                prompt_hash=prompt_hash,
+                create_kwargs=create_kwargs,
+            )
+        except anthropic.RateLimitError:
+            # Day 9a: retry once on Anthropic 429. The retry is a second
+            # _call_and_log invocation so each attempt writes its own
+            # ai_call_log row (Day 8 invariant: one row per
+            # messages.create call). Other exceptions propagate
+            # unchanged — only RateLimitError triggers the retry.
+            time.sleep(2)
+            try:
+                response = _call_and_log(
+                    client=client,
+                    user=user,
+                    model=model,
+                    prompt_hash=prompt_hash,
+                    create_kwargs=create_kwargs,
+                )
+            except anthropic.RateLimitError as exc:
+                raise ProviderRateLimited() from exc
 
         # Snapshot the assistant's blocks. The full block sequence (text
         # + tool_use) is what we replay to Claude on the next iteration,

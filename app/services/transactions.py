@@ -1,9 +1,14 @@
 """Transaction query service — the one source of truth for list reads.
 
 `list_transactions(user, filters)` is the function Day 5's `GET /transactions`
-handler wraps AND Day 9's `get_transactions` agent tool calls directly. Both
+handler wraps AND Day 9a's `get_transactions` agent tool calls directly. Both
 callers reach the same query builder so the HTTP shape and the agent-tool
 shape cannot drift.
+
+`apply_transaction_filters(query, filters)` is the shared filter applier —
+extracted in Day 9a so `calculate_total` (agent tool) and `list_transactions`
+go through one filter codepath. Adding a filter dimension is one change in
+one place.
 
 `TransactionFilters`, `DEFAULT_LIMIT`, and `MAX_LIMIT` live in
 `app/models/transactions.py` — the filter type is as much a shared request
@@ -17,6 +22,8 @@ what guarantees that's safe.
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.models.transactions import (
@@ -25,6 +32,34 @@ from app.models.transactions import (
     TransactionListResponse,
     TransactionRow,
 )
+
+
+def apply_transaction_filters(query: Any, filters: TransactionFilters) -> Any:
+    """Apply every set filter to a PostgREST select builder.
+
+    Returns the (mutated) builder so callers can chain `.order()` /
+    `.range()` after. Filters that are `None` (or empty string for
+    `merchant_contains`) are skipped — they mean "no constraint." Mirrors
+    the field-by-field application that previously lived inline in
+    `list_transactions`.
+    """
+    if filters.card_id is not None:
+        query = query.eq("card_id", str(filters.card_id))
+    if filters.category is not None:
+        query = query.eq("category", filters.category)
+    if filters.merchant_contains:
+        # ILIKE substring — unindexed scan, fine at v1 scale. A pg_trgm
+        # index is a Phase 2 optimization if/when usage proves it out.
+        query = query.ilike("merchant", f"%{filters.merchant_contains}%")
+    if filters.date_from is not None:
+        query = query.gte("date", filters.date_from.isoformat())
+    if filters.date_to is not None:
+        query = query.lte("date", filters.date_to.isoformat())
+    if filters.amount_min is not None:
+        query = query.gte("amount", str(filters.amount_min))
+    if filters.amount_max is not None:
+        query = query.lte("amount", str(filters.amount_max))
+    return query
 
 
 def list_transactions(
@@ -49,23 +84,7 @@ def list_transactions(
         .order("date", desc=True)
         .order("created_at", desc=True)
     )
-
-    if filters.card_id is not None:
-        query = query.eq("card_id", str(filters.card_id))
-    if filters.category is not None:
-        query = query.eq("category", filters.category)
-    if filters.merchant_contains:
-        # ILIKE substring — unindexed scan, fine at v1 scale. A pg_trgm
-        # index is a Phase 2 optimization if/when usage proves it out.
-        query = query.ilike("merchant", f"%{filters.merchant_contains}%")
-    if filters.date_from is not None:
-        query = query.gte("date", filters.date_from.isoformat())
-    if filters.date_to is not None:
-        query = query.lte("date", filters.date_to.isoformat())
-    if filters.amount_min is not None:
-        query = query.gte("amount", str(filters.amount_min))
-    if filters.amount_max is not None:
-        query = query.lte("amount", str(filters.amount_max))
+    query = apply_transaction_filters(query, filters)
 
     # Fetch one extra to detect `has_more` without a separate COUNT query.
     start = filters.offset

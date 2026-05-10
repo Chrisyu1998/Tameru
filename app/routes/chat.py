@@ -38,7 +38,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.loop import (
     AgentLoopLimitExceeded,
     AssistantTurn,
+    ProviderRateLimited,
     ToolCallRecord,
+    UsageCapExceeded,
     run_turn,
 )
 from app.auth import AuthedUser, get_current_user_with_device
@@ -166,6 +168,22 @@ def chat_turn(
 
     try:
         turn = run_turn(user, history, body.message)
+    except UsageCapExceeded as exc:
+        # Daily token cap — checked at turn entry by middleware. No
+        # Anthropic call fired. 429 + structured code; Day 10 renders
+        # the UX frame 16 amber card.
+        raise HTTPException(
+            status_code=429,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except ProviderRateLimited as exc:
+        # Anthropic 429'd us twice. The user isn't at fault; this is an
+        # upstream provider issue. 503 so frontends can offer "retry"
+        # rather than the cap treatment.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     except AgentLoopLimitExceeded as exc:
         # Don't persist — a partial turn that hit the cap isn't a useful
         # row to keep around (the assistant text is empty / nonsensical
