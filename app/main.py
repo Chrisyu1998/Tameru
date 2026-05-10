@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.auth import AuthedUser, get_current_user_jwt
 from app.db import supabase_for_user
 from app.routes import auth as auth_routes
+from app.routes import chat as chat_routes
 from app.routes import transactions as transactions_routes
 
 app = FastAPI(title="Tameru")
@@ -42,6 +43,7 @@ app.add_middleware(
 
 app.include_router(auth_routes.router)
 app.include_router(transactions_routes.router)
+app.include_router(chat_routes.router)
 
 
 @app.get("/healthz")

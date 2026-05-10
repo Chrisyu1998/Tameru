@@ -107,6 +107,32 @@ def _row_users_meta(user_id: str, **_):
     return {"user_id": user_id, "active_device_id": f"dev-{_tag()}"}
 
 
+def _row_chat_messages(user_id: str, **_):
+    # One row per turn; conversation_id is a plain UUID grouper. The
+    # update-isolation test mutates `role` (the only updatable text-ish
+    # field besides content_blocks); flipping role through the CHECK
+    # constraint requires a valid value.
+    return {
+        "user_id": user_id,
+        "conversation_id": str(uuid.uuid4()),
+        "role": "user",
+        "content_blocks": [{"type": "text", "text": f"msg-{_tag()}"}],
+    }
+
+
+def _row_chat_turn_trace(user_id: str, **_):
+    # One row per turn; `messages` is the full Anthropic message-list
+    # slice. The update-isolation test mutates `messages` (JSONB).
+    return {
+        "user_id": user_id,
+        "conversation_id": str(uuid.uuid4()),
+        "messages": [
+            {"role": "user", "content": f"hi-{_tag()}"},
+            {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
+        ],
+    }
+
+
 # (table_name, row_factory, pk_column, needs_card)
 USER_OWNED_TABLES = [
     ("cards", _row_cards, "id", False),
@@ -116,6 +142,8 @@ USER_OWNED_TABLES = [
     ("user_memory", _row_user_memory, "id", False),
     ("mcp_tokens", _row_mcp_tokens, "id", False),
     ("users_meta", _row_users_meta, "user_id", False),
+    ("chat_messages", _row_chat_messages, "id", False),
+    ("chat_turn_trace", _row_chat_turn_trace, "id", False),
 ]
 
 
@@ -170,7 +198,24 @@ def test_user_b_cannot_update_user_a_rows(
     ins = client_a.table(table).insert(payload).execute()
     row_key = ins.data[0][pk]
 
-    update_fields = {"name": "hacked"} if "name" in payload else {"category": "hacked"}
+    # Pick a writable field that exists on this table. `name` and
+    # `category` cover most user-owned tables; `chat_messages` has
+    # neither (its only mutable text-ish field is `role`, CHECK-
+    # constrained to {'user','assistant'} — flip to the other value);
+    # `chat_turn_trace` has only `messages` (JSONB).
+    if "name" in payload:
+        update_fields = {"name": "hacked"}
+    elif "category" in payload:
+        update_fields = {"category": "hacked"}
+    elif "role" in payload:
+        update_fields = {"role": "assistant" if payload["role"] == "user" else "user"}
+    elif "messages" in payload:
+        update_fields = {"messages": [{"role": "user", "content": "hacked"}]}
+    else:
+        raise AssertionError(
+            f"no known update field for table {table!r} — extend the "
+            "branch above when adding a new user-owned table"
+        )
     resp = client_b.table(table).update(update_fields).eq(pk, row_key).execute()
     assert resp.data == [], (
         f"RLS leak: user B updated a {table} row owned by user A "

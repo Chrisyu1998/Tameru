@@ -523,7 +523,7 @@ Per the token math (§11.1), peak per-turn input is ~5,260 tokens at hop 4 of a 
 
 The two ways context could blow up are both already bounded by design:
 
-- **Conversation history** is capped at the last 5 turns. Older turns are summarized into `user_memory` (§7.6) and pruned. A 50-turn marathon session does not balloon the context.
+- **Conversation history** is capped at the last 5 turns. The cap is enforced by reading the last 5 rows of `chat_turn_trace` (§8.12) — one row per turn, so the cap maps exactly to "5 turns" regardless of how many tool hops each turn contained. Older turns are summarized into `user_memory` (§7.6) and pruned. A 50-turn marathon session does not balloon the context.
 - **Tool results.** A pathological call like `get_transactions(limit=10000)` returning thousands of rows would exceed any context. **All typed tool implementations cap result sizes at sensible limits** (e.g., `get_transactions` defaults to 50 and hard-caps at 500; `calculate_total` returns a single number; `get_spending_summary` is bounded by category count). The cap is enforced inside the tool function, not relied on from the model side.
 
 Flash-Lite's 1M context is therefore not a meaningful differentiator for chat. It would matter for a different use case (full transaction-history dumps, very long autonomous runs) — neither of which Tameru does.
@@ -664,7 +664,7 @@ This eval exists specifically so the Haiku-vs-Flash-Lite (or future model) decis
 
 ## 8. Data Models
 
-User-owned tables (`cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `mcp_tokens`, `users_meta`) include `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. The audit tables `ai_call_log` and `ai_call_log_daily` differ — see §8.8 and §8.9.
+User-owned tables (`cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `mcp_tokens`, `users_meta`, `chat_messages`, `chat_turn_trace`) include `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. The audit tables `ai_call_log` and `ai_call_log_daily` differ — see §8.8 and §8.9.
 
 Every table has:
 
@@ -865,6 +865,53 @@ Webhook-idempotency log. Stripe retries on non-2xx responses, so every handler m
 **RLS shape:** `ENABLE ROW LEVEL SECURITY` with no policies — the table is reachable only via the service role (webhook handler uses service role because there's no user JWT in scope for a Stripe-initiated request). A user JWT can neither read nor write.
 
 **No `user_id` column** — webhooks sometimes arrive before the corresponding user row is fully hydrated (e.g., `checkout.session.completed` races with the initial customer creation). The handler looks up the user via `stripe_customer_id` on `users_meta` and updates that row; `stripe_events` exists only to deduplicate.
+
+### 8.11 `chat_messages`
+
+Human-visible chat log for the Claude Haiku agent (§7.1, §7.6 layer 1). One user row + one assistant row per turn. The UI/conversation-thread surface (Day 10's `ChatThread.tsx`) reads from this table and only this table. Synthetic intermediate blocks from the agent loop (`assistant` blocks containing `tool_use`, the synthetic `user` blocks carrying `tool_result`) are **not** stored here — they live in `chat_turn_trace` (§8.12). The split keeps UI reads simple: alternating user/assistant rows with prose-shaped `content_blocks`, no filtering needed.
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Primary key |
+| user_id | UUID | FK → auth.users; `ON DELETE CASCADE` |
+| conversation_id | UUID | Plain UUID grouper. **Not** an FK to a separate `conversations` table — v1 has no per-conversation metadata (title, archived, shared). Promote to an FK if conversation-level metadata becomes load-bearing. |
+| role | text | `user` \| `assistant`. CHECK-constrained. |
+| content_blocks | JSONB | The user-visible content. For `role='user'`, a single text block with the typed/spoken message. For `role='assistant'`, the final iteration's blocks (text — tool_use blocks never reach this table). |
+| seq | bigserial | Monotonic insertion-order tiebreaker. **Load-bearing:** the user + assistant pair is written in one batched insert and shares `created_at` to microsecond precision; ordering by `created_at` alone returns them non-deterministically. UI reads order by `seq`. |
+| created_at | timestamptz | Default `now()`. Used for human-readable timestamps; **not** used for ordering — see `seq`. |
+
+**Index:** `(user_id, conversation_id, seq)`.
+
+**RLS shape:** `FOR ALL` on `user_id = auth.uid()`. Chat content is the user's own data — they read, write, update, and delete their own rows. Audit-style INSERT-only would block a future "clear conversation" feature for no v1 benefit.
+
+**Relationship to §7.6 "stateless from the app's perspective":** §7.6 means the agent loop holds no in-memory state between calls — every turn rebuilds context from the DB. Persisting `chat_messages` (and `chat_turn_trace`) is what makes the conversation survive page reload and enables cross-session memory distillation; it does not contradict the stateless property.
+
+### 8.12 `chat_turn_trace`
+
+Anthropic-shaped replay log for the agent loop. One row per `/chat/turn` call, storing the **full** Anthropic message-list slice contributed by that turn — including the user's typed message, every intermediate `(assistant_with_tool_use, user_with_tool_result)` pair, and the final assistant blocks. The loop reads from this table to reconstruct the exact wire-shape Claude needs on the next turn.
+
+**Why this is separate from `chat_messages`:**
+
+The two tables answer different questions. `chat_messages` answers "what does the human see" — clean alternation, prose blocks, no synthetic rows. `chat_turn_trace` answers "what does the model need on replay" — the full block sequence including tool plumbing, so a follow-up turn that references prior tool output (e.g., "what about coffee?" after a Dining total) grounds correctly. Putting both behaviors in one table forces UI reads to filter synthetic rows on every fetch and forces a non-obvious "is this row user-typed or a synthetic tool_result?" distinction into the schema. Splitting eliminates that.
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Primary key |
+| user_id | UUID | FK → auth.users; `ON DELETE CASCADE` |
+| conversation_id | UUID | Matches `chat_messages.conversation_id`. Same plain UUID grouper rationale (§8.11). |
+| messages | JSONB | The full Anthropic message list contributed by this turn, in wire shape: `[{"role":"user","content":"<typed text>"}, {"role":"assistant","content":[{"type":"tool_use",...}]}, {"role":"user","content":[{"type":"tool_result",...}]}, ..., {"role":"assistant","content":[{"type":"text","text":"..."}]}]`. Replay concatenates the `messages` arrays from the last 5 trace rows (oldest first). |
+| seq | bigserial | Tiebreaker for the (rare) case where two turns share `created_at` to microsecond precision. |
+| created_at | timestamptz | Default `now()`. |
+
+**Index:** `(user_id, conversation_id, seq DESC)` — replay reads `ORDER BY seq DESC LIMIT 5`, then reverses in app code.
+
+**RLS shape:** `FOR ALL` on `user_id = auth.uid()`. Same as `chat_messages`.
+
+**History cap on read:** the chat route loads the last 5 trace rows per conversation per §7.2.1 ("last 5 turns"). With one row per turn, the cap maps exactly to "5 turns" regardless of how many tool hops each turn contained — a deliberate property of the one-row-per-turn shape.
+
+**Atomicity:** the route writes `chat_turn_trace` first (load-bearing for replay), then `chat_messages`. Supabase Python exposes no transaction primitive across two table writes, so a partial write is technically possible. v1 accepts this — the worst case is a brief UI-vs-replay desync that resolves on the next turn. Stronger atomicity (RPC) is a Day 12+ concern when streaming makes persistence asynchronous.
+
+**Coupling to `chat_messages`:** the two tables share `conversation_id` but are not enforced as referentially coupled. A future "clear this conversation" feature must delete from both; today, account deletion via `ON DELETE CASCADE` on `auth.users` cleans both up automatically.
 
 ---
 

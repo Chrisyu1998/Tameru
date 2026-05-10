@@ -16,7 +16,7 @@ Implement the full tool surface from `DESIGN.md` §7.2. Reads return data. Write
 These return data directly, no user confirmation step.
 
 - `get_transactions({category?, card_id?, merchant_contains?, date_from?, date_to?, amount_min?, amount_max?, limit?})` → `Transaction[]`. **Hard cap:** `limit` defaults to 50, max 500. Clamps silently and includes `truncated: true` when it does. **Implementation:** this tool delegates to `app/services/transactions.py::list_transactions(user, filters)` (Day 5) — the same function `GET /transactions` wraps. Do not re-implement the query builder here; drift between the tool shape and the HTTP shape is a real failure mode the service-layer extraction exists to prevent. The ambiguity parameters (`merchant_contains`, `amount_min/max`) power chat-based disambiguation: when the user says "change that $10 coffee from last week," the agent calls `get_transactions` with narrow filters and the React chat UI renders the result as tappable candidate cards (v1 UX, §6.2). Tapping a card opens the edit sheet (Day 15) for the mutation. A post-launch inline confirm card for exact-1 matches is documented in §6.2 but not built in v1.
-- `calculate_total({...})` → `{total, count}` (already done Day 8) — single number, no cap needed.
+- `calculate_total({...})` → `{total, count, truncated?}` — already done Day 8. Day 9 may extract a shared filter builder shared with `get_transactions` once both exist, since both apply the same filter shape against `transactions`.
 - `get_subscriptions({status?})` → `Subscription[]`. Hard cap: 200 rows.
 - `get_spending_summary({months?})` → `CategoryBreakdown[]`. Bounded by category count (~20 max).
 - `get_cards()` → `Card[]`. Bounded by user's card count (typically <10).
@@ -48,10 +48,12 @@ A future enhancement (not v1 scope) adds `propose_delete_transaction` / `propose
 
 ### `app/agent/middleware.py`
 
+The loop is sync (Day 8 established this — see Day 8 prompt for rationale). Middleware below is plain function calls, not coroutines.
+
 - `log_tool_call(user_jwt, tool_use_block)` — writes a row to `ai_call_log` before tool execution, via Day 4's `log_ai_call` helper. **Uses the user JWT path** (`supabase_for_user` + narrow INSERT policy — invariant 14). Captures the model's reasoning by hashing the prompt that produced the call.
 - `assert_within_usage_cap(user_jwt)` — sums today's `chat_turn` input+output tokens for this user; raises `UsageCapExceeded` if over the configured limit. Initial cap: 200K tokens/day per user (`CHAT_USAGE_CAP_TOKENS_PER_DAY`). See DESIGN.md §11.2.
 - On cap exceeded: surface `{"code": "DAILY_CAP_EXCEEDED", "message": "You've used your daily AI quota — resets at midnight UTC."}` for Day 10's UI.
-- `with_429_backoff(coro)` — catches Anthropic 429s, sleeps 2s, retries once, then surfaces a `{user_facing: "Rate limit hit, try again in a moment"}` error.
+- `with_429_backoff(call: Callable[[], T]) -> T` — invokes `call()`, catches Anthropic 429, `time.sleep(2)`, retries once, then re-raises as a structured error. Sync helper; no `async`/`await`.
 
 Wire all three into `app/agent/loop.py` between iterations.
 

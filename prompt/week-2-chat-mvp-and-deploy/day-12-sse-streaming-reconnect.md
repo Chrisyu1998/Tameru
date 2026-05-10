@@ -11,13 +11,13 @@ Upgrade the chat wire from the non-streaming request/reply Day 10 ships on to Se
 ## Deliverables
 
 - Backend:
-  - `POST /chat/turn` → returns `Content-Type: text/event-stream`. The response body yields events:
+  - `POST /chat/turn` → returns `Content-Type: text/event-stream` via FastAPI's `StreamingResponse` wrapping a sync generator. The codebase is sync (Day 8 established this); `anthropic.Anthropic().messages.stream(...)` is a sync context manager that yields events, which composes naturally with a sync generator. **Do not switch to async here** — porting only the chat path to async would orphan it from the rest of the sync codebase. The response body yields events:
     - `event: token\ndata: <text chunk>\n\n` for each text token from Claude.
     - `event: tool_use\ndata: {"name": "...", "input": {...}}\n\n` for each tool call.
     - `event: tool_result\ndata: {"name": "...", "result_summary": "..."}\n\n` for each tool result (truncated for UI display).
-    - `event: done\ndata: {"conversation_id": "...", "assistant_turn_id": "..."}\n\n`.
+    - `event: done\ndata: {"conversation_id": "...", "assistant_turn_id": "...", "tool_calls": [...]}\n\n` — `tool_calls` mirrors Day 8's non-streaming response shape so the Day 10 ParseCard / CandidateList components consume the same payload regardless of wire mode.
     - `event: error\ndata: {"code": "...", "message": "..."}\n\n` on failure.
-  - Use `anthropic.messages.stream()`. Inside the loop, on `tool_use` blocks, emit the SSE event then execute and emit `tool_result`, then continue the stream.
+  - Inside the loop, on `tool_use` blocks, emit the SSE event then execute and emit `tool_result`, then continue the stream.
   - Persist the assistant turn to `chat_messages` after `done`.
 - Frontend:
   - `frontend/src/lib/chat_stream.ts`:

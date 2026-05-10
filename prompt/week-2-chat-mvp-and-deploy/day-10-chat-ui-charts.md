@@ -18,7 +18,7 @@ The full chat experience. Chat is the only user-initiated write surface in v1 (C
 
 - Conversation thread (oldest top, newest bottom). Auto-scroll on new content.
 - Input bar at bottom (multiline textarea; submit on Cmd/Ctrl+Enter; tap-to-send button). Mic button integration belongs to Day 18; this day wires a placeholder slot.
-- **Non-streaming wire for now.** POST to Day 8's `/chat/turn` and render the full assistant reply when it arrives. No progressive token rendering today. Day 12 converts `/chat/turn` to SSE and swaps this in for a token-by-token render; the rest of Day 10 (ParseCard, CandidateList, EntryInsightBubble, conversation switching) stays intact across that upgrade.
+- **Non-streaming wire for now.** POST to Day 8's `/chat/turn` and render the full assistant reply when it arrives. The response shape is `{conversation_id, assistant_text, tool_calls: [{name, input, result}]}` — `assistant_text` is the prose bubble, and `tool_calls` is the array Day 10 iterates to render ParseCard (for `propose_*` results) or CandidateList (for `get_transactions` with multiple rows). No progressive token rendering today. Day 12 converts `/chat/turn` to SSE and swaps this in for a token-by-token render; the rest of Day 10 (ParseCard, CandidateList, EntryInsightBubble, conversation switching) stays intact across that upgrade — Day 12's `done` event carries the same `tool_calls` payload.
 - Tool-use indicator: while the turn is in flight, show a small quiet pill in the bubble (e.g. "thinking…"). Day 12 refines this to show per-tool pills ("looking up dining transactions…") once tool-use events stream individually.
 - Conversation list: left drawer (mobile: top dropdown) showing prior conversations by title. New-conversation button.
 
