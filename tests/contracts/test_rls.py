@@ -50,6 +50,7 @@ USER_OWNED_TABLES = [
     ("users_meta", "_row_users_meta", "user_id", False),
     ("chat_messages", "_row_chat_messages", "id", False),
     ("chat_turn_trace", "_row_chat_turn_trace", "id", False),
+    ("goals", "_row_goals", "id", False),
 ]
 
 
@@ -363,6 +364,22 @@ def _row_chat_messages(user_id: str, **_):
         "conversation_id": str(uuid.uuid4()),
         "role": "user",
         "content_blocks": [{"type": "text", "text": f"msg-{_tag()}"}],
+    }
+
+def _row_goals(user_id: str, **_):
+    # One row per (user, category, period). Use a unique category per
+    # insert so re-running this suite in the same session doesn't trip
+    # the goals_user_cat_period_uniq constraint (the contract under test
+    # is RLS isolation, not idempotent upsert — that lives in
+    # tests/test_tools.py). category values here are unique tag strings,
+    # which is fine because the DB has no CHECK on `category`; the
+    # closed-enum validation lives at the Pydantic model layer.
+    """Support row goals."""
+    return {
+        "user_id": user_id,
+        "category": f"Tag-{_tag()}",
+        "amount": 100,
+        "period": "month",
     }
 
 def _row_chat_turn_trace(user_id: str, **_):

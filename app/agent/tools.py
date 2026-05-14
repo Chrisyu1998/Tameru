@@ -10,10 +10,13 @@ the `TransactionFilters` filter shape where they overlap, routed through
 `apply_transaction_filters` in `app/services/transactions.py` so the
 HTTP-endpoint filter list and the agent-tool filter list cannot drift.
 
-Day 9b will add `propose_transaction` and `set_goal`; Day 14 / Day 19 add
-`propose_card` / `propose_subscription`. Each of those days extends
-`TOOL_REGISTRY` — the registry is the only seam Claude sees, so a tool
-that isn't registered there is invisible to the model.
+Day 9b adds `propose_transaction` (returns a `TransactionProposal`
+without writing — confirm-then-commit per CLAUDE.md invariant 8) and
+`set_goal` (the lone direct-write carve-out for low-risk reversible rows
+per DESIGN.md §7.2). Day 14 / Day 19 add `propose_card` /
+`propose_subscription`. Each of those days extends `TOOL_REGISTRY` —
+the registry is the only seam Claude sees, so a tool that isn't
+registered there is invisible to the model.
 
 Aggregation note: PostgREST's Python client has no clean SUM / GROUP BY.
 For `calculate_total` and `get_spending_summary` we fetch matching rows
@@ -29,18 +32,23 @@ from __future__ import annotations
 import datetime as _dt
 from decimal import Decimal
 from typing import Any, Callable
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+from app.integrations.gemini import GeminiError, categorize
+from app.models.goals import Goal, GoalPeriod, SetGoalRequest
 from app.models.transactions import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     TransactionFilters,
+    TransactionProposal,
 )
 from app.prompts.categories import ALLOWED_CATEGORIES
 from app.services.transactions import apply_transaction_filters, list_transactions
+from app.util.merchant import normalize_merchant
 
 # Hard cap on rows fetched for an aggregation. Above this we still return
 # the partial sum but flag the result as truncated so Claude can ask the
@@ -197,6 +205,64 @@ class GetCardsResponse(BaseModel):
     """
 
     items: list[dict[str, Any]]
+
+
+class ProposeTransactionRequest(BaseModel):
+    """Tool input for `propose_transaction`.
+
+    `card_id` is UUID-only — Claude resolves card names via `get_cards`
+    first (already in its tool list from Day 9a) and passes the UUID.
+    Rationale: keeping the input tightly typed lets the agent loop reason
+    about ambiguity (two cards both nicknamed "Amex") by asking a
+    clarifying question in chat, rather than having the tool silently
+    pick one.
+
+    `category` is optional — when omitted, the tool calls Gemini to fill
+    it. When supplied (Claude pre-fills from explicit user text like
+    "spent $7 on coffee at Blue Bottle"), the tool accepts it without
+    re-categorizing — there's no Gemini baseline to learn against in
+    that branch and that is the correct semantic.
+
+    Example request:
+        {"merchant": "Trader Joe's", "amount": 47, "date": "2026-05-13",
+         "card_id": "f1e2d3c4-..."}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    merchant: str
+    amount: Decimal
+    date: _dt.date
+    card_id: UUID | None = None
+    category: str | None = None
+    notes: str | None = None
+
+    @field_validator("merchant")
+    @classmethod
+    def _v_merchant(cls, value: str) -> str:
+        """Strip leading/trailing whitespace and reject empty merchant names."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("merchant cannot be empty or whitespace-only")
+        return stripped
+
+    @field_validator("category")
+    @classmethod
+    def _v_category(cls, value: str | None) -> str | None:
+        """Reject pre-filled categories outside Tameru's closed enum."""
+        if value is not None and value not in ALLOWED_CATEGORIES:
+            raise ValueError(
+                f"category {value!r} is not in the closed enum (see app/prompts/categories.py)"
+            )
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def _v_amount(cls, value: Decimal) -> Decimal:
+        """Reject non-positive transaction amounts at the model layer."""
+        if value <= 0:
+            raise ValueError(f"amount must be > 0 (got {value})")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +424,96 @@ GET_CARDS_TOOL: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {},
+    },
+}
+
+
+PROPOSE_TRANSACTION_TOOL: dict[str, Any] = {
+    "name": "propose_transaction",
+    "description": (
+        "Build a transaction proposal from a user-described purchase. "
+        "Returns a TransactionProposal — it does NOT write a row. The "
+        "client renders the proposal as a parse card; the row is only "
+        "created when the user taps the confirm button (which triggers "
+        "POST /transactions/confirm). If the user names a card, call "
+        "get_cards first to resolve the UUID and pass it as card_id. "
+        "Do not say 'I added it' after calling this tool — the row does "
+        "not exist yet."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["merchant", "amount", "date"],
+        "properties": {
+            "merchant": {
+                "type": "string",
+                "description": "Merchant name as the user wrote it.",
+            },
+            "amount": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Transaction amount in the user's home currency.",
+            },
+            "date": {
+                "type": "string",
+                "format": "date",
+                "description": "Transaction date (YYYY-MM-DD).",
+            },
+            "card_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": (
+                    "Card UUID resolved from get_cards. Do not pass a "
+                    "card name; resolve it via get_cards first."
+                ),
+            },
+            "category": {
+                "type": "string",
+                "enum": list(ALLOWED_CATEGORIES),
+                "description": (
+                    "Optional — fill only when the user explicitly named "
+                    "a category. Omit otherwise; the tool will call "
+                    "Gemini for a suggestion."
+                ),
+            },
+            "notes": {
+                "type": "string",
+                "description": "Free-form notes the user mentioned.",
+            },
+        },
+    },
+}
+
+
+SET_GOAL_TOOL: dict[str, Any] = {
+    "name": "set_goal",
+    "description": (
+        "Set a spending budget for a category and period. SETS — does not "
+        "ADD. Calling set_goal(category='Dining', amount=300, period='month') "
+        "after a prior $400/month goal replaces the existing goal in place. "
+        "Omit category to set an overall budget across all categories."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["amount", "period"],
+        "properties": {
+            "category": {
+                "type": "string",
+                "enum": list(ALLOWED_CATEGORIES),
+                "description": "Closed-enum category; omit for an overall budget.",
+            },
+            "amount": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Budget amount in the user's home currency.",
+            },
+            "period": {
+                "type": "string",
+                "enum": ["week", "month", "year"],
+                "description": "Budget window.",
+            },
+        },
     },
 }
 
@@ -558,6 +714,113 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
+def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
+    """Build a TransactionProposal from a chat-described purchase.
+
+    Request:
+        {
+            "merchant": "Trader Joe's",
+            "amount": 47,
+            "date": "2026-05-13",
+            "card_id": "f1e2d3c4-..."   # optional, UUID-only
+            "category": "Groceries",     # optional; omit to let Gemini fill
+            "notes": "weekly run"        # optional
+        }
+
+    Response:
+        TransactionProposal-shaped dict; see app/models/transactions.py.
+
+    The tool does NOT write to `transactions`. The structural test in
+    tests/contracts/test_tool_write_invariant.py enforces this — if a
+    refactor here ever calls `.insert(` / `.upsert(` / `.update(` /
+    `.delete(` / `.rpc(`, the test fails.
+
+    Behavior contract:
+      * `category` supplied by Claude → accepted as-is, `gemini_suggestion`
+        stays None. No Gemini baseline to learn against in this branch.
+      * `category` omitted → call categorize(merchant, user). On success,
+        set both `category` and `gemini_suggestion` to the Gemini result;
+        the two fields start equal and diverge only when the user edits
+        on the parse card. That divergence is the training signal the
+        confirm endpoint's merchant_category upsert consumes
+        (app/routes/transactions.py:97-101). Without `gemini_suggestion`
+        carrying Gemini's frozen guess, the learning loop never fires.
+      * `categorize()` raises GeminiError → fall back to
+        category="Other", gemini_suggestion=None. The categorize call
+        already wrote its own ai_call_log row before raising.
+      * `card_id` supplied → verify it's the user's via an RLS-scoped
+        cards SELECT. Hallucinated UUIDs, deleted cards, and cross-user
+        UUIDs all look identical to the lookup (the latter two via RLS
+        returning empty). In all three cases, drop card_id to None so the
+        parse card prompts the user to pick rather than failing at
+        commit time on `_assert_card_owned`.
+    """
+    request = ProposeTransactionRequest.model_validate(kwargs)
+
+    if request.category is not None:
+        category = request.category
+        gemini_suggestion: str | None = None
+    else:
+        try:
+            suggestion = categorize(request.merchant, user)
+            category = suggestion.category
+            gemini_suggestion = suggestion.category
+        except GeminiError:
+            category = "Other"
+            gemini_suggestion = None
+
+    client = supabase_for_user(user.jwt)
+    card_id = request.card_id
+    if card_id is not None and not _card_belongs_to_user(client, card_id):
+        card_id = None
+
+    proposal = TransactionProposal(
+        merchant=normalize_merchant(request.merchant),
+        amount=request.amount,
+        date=request.date,
+        card_id=card_id,
+        category=category,
+        notes=request.notes,
+        gemini_suggestion=gemini_suggestion,
+        client_request_id=uuid4(),
+    )
+    return proposal.model_dump(mode="json")
+
+
+def set_goal(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
+    """Upsert a spending budget for a (category, period) slot.
+
+    Request:
+        {"category": "Dining", "amount": 300, "period": "month"}
+
+    Response:
+        Goal-shaped dict; see app/models/goals.py.
+
+    Latest-wins is enforced at the schema layer by the
+    `goals_user_cat_period_uniq` constraint + this PostgREST upsert. The
+    `NULLS NOT DISTINCT` modifier (Postgres 15+) folds NULL-category rows
+    into one bucket so an overall-budget set is also idempotent. This is
+    the lone direct-write tool — see CLAUDE.md invariant 8 and the
+    structural test at tests/contracts/test_tool_write_invariant.py.
+    """
+    request = SetGoalRequest.model_validate(kwargs)
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("goals")
+        .upsert(
+            {
+                "user_id": str(user.user_id),
+                "category": request.category,
+                "amount": str(request.amount),
+                "period": request.period,
+            },
+            on_conflict="user_id,category,period",
+        )
+        .execute()
+    )
+    return Goal.model_validate(resp.data[0]).model_dump(mode="json")
+
+
 # ---------------------------------------------------------------------------
 # Registry.
 # ---------------------------------------------------------------------------
@@ -573,6 +836,8 @@ TOOL_REGISTRY: dict[str, tuple[dict[str, Any], Callable[..., Any]]] = {
     GET_SUBSCRIPTIONS_TOOL["name"]: (GET_SUBSCRIPTIONS_TOOL, get_subscriptions),
     GET_SPENDING_SUMMARY_TOOL["name"]: (GET_SPENDING_SUMMARY_TOOL, get_spending_summary),
     GET_CARDS_TOOL["name"]: (GET_CARDS_TOOL, get_cards),
+    PROPOSE_TRANSACTION_TOOL["name"]: (PROPOSE_TRANSACTION_TOOL, propose_transaction),
+    SET_GOAL_TOOL["name"]: (SET_GOAL_TOOL, set_goal),
 }
 
 
@@ -633,3 +898,27 @@ def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     about.
     """
     return {k: v for k, v in row.items() if k not in keys}
+
+
+def _card_belongs_to_user(client: Any, card_id: UUID) -> bool:
+    """Defensive check used by `propose_transaction`.
+
+    Returns True iff the RLS-scoped client sees the card AND the card is
+    still `active=true`. Hallucinated UUIDs, cross-user UUIDs, and
+    soft-deleted cards (`active=false`, see DESIGN.md §8.1) all return
+    False. The `active` filter matters because `get_cards` only returns
+    active cards — but stale conversation history can still surface an
+    inactive card's UUID to Claude, and we don't want a chat-typed
+    transaction to be silently posted against a card the user closed.
+    Confirm-side `_assert_card_owned` does not (yet) filter on `active`;
+    flagging that gap for a follow-up so propose and confirm don't drift.
+    """
+    resp = (
+        client.table("cards")
+        .select("id")
+        .eq("id", str(card_id))
+        .eq("active", True)
+        .limit(1)
+        .execute()
+    )
+    return bool(resp.data)

@@ -913,6 +913,28 @@ The two tables answer different questions. `chat_messages` answers "what does th
 
 **Coupling to `chat_messages`:** the two tables share `conversation_id` but are not enforced as referentially coupled. A future "clear this conversation" feature must delete from both; today, account deletion via `ON DELETE CASCADE` on `auth.users` cleans both up automatically.
 
+### 8.13 `goals`
+
+Per-user spending budgets. One row per `(user, category, period)` slot. Written by the `set_goal` agent tool (DESIGN.md §7.2 — the lone direct-write carve-out, since goals are low-risk, reversible, and not on the transaction ledger).
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Primary key |
+| user_id | UUID | FK → auth.users; `ON DELETE CASCADE` |
+| category | text | Nullable. NULL encodes an overall budget across categories. Closed-enum validation lives at the Pydantic model layer (`SetGoalRequest`), not as a DB CHECK — the DB only enforces uniqueness and CHECKs on `period` and `amount`. |
+| amount | numeric | `CHECK (amount > 0)`. |
+| period | text | `CHECK (period IN ('week', 'month', 'year'))`. |
+| created_at | timestamptz | Default `now()`. |
+| updated_at | timestamptz | Default `now()`; maintained by a BEFORE UPDATE trigger so PostgREST upserts that route through the DO UPDATE path still refresh the field. |
+
+**Unique constraint:** `goals_user_cat_period_uniq UNIQUE NULLS NOT DISTINCT (user_id, category, period)`. The `NULLS NOT DISTINCT` modifier (Postgres 15+) folds the overall-budget slot (`category=NULL`) into the uniqueness bucket — without it, Postgres's default NULL-distinct semantics would let two such rows coexist and the "set" verb would silently break for any user without a per-category budget. A named CONSTRAINT (not a bare UNIQUE INDEX) is required so the `set_goal` tool's PostgREST `upsert(..., on_conflict="user_id,category,period")` can route to it; a functional index expression like `COALESCE(category, '')` can't be referenced by column list.
+
+**Latest-wins semantics:** enforced at the schema layer via the constraint + the tool's upsert. Any reader (dashboard, weekly digest, future chat tool) can do `SELECT amount FROM goals WHERE category=? AND period=?` and trust that at most one row matches. The "latest wins" rule lives in one place — the upsert — instead of in every reader.
+
+**RLS shape:** `FOR ALL` on `user_id = auth.uid()` — same pattern as `transactions` and `chat_messages`. The user owns their goals; they can read, set, update via re-set, and delete via a future explicit endpoint.
+
+**Index:** `goals_user_idx ON (user_id)`. Per-user reads are the dominant access pattern; the unique constraint already provides the composite-key index for upsert resolution.
+
 ---
 
 ## 9. Security & Privacy

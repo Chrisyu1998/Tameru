@@ -40,7 +40,10 @@ from app.agent.tools import (
     get_spending_summary,
     get_subscriptions,
     get_transactions,
+    propose_transaction,
+    set_goal,
 )
+from app.integrations.gemini import CategorySuggestion, GeminiProviderError
 from app.models.transactions import MAX_LIMIT
 
 
@@ -66,19 +69,29 @@ def authed_user_b(user_b) -> AuthedUser:
 # ===========================================================================
 
 
-def test_registry_contains_only_day9a_read_tools():
-    """Verify that registry contains only day9a read tools."""
+def test_registry_contains_expected_day9b_surface():
+    """Verify the post-9b registry holds reads + propose_transaction + set_goal.
+
+    After Day 9b lands, the registry expands by two: `propose_transaction`
+    (the propose-then-confirm tool for chat-entered purchases) and
+    `set_goal` (the lone direct-write carve-out). `propose_card` and
+    `propose_subscription` remain out — they land on Day 14 / Day 19
+    alongside their confirm endpoints. If one of those slips in early,
+    this test fails as the structural alarm.
+    """
     expected = {
         "calculate_total",
         "get_transactions",
         "get_subscriptions",
         "get_spending_summary",
         "get_cards",
+        "propose_transaction",
+        "set_goal",
     }
     assert set(TOOL_REGISTRY) == expected, (
-        "Day 9a registers only read tools. propose_* tools belong to "
-        "9b / Day 14 / Day 19. If a propose tool landed early, this "
-        "test failing is the structural alarm."
+        "Day 9b registers reads + propose_transaction + set_goal. "
+        "propose_card / propose_subscription belong to Day 14 / Day 19; "
+        "if one of those landed early, this test failing is the alarm."
     )
 
 
@@ -702,12 +715,28 @@ def test_get_cards_rls_isolates_users(authed_user_a, authed_user_b, card_a, card
 # ===========================================================================
 
 
-def test_execute_tool_dispatches_each_registered_tool(authed_user_a):
-    """Every registered tool must be invokable with the empty-input
-    contract the loop relies on at `loop.py:278` (`executor(user,
-    **tool_input)` where `tool_input` may be `{}`)."""
+def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
+    """Every registered tool must be invokable through execute_tool with
+    minimal valid input — the loop relies on the `executor(user,
+    **tool_input)` contract at `loop.py:278`.
+
+    Read tools accept `{}` (no required fields). Write tools have
+    required inputs by design; passing the schema's `required` set is
+    what proves the dispatch wiring works end-to-end."""
+    minimal_inputs: dict[str, dict[str, object]] = {
+        "propose_transaction": {
+            "merchant": "Dispatch Test",
+            "amount": 1,
+            "date": "2026-05-13",
+            "category": "Other",  # skip Gemini in this dispatch smoke test
+        },
+        # `Drugstores`/`year` is unused by other set_goal tests in this
+        # file so this smoke test won't race with their assertions on a
+        # shared session-scoped row.
+        "set_goal": {"amount": 999_999, "period": "year", "category": "Drugstores"},
+    }
     for name in TOOL_REGISTRY:
-        result = execute_tool(name, {}, authed_user_a)
+        result = execute_tool(name, minimal_inputs.get(name, {}), authed_user_a)
         assert isinstance(result, dict)
 
 
@@ -717,6 +746,278 @@ def test_execute_tool_unknown_name_raises_keyerror(authed_user_a):
     that recovery path depends on."""
     with pytest.raises(KeyError):
         execute_tool("phantom_tool", {}, authed_user_a)
+
+
+# ===========================================================================
+# propose_transaction
+# ===========================================================================
+
+
+def test_propose_transaction_fills_category_via_gemini(
+    authed_user_a, user_a, monkeypatch
+):
+    """Gemini-suggested category lands in BOTH `category` and
+    `gemini_suggestion` — they must start equal so the confirm endpoint's
+    learning loop (app/routes/transactions.py:97-101) can detect a user
+    edit later by comparing the two."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
+    )
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Trader Joe's",
+        amount=47,
+        date="2026-05-13",
+    )
+    assert result["category"] == "Groceries"
+    assert result["gemini_suggestion"] == "Groceries"
+    # Merchant comes back lowercased + whitespace-normalized.
+    assert result["merchant"] == "trader joe's"
+    # Fresh client_request_id minted by the tool.
+    uuid.UUID(result["client_request_id"])
+    # No actual write to transactions — verify the user's table has no
+    # row for this client_request_id.
+    rows = _transactions_by_client_request_id(user_a, result["client_request_id"])
+    assert rows == []
+
+
+def test_propose_transaction_user_supplied_category_skips_gemini(
+    authed_user_a, monkeypatch
+):
+    """When Claude pre-fills `category` from explicit user text ("spent
+    $7 on coffee at Blue Bottle"), the tool must NOT call Gemini and must
+    set `gemini_suggestion=None` — there is no Gemini baseline to learn
+    against in this branch."""
+    called = {"n": 0}
+
+    def _spy(*_args, **_kwargs):
+        """Track categorize() invocations to assert it stays uncalled."""
+        called["n"] += 1
+        raise AssertionError("categorize() must not be called when category is supplied")
+
+    monkeypatch.setattr(tools_module, "categorize", _spy)
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Blue Bottle",
+        amount=7,
+        date="2026-05-13",
+        category="Coffee Shops",
+    )
+    assert result["category"] == "Coffee Shops"
+    assert result["gemini_suggestion"] is None
+    assert called["n"] == 0
+
+
+def test_propose_transaction_falls_back_to_other_on_gemini_error(
+    authed_user_a, monkeypatch
+):
+    """Gemini failure must not break the proposal flow. Fall back to
+    `category="Other"` and `gemini_suggestion=None`; categorize() already
+    wrote its own ai_call_log failure row before raising."""
+    def _raise(*_args, **_kwargs):
+        """Raise GeminiProviderError to exercise the fallback branch."""
+        raise GeminiProviderError("simulated provider error")
+
+    monkeypatch.setattr(tools_module, "categorize", _raise)
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Mystery Place",
+        amount=9.99,
+        date="2026-05-13",
+    )
+    assert result["category"] == "Other"
+    assert result["gemini_suggestion"] is None
+
+
+def test_propose_transaction_preserves_real_card_id(
+    authed_user_a, card_a, monkeypatch
+):
+    """A card_id the user actually owns must pass through to the
+    proposal. The defensive lookup confirms ownership via the user's
+    RLS-scoped client and leaves card_id untouched."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.8),
+    )
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Test Diner",
+        amount=20,
+        date="2026-05-13",
+        card_id=card_a,
+    )
+    assert result["card_id"] == card_a
+
+
+def test_propose_transaction_drops_hallucinated_card_id(
+    authed_user_a, monkeypatch
+):
+    """A card_id that doesn't exist must be dropped to None rather than
+    echoed back. Otherwise the confirm endpoint's `_assert_card_owned`
+    would 403 after the user taps "looks right" — a strictly worse
+    failure moment than the parse card prompting "pick a card."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
+    )
+    bogus = str(uuid.uuid4())
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Halluci-Diner",
+        amount=20,
+        date="2026-05-13",
+        card_id=bogus,
+    )
+    assert result["card_id"] is None
+
+
+def test_propose_transaction_drops_inactive_card_id(
+    authed_user_a, user_a, monkeypatch
+):
+    """A soft-deleted card (`active=false`) is invisible to `get_cards`
+    but its UUID can still surface to Claude through replayed
+    conversation history. The defensive guard must drop it the same way
+    it drops a hallucinated UUID — the user closed the card; new chat-
+    entered transactions should not land on it."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
+    )
+    client = supabase_for_user(user_a.jwt)
+    inactive_card_id = (
+        client.table("cards")
+        .insert({
+            "user_id": user_a.id,
+            "name": f"Closed-{_tag()}",
+            "issuer": "Citi",
+            "program": "TYP",
+            "active": False,
+        })
+        .execute()
+        .data[0]["id"]
+    )
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Inactive-Card-Test",
+        amount=20,
+        date="2026-05-13",
+        card_id=inactive_card_id,
+    )
+    assert result["card_id"] is None
+
+
+def test_propose_transaction_drops_cross_user_card_id(
+    authed_user_a, card_b, monkeypatch
+):
+    """User A passing user B's card_id must look identical to a
+    hallucinated UUID — RLS makes the cross-user row invisible to user A's
+    client, the defensive lookup returns no rows, and card_id drops to
+    None. This is the property that makes "drop on miss" safe even under
+    a misbehaving model."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
+    )
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Cross-User",
+        amount=20,
+        date="2026-05-13",
+        card_id=card_b,
+    )
+    assert result["card_id"] is None
+
+
+def test_propose_transaction_does_not_write_to_transactions(
+    authed_user_a, user_a, monkeypatch
+):
+    """Belt-and-suspenders with the structural invariant guard: invoke
+    the tool, count rows in `transactions` before and after, assert
+    delta is zero."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
+    )
+    before = _count_transactions(user_a)
+    propose_transaction(
+        authed_user_a,
+        merchant="No-Write Market",
+        amount=11,
+        date="2026-05-13",
+    )
+    after = _count_transactions(user_a)
+    assert after == before
+
+
+# ===========================================================================
+# set_goal
+# ===========================================================================
+
+
+def test_set_goal_idempotent_overwrite(authed_user_a, user_a):
+    """Two `set_goal` calls for the same (category, period) collapse to
+    one row, with the second call's `amount` winning. The unique
+    constraint + PostgREST upsert encode "latest wins" at the schema
+    layer so no reader has to remember the rule."""
+    set_goal(authed_user_a, category="Dining", amount=400, period="month")
+    second = set_goal(authed_user_a, category="Dining", amount=300, period="month")
+
+    rows = _goal_rows(user_a, category="Dining", period="month")
+    assert len(rows) == 1
+    assert Decimal(str(rows[0]["amount"])) == Decimal("300")
+    assert rows[0]["id"] == second["id"]
+
+
+def test_set_goal_null_category_overall_budget_is_idempotent(
+    authed_user_a, user_a
+):
+    """The NULLS NOT DISTINCT constraint folds two `category=None` calls
+    into the same unique-bucket. Without it, Postgres's default
+    NULL-distinct semantics would let the overall-budget slot duplicate."""
+    set_goal(authed_user_a, amount=2000, period="month")
+    set_goal(authed_user_a, amount=2500, period="month")
+
+    rows = _goal_rows(user_a, category=None, period="month")
+    assert len(rows) == 1
+    assert Decimal(str(rows[0]["amount"])) == Decimal("2500")
+
+
+def test_set_goal_distinct_slots_coexist(authed_user_a, user_a):
+    """Different `(category, period)` combinations are legitimately
+    different goals and must all coexist. The constraint only collapses
+    duplicate dials, not different dials."""
+    set_goal(authed_user_a, category="Travel", amount=500, period="month")
+    set_goal(authed_user_a, category="Travel", amount=5000, period="year")
+    set_goal(authed_user_a, category="Gas", amount=200, period="month")
+
+    travel_month = _goal_rows(user_a, category="Travel", period="month")
+    travel_year = _goal_rows(user_a, category="Travel", period="year")
+    gas_month = _goal_rows(user_a, category="Gas", period="month")
+
+    assert len(travel_month) == 1 and Decimal(str(travel_month[0]["amount"])) == Decimal("500")
+    assert len(travel_year) == 1 and Decimal(str(travel_year[0]["amount"])) == Decimal("5000")
+    assert len(gas_month) == 1 and Decimal(str(gas_month[0]["amount"])) == Decimal("200")
+
+
+def test_set_goal_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b):
+    """User B's set_goal for the same (category, period) does NOT
+    update or overwrite user A's row — RLS scopes the upsert by JWT, so
+    two distinct rows result, one per user."""
+    set_goal(authed_user_a, category="Streaming", amount=15, period="month")
+    set_goal(authed_user_b, category="Streaming", amount=25, period="month")
+
+    a_rows = _goal_rows(user_a, category="Streaming", period="month")
+    b_rows = _goal_rows(user_b, category="Streaming", period="month")
+
+    assert len(a_rows) == 1 and Decimal(str(a_rows[0]["amount"])) == Decimal("15")
+    assert len(b_rows) == 1 and Decimal(str(b_rows[0]["amount"])) == Decimal("25")
 
 
 # ---------------------------------------------------------------------------
@@ -750,6 +1051,37 @@ def _seed_transaction(
     if card_id is not None:
         row["card_id"] = card_id
     return client.table("transactions").insert(row).execute().data[0]["id"]
+
+def _transactions_by_client_request_id(user, client_request_id: str) -> list[dict]:
+    """Look up transactions by client_request_id under the user's RLS scope."""
+    client = supabase_for_user(user.jwt)
+    return (
+        client.table("transactions")
+        .select("id")
+        .eq("client_request_id", client_request_id)
+        .execute()
+        .data
+        or []
+    )
+
+def _count_transactions(user) -> int:
+    """Return the row count visible to this user via RLS."""
+    client = supabase_for_user(user.jwt)
+    # PostgREST count via a HEAD-style call; the python client exposes
+    # count via .select(count=...). Falling back to len() of a small page
+    # is fine — the propose_transaction tests don't seed at scale.
+    resp = client.table("transactions").select("id").execute()
+    return len(resp.data or [])
+
+def _goal_rows(user, *, category: str | None, period: str) -> list[dict]:
+    """Fetch goal rows matching (category, period) under the user's RLS scope."""
+    client = supabase_for_user(user.jwt)
+    query = client.table("goals").select("*").eq("period", period)
+    if category is None:
+        query = query.is_("category", "null")
+    else:
+        query = query.eq("category", category)
+    return query.execute().data or []
 
 def _seed_subscription(
     user,
