@@ -33,6 +33,121 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 os.environ.setdefault("GEMINI_MODEL_DEFAULT", "gemini-2.5-flash")
 
 
+@dataclass(frozen=True)
+class TestUser:
+    """Represent TestUser."""
+    id: str
+    email: str
+    password: str
+    jwt: str
+    # Per-user device id baked into the fixture so tests can include the
+    # `X-Device-Id` header that authenticated routes (post-Day-7) require.
+    # Populated for the bootstrapped session-scoped users_a/_b; left None on
+    # raw users (`user_unbootstrapped`) so auth-route tests can exercise the
+    # pre-bootstrap state.
+    device_id: str | None = None
+
+
+@pytest.fixture(scope="session")
+def supabase_env(_supabase_stack_ready) -> dict[str, str]:
+    """Provide supabase env."""
+    return {
+        "url": os.environ["SUPABASE_URL"],
+        "anon_key": os.environ["SUPABASE_ANON_KEY"],
+        "service_role_key": os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+    }
+
+
+@pytest.fixture(scope="session")
+def admin_client(supabase_env) -> Client:
+    """Provide admin client."""
+    return create_client(supabase_env["url"], supabase_env["service_role_key"])
+
+
+@pytest.fixture(scope="session")
+def user_a(admin_client, supabase_env):
+    """Provide user a."""
+    raw = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "a")
+    user = _bootstrap_user(raw, device_id=f"dev-a-{uuid.uuid4().hex[:8]}")
+    yield user
+    _delete_user(admin_client, user.id)
+
+
+@pytest.fixture(scope="session")
+def user_b(admin_client, supabase_env):
+    """Provide user b."""
+    raw = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "b")
+    user = _bootstrap_user(raw, device_id=f"dev-b-{uuid.uuid4().hex[:8]}")
+    yield user
+    _delete_user(admin_client, user.id)
+
+
+@pytest.fixture
+def user_unbootstrapped(admin_client, supabase_env):
+    """Function-scoped fresh user with no `users_meta` row — used by the
+    auth-route tests that exercise the bootstrap / claim_device / 409
+    paths. Cleaned up after each test so a single suite run can spin up
+    several without bumping into stale state."""
+    raw = _make_user(
+        admin_client,
+        supabase_env["url"],
+        supabase_env["anon_key"],
+        f"fresh-{uuid.uuid4().hex[:6]}",
+    )
+    yield raw
+    _delete_user(admin_client, raw.id)
+
+
+# Per-user card fixtures — shared across the RLS contract suite and the
+# Day 5 transactions suite. `subscriptions` requires `card_id NOT NULL`, and
+# `transactions.card_id` is the FK that the Day 5 confirm-path ownership
+# check validates.
+@pytest.fixture(scope="session")
+def card_a(user_a) -> str:
+    """Provide card a."""
+    from app.db import supabase_for_user
+
+    client = supabase_for_user(user_a.jwt)
+    resp = (
+        client.table("cards")
+        .insert(
+            {
+                "user_id": user_a.id,
+                "name": "A card",
+                "issuer": "Chase",
+                "program": "UR",
+            }
+        )
+        .execute()
+    )
+    return resp.data[0]["id"]
+
+
+@pytest.fixture(scope="session")
+def card_b(user_b) -> str:
+    """Provide card b."""
+    from app.db import supabase_for_user
+
+    client = supabase_for_user(user_b.jwt)
+    resp = (
+        client.table("cards")
+        .insert(
+            {
+                "user_id": user_b.id,
+                "name": "B card",
+                "issuer": "Amex",
+                "program": "MR",
+            }
+        )
+        .execute()
+    )
+    return resp.data[0]["id"]
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
 def _populate_env_from_supabase_status() -> None:
     """Fill in SUPABASE_* env vars from the local CLI if they're missing.
 
@@ -65,15 +180,15 @@ def _populate_env_from_supabase_status() -> None:
     if brace < 0:
         return
     try:
-        status = json.loads(stdout[brace:])
+        status, _ = json.JSONDecoder().raw_decode(stdout[brace:])
     except json.JSONDecodeError:
         return
     for env_name, status_key in needed.items():
         if not os.environ.get(env_name) and status.get(status_key):
             os.environ[env_name] = status[status_key]
 
-
 def _assert_local_supabase() -> None:
+    """Support assert local supabase."""
     url = os.environ.get("SUPABASE_URL", "")
     host = urlparse(url).hostname or ""
     if host not in _LOCAL_HOSTS:
@@ -84,21 +199,6 @@ def _assert_local_supabase() -> None:
             "creates and deletes users; running it against the hosted "
             "project would pollute real data."
         )
-
-
-@dataclass(frozen=True)
-class TestUser:
-    id: str
-    email: str
-    password: str
-    jwt: str
-    # Per-user device id baked into the fixture so tests can include the
-    # `X-Device-Id` header that authenticated routes (post-Day-7) require.
-    # Populated for the bootstrapped session-scoped users_a/_b; left None on
-    # raw users (`user_unbootstrapped`) so auth-route tests can exercise the
-    # pre-bootstrap state.
-    device_id: str | None = None
-
 
 @pytest.fixture(scope="session")
 def _supabase_stack_ready() -> None:
@@ -111,22 +211,8 @@ def _supabase_stack_ready() -> None:
     _populate_env_from_supabase_status()
     _assert_local_supabase()
 
-
-@pytest.fixture(scope="session")
-def supabase_env(_supabase_stack_ready) -> dict[str, str]:
-    return {
-        "url": os.environ["SUPABASE_URL"],
-        "anon_key": os.environ["SUPABASE_ANON_KEY"],
-        "service_role_key": os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-    }
-
-
-@pytest.fixture(scope="session")
-def admin_client(supabase_env) -> Client:
-    return create_client(supabase_env["url"], supabase_env["service_role_key"])
-
-
 def _make_user(admin_client: Client, anon_url: str, anon_key: str, tag: str) -> TestUser:
+    """Support make user."""
     email = f"rls-{tag}-{uuid.uuid4().hex[:12]}@tameru.local"
     password = f"test-{uuid.uuid4().hex}"
     created = admin_client.auth.admin.create_user(
@@ -137,7 +223,6 @@ def _make_user(admin_client: Client, anon_url: str, anon_key: str, tag: str) -> 
     session = anon.auth.sign_in_with_password({"email": email, "password": password})
     jwt = session.session.access_token
     return TestUser(id=user_id, email=email, password=password, jwt=jwt)
-
 
 def _bootstrap_user(user: TestUser, device_id: str, currency: str = "USD") -> TestUser:
     """Insert the user's `users_meta` row so the Day 7 device gate accepts
@@ -162,86 +247,10 @@ def _bootstrap_user(user: TestUser, device_id: str, currency: str = "USD") -> Te
         device_id=device_id,
     )
 
-
 def _delete_user(admin_client: Client, user_id: str) -> None:
+    """Support delete user."""
     try:
         admin_client.auth.admin.delete_user(user_id)
     except Exception:
         # Best-effort teardown — don't fail the session if cleanup hiccups.
         pass
-
-
-@pytest.fixture(scope="session")
-def user_a(admin_client, supabase_env):
-    raw = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "a")
-    user = _bootstrap_user(raw, device_id=f"dev-a-{uuid.uuid4().hex[:8]}")
-    yield user
-    _delete_user(admin_client, user.id)
-
-
-@pytest.fixture(scope="session")
-def user_b(admin_client, supabase_env):
-    raw = _make_user(admin_client, supabase_env["url"], supabase_env["anon_key"], "b")
-    user = _bootstrap_user(raw, device_id=f"dev-b-{uuid.uuid4().hex[:8]}")
-    yield user
-    _delete_user(admin_client, user.id)
-
-
-@pytest.fixture
-def user_unbootstrapped(admin_client, supabase_env):
-    """Function-scoped fresh user with no `users_meta` row — used by the
-    auth-route tests that exercise the bootstrap / claim_device / 409
-    paths. Cleaned up after each test so a single suite run can spin up
-    several without bumping into stale state."""
-    raw = _make_user(
-        admin_client,
-        supabase_env["url"],
-        supabase_env["anon_key"],
-        f"fresh-{uuid.uuid4().hex[:6]}",
-    )
-    yield raw
-    _delete_user(admin_client, raw.id)
-
-
-# Per-user card fixtures — shared across the RLS contract suite and the
-# Day 5 transactions suite. `subscriptions` requires `card_id NOT NULL`, and
-# `transactions.card_id` is the FK that the Day 5 confirm-path ownership
-# check validates.
-@pytest.fixture(scope="session")
-def card_a(user_a) -> str:
-    from app.db import supabase_for_user
-
-    client = supabase_for_user(user_a.jwt)
-    resp = (
-        client.table("cards")
-        .insert(
-            {
-                "user_id": user_a.id,
-                "name": "A card",
-                "issuer": "Chase",
-                "program": "UR",
-            }
-        )
-        .execute()
-    )
-    return resp.data[0]["id"]
-
-
-@pytest.fixture(scope="session")
-def card_b(user_b) -> str:
-    from app.db import supabase_for_user
-
-    client = supabase_for_user(user_b.jwt)
-    resp = (
-        client.table("cards")
-        .insert(
-            {
-                "user_id": user_b.id,
-                "name": "B card",
-                "issuer": "Amex",
-                "program": "MR",
-            }
-        )
-        .execute()
-    )
-    return resp.data[0]["id"]

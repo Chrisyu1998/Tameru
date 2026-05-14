@@ -49,6 +49,7 @@ class UsageCapExceeded(Exception):
     message = "You've used your daily AI quota — resets at midnight UTC."
 
     def __init__(self, used: int, cap: int) -> None:
+        """Support the instance."""
         super().__init__(f"daily cap exceeded: used={used} cap={cap}")
         self.used = used
         self.cap = cap
@@ -63,6 +64,24 @@ class ProviderRateLimited(Exception):
     message = "AI provider is temporarily overloaded — try again in a minute."
 
 
+def assert_within_usage_cap(user: AuthedUser) -> None:
+    """Raise `UsageCapExceeded` if this user is already at/over the cap.
+
+    Called once at the start of `run_turn`. By design we do NOT check
+    again mid-turn — once a turn begins, finishing it is cheaper than
+    aborting and explaining, and the overshoot is bounded at one turn.
+    See DESIGN.md §7.3 + the Day 9a prompt for the trade-off rationale.
+    """
+    cap = _daily_cap_tokens()
+    used = _today_chat_tokens_used(user)
+    if used >= cap:
+        raise UsageCapExceeded(used=used, cap=cap)
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
 def _daily_cap_tokens() -> int:
     """Read the cap from env on every call so tests / operators can flip
     it without a process restart. Falls back to the DESIGN.md §11.2
@@ -75,7 +94,6 @@ def _daily_cap_tokens() -> int:
         return int(raw)
     except ValueError:
         return DEFAULT_DAILY_CAP_TOKENS
-
 
 def _today_chat_tokens_used(user: AuthedUser) -> int:
     """Sum today's `chat_turn` input+output tokens for this user.
@@ -105,7 +123,6 @@ def _today_chat_tokens_used(user: AuthedUser) -> int:
     rows = resp.data or []
     return sum(int(r["input_tokens"]) + int(r["output_tokens"]) for r in rows)
 
-
 def _utc_midnight_iso() -> str:
     """ISO timestamp for the start of today in UTC.
 
@@ -120,17 +137,3 @@ def _utc_midnight_iso() -> str:
         tzinfo=_dt.timezone.utc,
     )
     return midnight.isoformat()
-
-
-def assert_within_usage_cap(user: AuthedUser) -> None:
-    """Raise `UsageCapExceeded` if this user is already at/over the cap.
-
-    Called once at the start of `run_turn`. By design we do NOT check
-    again mid-turn — once a turn begins, finishing it is cheaper than
-    aborting and explaining, and the overshoot is bounded at one turn.
-    See DESIGN.md §7.3 + the Day 9a prompt for the trade-off rationale.
-    """
-    cap = _daily_cap_tokens()
-    used = _today_chat_tokens_used(user)
-    if used >= cap:
-        raise UsageCapExceeded(used=used, cap=cap)

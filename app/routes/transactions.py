@@ -39,68 +39,6 @@ router = APIRouter(prefix="/transactions", tags=["transactions"])
 _DATE_FUTURE_SLACK = timedelta(days=1)
 
 
-def _domain_error(code: str, message: str) -> HTTPException:
-    # 422 per Day 5 prompt; the name `HTTP_422_UNPROCESSABLE_ENTITY` was
-    # renamed to `HTTP_422_UNPROCESSABLE_CONTENT` in Starlette 0.40. Hard-
-    # code 422 so we stay on one name regardless of which lands first.
-    return HTTPException(status_code=422, detail={"code": code, "message": message})
-
-
-def _assert_card_owned(user: AuthedUser, card_id: UUID) -> None:
-    """RLS on `cards` returns empty for another user's card id; an absent
-    row here means either a non-existent id or a cross-tenant id. Both
-    should fail the same way — the error message doesn't distinguish so a
-    probing client can't enumerate other users' card ids."""
-    client = supabase_for_user(user.jwt)
-    resp = client.table("cards").select("id").eq("id", str(card_id)).execute()
-    if not resp.data:
-        raise _domain_error(
-            "invalid_card",
-            "card_id does not resolve to one of your cards",
-        )
-
-
-def _assert_date_within_bounds(d: date) -> None:
-    if d > date.today() + _DATE_FUTURE_SLACK:
-        raise _domain_error(
-            "invalid_date",
-            "date cannot be more than one day in the future",
-        )
-
-
-def _load_existing_by_client_request_id(
-    user: AuthedUser, client_request_id: UUID
-) -> TransactionRow | None:
-    client = supabase_for_user(user.jwt)
-    resp = (
-        client.table("transactions")
-        .select("*")
-        .eq("client_request_id", str(client_request_id))
-        .execute()
-    )
-    if resp.data:
-        return TransactionRow.model_validate(resp.data[0])
-    return None
-
-
-def _upsert_merchant_correction(
-    user: AuthedUser, merchant: str, category: str
-) -> None:
-    """One of two sites — the other is PATCH. Keep the upsert shape
-    identical so the "most recent correction wins" contract (§8.4) is
-    satisfied regardless of which surface recorded it."""
-    client = supabase_for_user(user.jwt)
-    client.table("merchant_category").upsert(
-        {
-            "user_id": str(user.user_id),
-            "merchant": normalize_merchant(merchant),
-            "category": category,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-        on_conflict="user_id,merchant",
-    ).execute()
-
-
 @router.post("/confirm", response_model=TransactionConfirmResponse)
 def confirm_transaction(
     proposal: TransactionConfirmRequest,
@@ -111,6 +49,7 @@ def confirm_transaction(
     # in entry_moment_insight(): the user either saw the insight on the
     # first confirm or has moved past it; re-firing is worse than silence
     # (DESIGN.md §6.2 step 7).
+    """Provide confirm transaction."""
     existing = _load_existing_by_client_request_id(user, proposal.client_request_id)
     if existing is not None:
         return TransactionConfirmResponse(transaction=existing, insight=None)
@@ -181,6 +120,7 @@ def get_transactions(
     limit: int = Query(default=DEFAULT_LIMIT, ge=1),
     offset: int = Query(default=0, ge=0),
 ) -> TransactionListResponse:
+    """Provide get transactions."""
     filters = TransactionFilters(
         card_id=card_id,
         category=category,
@@ -200,6 +140,7 @@ def get_transaction(
     transaction_id: UUID,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> TransactionRow:
+    """Provide get transaction."""
     client = supabase_for_user(user.jwt)
     resp = (
         client.table("transactions")
@@ -218,6 +159,7 @@ def patch_transaction(
     patch: TransactionPatchRequest,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> TransactionRow:
+    """Provide patch transaction."""
     client = supabase_for_user(user.jwt)
 
     # Load the existing row first — both for the 404 path and so we can
@@ -307,9 +249,75 @@ def delete_transaction(
     transaction_id: UUID,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> Response:
+    """Provide delete transaction."""
     client = supabase_for_user(user.jwt)
     client.table("transactions").delete().eq("id", str(transaction_id)).execute()
     # RLS makes "delete nonexistent" and "delete someone else's row" both
     # be no-ops — we return 204 in either case rather than leaking which
     # ids exist by 404-ing on one branch and 204-ing on the other.
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _domain_error(code: str, message: str) -> HTTPException:
+    # 422 per Day 5 prompt; the name `HTTP_422_UNPROCESSABLE_ENTITY` was
+    # renamed to `HTTP_422_UNPROCESSABLE_CONTENT` in Starlette 0.40. Hard-
+    # code 422 so we stay on one name regardless of which lands first.
+    """Support domain error."""
+    return HTTPException(status_code=422, detail={"code": code, "message": message})
+
+def _assert_card_owned(user: AuthedUser, card_id: UUID) -> None:
+    """RLS on `cards` returns empty for another user's card id; an absent
+    row here means either a non-existent id or a cross-tenant id. Both
+    should fail the same way — the error message doesn't distinguish so a
+    probing client can't enumerate other users' card ids."""
+    client = supabase_for_user(user.jwt)
+    resp = client.table("cards").select("id").eq("id", str(card_id)).execute()
+    if not resp.data:
+        raise _domain_error(
+            "invalid_card",
+            "card_id does not resolve to one of your cards",
+        )
+
+def _assert_date_within_bounds(d: date) -> None:
+    """Support assert date within bounds."""
+    if d > date.today() + _DATE_FUTURE_SLACK:
+        raise _domain_error(
+            "invalid_date",
+            "date cannot be more than one day in the future",
+        )
+
+def _load_existing_by_client_request_id(
+    user: AuthedUser, client_request_id: UUID
+) -> TransactionRow | None:
+    """Support load existing by client request id."""
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("transactions")
+        .select("*")
+        .eq("client_request_id", str(client_request_id))
+        .execute()
+    )
+    if resp.data:
+        return TransactionRow.model_validate(resp.data[0])
+    return None
+
+def _upsert_merchant_correction(
+    user: AuthedUser, merchant: str, category: str
+) -> None:
+    """One of two sites — the other is PATCH. Keep the upsert shape
+    identical so the "most recent correction wins" contract (§8.4) is
+    satisfied regardless of which surface recorded it."""
+    client = supabase_for_user(user.jwt)
+    client.table("merchant_category").upsert(
+        {
+            "user_id": str(user.user_id),
+            "merchant": normalize_merchant(merchant),
+            "category": category,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="user_id,merchant",
+    ).execute()

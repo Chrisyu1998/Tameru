@@ -54,34 +54,35 @@ _DEVICE_ID_MAX_LEN = 128
 
 
 class BootstrapRequest(BaseModel):
+    """Represent BootstrapRequest."""
     device_id: str = Field(min_length=1, max_length=_DEVICE_ID_MAX_LEN)
     home_currency: str
 
 
 class BootstrapResponse(BaseModel):
+    """Represent BootstrapResponse."""
     home_currency: str
     active_device_id: str
 
 
 class ClaimDeviceRequest(BaseModel):
+    """Represent ClaimDeviceRequest."""
     device_id: str = Field(min_length=1, max_length=_DEVICE_ID_MAX_LEN)
 
 
 class ClaimDeviceResponse(BaseModel):
+    """Represent ClaimDeviceResponse."""
     active_device_id: str
 
 
 class CheckDeviceResponse(BaseModel):
+    """Represent CheckDeviceResponse."""
     is_active: bool
     active_device_id: str | None
     # Reserved for a future "signed in on this device since X" UI; not
     # tracked as a column in v1, so always null today. Keeping the field
     # in the contract avoids a breaking response-shape change later.
     active_since: str | None
-
-
-def _domain_error(http_status: int, code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=http_status, detail={"code": code, "message": message})
 
 
 @router.post("/bootstrap", response_model=BootstrapResponse)
@@ -143,6 +144,7 @@ def claim_device(
     body: ClaimDeviceRequest,
     user: AuthedUser = Depends(get_current_user_jwt),
 ) -> ClaimDeviceResponse:
+    """Provide claim device."""
     client = supabase_for_user(user.jwt)
     # Update-only — never touches home_currency. The trigger guarantees
     # the column would refuse a change anyway, but not sending it in the
@@ -170,6 +172,7 @@ def check_device(
     device_id: str = Query(min_length=1, max_length=_DEVICE_ID_MAX_LEN),
     user: AuthedUser = Depends(get_current_user_jwt),
 ) -> CheckDeviceResponse:
+    """Provide check device."""
     client = supabase_for_user(user.jwt)
     resp = (
         client.table("users_meta")
@@ -189,3 +192,12 @@ def check_device(
         active_device_id=active,
         active_since=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _domain_error(http_status: int, code: str, message: str) -> HTTPException:
+    """Support domain error."""
+    return HTTPException(status_code=http_status, detail={"code": code, "message": message})

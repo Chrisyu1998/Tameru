@@ -47,42 +47,36 @@ from app.main import app
 
 
 class _Block(dict):
+    """Represent Block."""
     def model_dump(self) -> dict[str, Any]:
+        """Provide model dump."""
         return dict(self)
-
-
-def _text(text: str) -> _Block:
-    return _Block(type="text", text=text)
-
-
-def _tool_use(name: str, tool_input: dict[str, Any], use_id: str | None = None) -> _Block:
-    return _Block(
-        type="tool_use",
-        id=use_id or f"toolu_{uuid.uuid4().hex[:8]}",
-        name=name,
-        input=tool_input,
-    )
 
 
 @dataclass
 class _Usage:
+    """Represent Usage."""
     input_tokens: int = 100
     output_tokens: int = 20
 
 
 @dataclass
 class _MockMessage:
+    """Represent MockMessage."""
     content: list[_Block]
     stop_reason: str
     usage: _Usage = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        """Support post init."""
         if self.usage is None:
             self.usage = _Usage()
 
 
 class _ScriptedClient:
+    """Represent ScriptedClient."""
     def __init__(self, responses: list[_MockMessage]):
+        """Support the instance."""
         self._responses = list(responses)
         self.call_count = 0
         # Capture the messages payload of every call so tests can assert
@@ -91,7 +85,9 @@ class _ScriptedClient:
         outer = self
 
         class _Messages:
+            """Represent Messages."""
             def create(self, **kwargs: Any) -> _MockMessage:
+                """Provide create."""
                 outer.call_count += 1
                 # Deep-copy: the loop mutates the messages list it passed
                 # (appending the assistant response and tool_results) AFTER
@@ -115,79 +111,8 @@ class _ScriptedClient:
 
 @pytest.fixture
 def client() -> TestClient:
+    """Provide client."""
     return TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def _set_anthropic_api_key(monkeypatch):
-    """Loop's lazy client init checks ANTHROPIC_API_KEY even though we
-    monkeypatch the client. Set a dummy and reset the cached client so
-    a prior test's mock doesn't leak."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-real")
-    monkeypatch.setattr(loop_module, "_client", None)
-
-
-def _install_scripted_anthropic(monkeypatch, responses: list[_MockMessage]) -> _ScriptedClient:
-    scripted = _ScriptedClient(responses)
-    monkeypatch.setattr(loop_module, "_anthropic_client", lambda: scripted)
-    return scripted
-
-
-def _auth(user) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {user.jwt}",
-        "X-Device-Id": user.device_id or "",
-    }
-
-
-def _seed_transaction(
-    user, *, card_id: str, merchant: str, amount: str, category: str = "Dining"
-) -> str:
-    sb = supabase_for_user(user.jwt)
-    resp = (
-        sb.table("transactions")
-        .insert(
-            {
-                "user_id": user.id,
-                "card_id": card_id,
-                "merchant": merchant,
-                "amount": amount,
-                "date": "2026-04-01",
-                "category": category,
-                "source": "manual",
-                "client_request_id": str(uuid.uuid4()),
-            }
-        )
-        .execute()
-    )
-    return resp.data[0]["id"]
-
-
-def _chat_rows(user, conversation_id: str) -> list[dict[str, Any]]:
-    sb = supabase_for_user(user.jwt)
-    return (
-        sb.table("chat_messages")
-        .select("role, content_blocks, seq")
-        .eq("conversation_id", conversation_id)
-        # Order by seq, not created_at — see app/routes/chat.py for why.
-        .order("seq")
-        .execute()
-        .data
-        or []
-    )
-
-
-def _trace_rows(user, conversation_id: str) -> list[dict[str, Any]]:
-    sb = supabase_for_user(user.jwt)
-    return (
-        sb.table("chat_turn_trace")
-        .select("messages, seq")
-        .eq("conversation_id", conversation_id)
-        .order("seq")
-        .execute()
-        .data
-        or []
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -200,12 +125,14 @@ def test_empty_message_is_rejected(client, user_a, monkeypatch):
     # client error, which would still fail the test but for the wrong
     # reason. Pre-installing an empty script is harmless because we
     # expect 422 before the loop runs.
+    """Verify that empty message is rejected."""
     _install_scripted_anthropic(monkeypatch, [])
     resp = client.post("/chat/turn", headers=_auth(user_a), json={"message": ""})
     assert resp.status_code == 422
 
 
 def test_missing_message_is_rejected(client, user_a, monkeypatch):
+    """Verify that missing message is rejected."""
     _install_scripted_anthropic(monkeypatch, [])
     resp = client.post("/chat/turn", headers=_auth(user_a), json={})
     assert resp.status_code == 422
@@ -231,6 +158,7 @@ def test_extra_fields_are_rejected(client, user_a, monkeypatch):
 
 
 def test_missing_jwt_returns_401(client, user_a, monkeypatch):
+    """Verify that missing jwt returns 401."""
     _install_scripted_anthropic(monkeypatch, [])
     resp = client.post(
         "/chat/turn",
@@ -241,6 +169,7 @@ def test_missing_jwt_returns_401(client, user_a, monkeypatch):
 
 
 def test_missing_device_id_returns_structured_401(client, user_a, monkeypatch):
+    """Verify that missing device id returns structured 401."""
     _install_scripted_anthropic(monkeypatch, [])
     resp = client.post(
         "/chat/turn",
@@ -257,6 +186,7 @@ def test_missing_device_id_returns_structured_401(client, user_a, monkeypatch):
 
 
 def test_turn_mints_conversation_id_and_persists_both_tables(client, user_a, monkeypatch):
+    """Verify that turn mints conversation id and persists both tables."""
     _install_scripted_anthropic(
         monkeypatch,
         [_MockMessage(content=[_text("Sure thing.")], stop_reason="end_turn")],
@@ -293,6 +223,7 @@ def test_turn_mints_conversation_id_and_persists_both_tables(client, user_a, mon
 
 
 def test_two_hop_turn_returns_tool_calls(client, user_a, card_a, monkeypatch):
+    """Verify that two hop turn returns tool calls."""
     merchant = f"Nobu-{uuid.uuid4().hex[:6]}"
     _seed_transaction(user_a, card_id=card_a, merchant=merchant, amount="42.50")
 
@@ -334,6 +265,7 @@ def test_two_hop_turn_returns_tool_calls(client, user_a, card_a, monkeypatch):
 
 def test_conversation_id_reuse_loads_prior_history(client, user_a, monkeypatch):
     # Turn 1 — mint a conversation_id.
+    """Verify that conversation id reuse loads prior history."""
     _install_scripted_anthropic(
         monkeypatch,
         [_MockMessage(content=[_text("Got it.")], stop_reason="end_turn")],
@@ -382,6 +314,7 @@ def test_multi_hop_turn_replays_tool_context_on_followup(
     client, user_a, card_a, monkeypatch
 ):
     # Seed enough Dining for the first tool call to return a real number.
+    """Verify that multi hop turn replays tool context on followup."""
     _seed_transaction(
         user_a, card_id=card_a, merchant=f"Nobu-{uuid.uuid4().hex[:6]}", amount="42.50"
     )
@@ -482,6 +415,7 @@ def test_multi_hop_turn_replays_tool_context_on_followup(
 def test_loop_cap_returns_500_and_persists_nothing(client, user_a, monkeypatch):
     # Script MAX_LOOP_ITERATIONS + 1 so the assertion in _ScriptedClient
     # never fires — we want the loop's own cap to be the failure mode.
+    """Verify that loop cap returns 500 and persists nothing."""
     _install_scripted_anthropic(
         monkeypatch,
         [
@@ -538,4 +472,93 @@ def test_loop_cap_returns_500_and_persists_nothing(client, user_a, monkeypatch):
     ]
     assert contaminated == [], (
         "LOOP_LIMIT path persisted a chat_turn_trace row; it should drop the turn"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _text(text: str) -> _Block:
+    """Support text."""
+    return _Block(type="text", text=text)
+
+def _tool_use(name: str, tool_input: dict[str, Any], use_id: str | None = None) -> _Block:
+    """Support tool use."""
+    return _Block(
+        type="tool_use",
+        id=use_id or f"toolu_{uuid.uuid4().hex[:8]}",
+        name=name,
+        input=tool_input,
+    )
+
+@pytest.fixture(autouse=True)
+def _set_anthropic_api_key(monkeypatch):
+    """Loop's lazy client init checks ANTHROPIC_API_KEY even though we
+    monkeypatch the client. Set a dummy and reset the cached client so
+    a prior test's mock doesn't leak."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-real")
+    monkeypatch.setattr(loop_module, "_client", None)
+
+def _install_scripted_anthropic(monkeypatch, responses: list[_MockMessage]) -> _ScriptedClient:
+    """Support install scripted anthropic."""
+    scripted = _ScriptedClient(responses)
+    monkeypatch.setattr(loop_module, "_anthropic_client", lambda: scripted)
+    return scripted
+
+def _auth(user) -> dict[str, str]:
+    """Support auth."""
+    return {
+        "Authorization": f"Bearer {user.jwt}",
+        "X-Device-Id": user.device_id or "",
+    }
+
+def _seed_transaction(
+    user, *, card_id: str, merchant: str, amount: str, category: str = "Dining"
+) -> str:
+    """Support seed transaction."""
+    sb = supabase_for_user(user.jwt)
+    resp = (
+        sb.table("transactions")
+        .insert(
+            {
+                "user_id": user.id,
+                "card_id": card_id,
+                "merchant": merchant,
+                "amount": amount,
+                "date": "2026-04-01",
+                "category": category,
+                "source": "manual",
+                "client_request_id": str(uuid.uuid4()),
+            }
+        )
+        .execute()
+    )
+    return resp.data[0]["id"]
+
+def _chat_rows(user, conversation_id: str) -> list[dict[str, Any]]:
+    """Support chat rows."""
+    sb = supabase_for_user(user.jwt)
+    return (
+        sb.table("chat_messages")
+        .select("role, content_blocks, seq")
+        .eq("conversation_id", conversation_id)
+        # Order by seq, not created_at — see app/routes/chat.py for why.
+        .order("seq")
+        .execute()
+        .data
+        or []
+    )
+
+def _trace_rows(user, conversation_id: str) -> list[dict[str, Any]]:
+    """Support trace rows."""
+    sb = supabase_for_user(user.jwt)
+    return (
+        sb.table("chat_turn_trace")
+        .select("messages, seq")
+        .eq("conversation_id", conversation_id)
+        .order("seq")
+        .execute()
+        .data
+        or []
     )

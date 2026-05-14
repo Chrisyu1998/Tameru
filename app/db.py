@@ -19,13 +19,6 @@ import os
 from supabase import Client, create_client
 
 
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(f"{name} is not set. See .env.example.")
-    return value
-
-
 def supabase_for_user(user_jwt: str) -> Client:
     """Per-request Supabase client authorized as the JWT's subject.
 
@@ -55,3 +48,15 @@ def supabase_admin() -> Client:
     url = _require_env("SUPABASE_URL")
     service_role_key = _require_env("SUPABASE_SERVICE_ROLE_KEY")
     return create_client(url, service_role_key)
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _require_env(name: str) -> str:
+    """Support require env."""
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"{name} is not set. See .env.example.")
+    return value

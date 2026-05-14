@@ -24,11 +24,8 @@ from app.main import app
 
 @pytest.fixture
 def client() -> TestClient:
+    """Provide client."""
     return TestClient(app)
-
-
-def _bearer(user) -> dict[str, str]:
-    return {"Authorization": f"Bearer {user.jwt}"}
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +34,7 @@ def _bearer(user) -> dict[str, str]:
 
 
 def test_bootstrap_creates_users_meta_row(client, user_unbootstrapped):
+    """Verify that bootstrap creates users meta row."""
     device_id = f"dev-{uuid.uuid4().hex[:8]}"
     resp = client.post(
         "/auth/bootstrap",
@@ -60,6 +58,7 @@ def test_bootstrap_creates_users_meta_row(client, user_unbootstrapped):
 
 
 def test_bootstrap_second_call_returns_409(client, user_unbootstrapped):
+    """Verify that bootstrap second call returns 409."""
     device_id = f"dev-{uuid.uuid4().hex[:8]}"
     first = client.post(
         "/auth/bootstrap",
@@ -99,6 +98,7 @@ def test_bootstrap_with_different_currency_after_bootstrap_returns_409(
 
 
 def test_bootstrap_rejects_unsupported_currency(client, user_unbootstrapped):
+    """Verify that bootstrap rejects unsupported currency."""
     resp = client.post(
         "/auth/bootstrap",
         headers=_bearer(user_unbootstrapped),
@@ -109,6 +109,7 @@ def test_bootstrap_rejects_unsupported_currency(client, user_unbootstrapped):
 
 
 def test_bootstrap_requires_jwt(client):
+    """Verify that bootstrap requires jwt."""
     resp = client.post(
         "/auth/bootstrap",
         json={"device_id": "dev-1", "home_currency": "USD"},
@@ -122,6 +123,7 @@ def test_bootstrap_requires_jwt(client):
 
 
 def test_claim_device_updates_active_device_id(client, user_a):
+    """Verify that claim device updates active device id."""
     new_device = f"dev-claim-{uuid.uuid4().hex[:8]}"
     try:
         resp = client.post(
@@ -144,6 +146,7 @@ def test_claim_device_updates_active_device_id(client, user_a):
 
 
 def test_claim_device_without_bootstrap_returns_409(client, user_unbootstrapped):
+    """Verify that claim device without bootstrap returns 409."""
     resp = client.post(
         "/auth/claim_device",
         headers=_bearer(user_unbootstrapped),
@@ -159,6 +162,7 @@ def test_claim_device_without_bootstrap_returns_409(client, user_unbootstrapped)
 
 
 def test_check_device_matches(client, user_a):
+    """Verify that check device matches."""
     resp = client.get(
         "/auth/check_device",
         headers=_bearer(user_a),
@@ -171,6 +175,7 @@ def test_check_device_matches(client, user_a):
 
 
 def test_check_device_mismatch_returns_inactive(client, user_a):
+    """Verify that check device mismatch returns inactive."""
     resp = client.get(
         "/auth/check_device",
         headers=_bearer(user_a),
@@ -196,3 +201,10 @@ def test_check_device_unbootstrapped_returns_inactive(client, user_unbootstrappe
     assert body["active_device_id"] is None
 
 
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _bearer(user) -> dict[str, str]:
+    """Support bearer."""
+    return {"Authorization": f"Bearer {user.jwt}"}

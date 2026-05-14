@@ -129,104 +129,6 @@ class AssistantTurn:
 _client: Anthropic | None = None
 
 
-def _anthropic_client() -> Anthropic:
-    """Lazy singleton — matches the gemini integration pattern so import
-    of this module doesn't require ANTHROPIC_API_KEY at import time. Tests
-    monkeypatch _client (or the module-level alias) to inject mocks."""
-    global _client
-    if _client is None:
-        # The SDK reads ANTHROPIC_API_KEY from env automatically; surfacing
-        # the missing-key case here gives a sharper error than the SDK's
-        # default authentication failure on first call.
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise AgentLoopError("ANTHROPIC_API_KEY is not set")
-        _client = Anthropic()
-    return _client
-
-
-def _model_name() -> str:
-    return os.environ.get("ANTHROPIC_MODEL") or _DEFAULT_CHAT_MODEL
-
-
-def _block_to_dict(block: Any) -> dict[str, Any]:
-    """Anthropic SDK content blocks are pydantic models; chat_messages
-    persistence and tool_result construction both want plain dicts. Use
-    the SDK's serializer where possible, fall back to a manual shape so
-    SDK version drift doesn't bite."""
-    dump = getattr(block, "model_dump", None)
-    if callable(dump):
-        return dump()
-    # Best-effort fallback for mocks/stubs in tests.
-    return dict(block) if hasattr(block, "keys") else {"type": "unknown"}
-
-
-def _coerce_input(raw: Any) -> dict[str, Any]:
-    """tool_use.input is typed as dict in the SDK but mocks may pass a
-    JSON string — accept both. A non-dict, non-string is a programmer
-    error, not a runtime branch."""
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        return json.loads(raw)
-    raise TypeError(f"tool_use.input must be dict or JSON string, got {type(raw).__name__}")
-
-
-def _call_and_log(
-    *,
-    client: Anthropic,
-    user: AuthedUser,
-    model: str,
-    prompt_hash: str,
-    create_kwargs: dict[str, Any],
-) -> Any:
-    """One messages.create attempt + one ai_call_log row.
-
-    The audit row is written in a `finally` block so success and failure
-    each produce exactly one row per attempt. Day 8's load-bearing
-    invariant — "one ai_call_log row per messages.create call" — must
-    hold even on the retry path; otherwise rate-limit incidents and
-    provider latency disappear from cost / reliability analytics
-    (DESIGN.md §8.8).
-
-    This helper encapsulates what was previously inline at the top of
-    each loop iteration. Pulling it out lets the retry path (a second
-    call on `RateLimitError`) reuse the exact same logging shape
-    without duplicating the try/except/log code, and without collapsing
-    two API calls into one row the way `with_429_backoff` did.
-    """
-    start = time.perf_counter()
-    success = False
-    error_code: str | None = None
-    input_tokens = 0
-    output_tokens = 0
-    try:
-        response = client.messages.create(**create_kwargs)
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
-            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
-        success = True
-        return response
-    except Exception as exc:
-        error_code = type(exc).__name__
-        raise
-    finally:
-        log_ai_call(
-            user.jwt,
-            user_id=user.user_id,
-            provider="anthropic",
-            model=model,
-            task_type="chat_turn",
-            prompt_version=PROMPT_VERSION,
-            prompt_hash=prompt_hash,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            latency_ms=int((time.perf_counter() - start) * 1000),
-            success=success,
-            error_code=error_code,
-        )
-
-
 def run_turn(
     user: AuthedUser,
     conversation_history: list[dict[str, Any]],
@@ -371,3 +273,102 @@ def run_turn(
     raise AgentLoopLimitExceeded(
         f"agent loop did not converge within {MAX_LOOP_ITERATIONS} iterations"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _anthropic_client() -> Anthropic:
+    """Lazy singleton — matches the gemini integration pattern so import
+    of this module doesn't require ANTHROPIC_API_KEY at import time. Tests
+    monkeypatch _client (or the module-level alias) to inject mocks."""
+    global _client
+    if _client is None:
+        # The SDK reads ANTHROPIC_API_KEY from env automatically; surfacing
+        # the missing-key case here gives a sharper error than the SDK's
+        # default authentication failure on first call.
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise AgentLoopError("ANTHROPIC_API_KEY is not set")
+        _client = Anthropic()
+    return _client
+
+def _model_name() -> str:
+    """Support model name."""
+    return os.environ.get("ANTHROPIC_MODEL") or _DEFAULT_CHAT_MODEL
+
+def _block_to_dict(block: Any) -> dict[str, Any]:
+    """Anthropic SDK content blocks are pydantic models; chat_messages
+    persistence and tool_result construction both want plain dicts. Use
+    the SDK's serializer where possible, fall back to a manual shape so
+    SDK version drift doesn't bite."""
+    dump = getattr(block, "model_dump", None)
+    if callable(dump):
+        return dump()
+    # Best-effort fallback for mocks/stubs in tests.
+    return dict(block) if hasattr(block, "keys") else {"type": "unknown"}
+
+def _coerce_input(raw: Any) -> dict[str, Any]:
+    """tool_use.input is typed as dict in the SDK but mocks may pass a
+    JSON string — accept both. A non-dict, non-string is a programmer
+    error, not a runtime branch."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        return json.loads(raw)
+    raise TypeError(f"tool_use.input must be dict or JSON string, got {type(raw).__name__}")
+
+def _call_and_log(
+    *,
+    client: Anthropic,
+    user: AuthedUser,
+    model: str,
+    prompt_hash: str,
+    create_kwargs: dict[str, Any],
+) -> Any:
+    """One messages.create attempt + one ai_call_log row.
+
+    The audit row is written in a `finally` block so success and failure
+    each produce exactly one row per attempt. Day 8's load-bearing
+    invariant — "one ai_call_log row per messages.create call" — must
+    hold even on the retry path; otherwise rate-limit incidents and
+    provider latency disappear from cost / reliability analytics
+    (DESIGN.md §8.8).
+
+    This helper encapsulates what was previously inline at the top of
+    each loop iteration. Pulling it out lets the retry path (a second
+    call on `RateLimitError`) reuse the exact same logging shape
+    without duplicating the try/except/log code, and without collapsing
+    two API calls into one row the way `with_429_backoff` did.
+    """
+    start = time.perf_counter()
+    success = False
+    error_code: str | None = None
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        response = client.messages.create(**create_kwargs)
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        success = True
+        return response
+    except Exception as exc:
+        error_code = type(exc).__name__
+        raise
+    finally:
+        log_ai_call(
+            user.jwt,
+            user_id=user.user_id,
+            provider="anthropic",
+            model=model,
+            task_type="chat_turn",
+            prompt_version=PROMPT_VERSION,
+            prompt_hash=prompt_hash,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            success=success,
+            error_code=error_code,
+        )

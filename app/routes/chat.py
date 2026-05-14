@@ -55,6 +55,7 @@ HISTORY_TURN_LIMIT = 5
 
 
 class ChatTurnRequest(BaseModel):
+    """Represent ChatTurnRequest."""
     model_config = ConfigDict(extra="forbid")
 
     conversation_id: UUID | None = None
@@ -62,16 +63,69 @@ class ChatTurnRequest(BaseModel):
 
 
 class ChatToolCallResponse(BaseModel):
+    """Represent ChatToolCallResponse."""
     name: str
     input: dict[str, Any]
     result: dict[str, Any]
 
 
 class ChatTurnResponse(BaseModel):
+    """Represent ChatTurnResponse."""
     conversation_id: UUID
     assistant_text: str
     tool_calls: list[ChatToolCallResponse]
 
+
+@router.post("/turn", response_model=ChatTurnResponse)
+def chat_turn(
+    body: ChatTurnRequest,
+    user: AuthedUser = Depends(get_current_user_with_device),
+) -> ChatTurnResponse:
+    """Provide chat turn."""
+    conversation_id = body.conversation_id or uuid.uuid4()
+
+    history = _load_history(user, conversation_id) if body.conversation_id else []
+
+    try:
+        turn = run_turn(user, history, body.message)
+    except UsageCapExceeded as exc:
+        # Daily token cap — checked at turn entry by middleware. No
+        # Anthropic call fired. 429 + structured code; Day 10 renders
+        # the UX frame 16 amber card.
+        raise HTTPException(
+            status_code=429,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except ProviderRateLimited as exc:
+        # Anthropic 429'd us twice. The user isn't at fault; this is an
+        # upstream provider issue. 503 so frontends can offer "retry"
+        # rather than the cap treatment.
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except AgentLoopLimitExceeded as exc:
+        # Don't persist — a partial turn that hit the cap isn't a useful
+        # row to keep around (the assistant text is empty / nonsensical
+        # by definition). Surface as 500 with a structured code so the
+        # frontend can render a specific message.
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "LOOP_LIMIT", "message": str(exc)},
+        ) from exc
+
+    _persist_turn(user, conversation_id, body.message, turn)
+
+    return ChatTurnResponse(
+        conversation_id=conversation_id,
+        assistant_text=turn.assistant_text,
+        tool_calls=_to_response_tool_calls(turn.tool_calls),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
 
 def _load_history(user: AuthedUser, conversation_id: UUID) -> list[dict[str, Any]]:
     """Reconstruct the Anthropic-shaped message list from chat_turn_trace.
@@ -101,7 +155,6 @@ def _load_history(user: AuthedUser, conversation_id: UUID) -> list[dict[str, Any
     for row in rows:
         history.extend(row["messages"])
     return history
-
 
 def _persist_turn(
     user: AuthedUser,
@@ -149,55 +202,9 @@ def _persist_turn(
         },
     ]).execute()
 
-
 def _to_response_tool_calls(records: list[ToolCallRecord]) -> list[ChatToolCallResponse]:
+    """Support to response tool calls."""
     return [
         ChatToolCallResponse(name=r.name, input=r.input, result=r.result)
         for r in records
     ]
-
-
-@router.post("/turn", response_model=ChatTurnResponse)
-def chat_turn(
-    body: ChatTurnRequest,
-    user: AuthedUser = Depends(get_current_user_with_device),
-) -> ChatTurnResponse:
-    conversation_id = body.conversation_id or uuid.uuid4()
-
-    history = _load_history(user, conversation_id) if body.conversation_id else []
-
-    try:
-        turn = run_turn(user, history, body.message)
-    except UsageCapExceeded as exc:
-        # Daily token cap — checked at turn entry by middleware. No
-        # Anthropic call fired. 429 + structured code; Day 10 renders
-        # the UX frame 16 amber card.
-        raise HTTPException(
-            status_code=429,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
-    except ProviderRateLimited as exc:
-        # Anthropic 429'd us twice. The user isn't at fault; this is an
-        # upstream provider issue. 503 so frontends can offer "retry"
-        # rather than the cap treatment.
-        raise HTTPException(
-            status_code=503,
-            detail={"code": exc.code, "message": exc.message},
-        ) from exc
-    except AgentLoopLimitExceeded as exc:
-        # Don't persist — a partial turn that hit the cap isn't a useful
-        # row to keep around (the assistant text is empty / nonsensical
-        # by definition). Surface as 500 with a structured code so the
-        # frontend can render a specific message.
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "LOOP_LIMIT", "message": str(exc)},
-        ) from exc
-
-    _persist_turn(user, conversation_id, body.message, turn)
-
-    return ChatTurnResponse(
-        conversation_id=conversation_id,
-        assistant_text=turn.assistant_text,
-        tool_calls=_to_response_tool_calls(turn.tool_calls),
-    )

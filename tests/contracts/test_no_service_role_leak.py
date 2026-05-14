@@ -27,13 +27,9 @@ _FORBIDDEN_PATTERNS = [
 ]
 
 
-def _is_allowed(path: Path) -> bool:
-    rel = path.relative_to(APP_DIR)
-    return len(rel.parts) >= 2 and rel.parts[0] in ALLOWED_SUBDIRS
-
-
 def test_no_service_role_leak_in_app():
     # The definition site itself is allowed.
+    """Verify that no service role leak in app."""
     definition = (APP_DIR / "db.py").resolve()
 
     offenders: list[tuple[Path, str]] = []
@@ -53,3 +49,13 @@ def test_no_service_role_leak_in_app():
         "app/cron/ or scripts/, or refactor to use supabase_for_user. "
         f"Offenders: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _is_allowed(path: Path) -> bool:
+    """Support is allowed."""
+    rel = path.relative_to(APP_DIR)
+    return len(rel.parts) >= 2 and rel.parts[0] in ALLOWED_SUBDIRS

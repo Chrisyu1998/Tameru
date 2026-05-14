@@ -39,123 +39,18 @@ from app.db import supabase_for_user
 # ---------------------------------------------------------------------------
 
 
-def _tag() -> str:
-    return uuid.uuid4().hex[:8]
-
-
-def _row_cards(user_id: str, **_):
-    return {
-        "user_id": user_id,
-        "name": f"Card-{_tag()}",
-        "issuer": "Chase",
-        "program": "UR",
-    }
-
-
-def _row_transactions(user_id: str, **_):
-    return {
-        "user_id": user_id,
-        "merchant": f"Shop-{_tag()}",
-        "amount": 12.34,
-        "date": date.today().isoformat(),
-        "category": "groceries",
-        "source": "manual",
-    }
-
-
-def _row_subscriptions(user_id: str, *, card_id: str, **_):
-    return {
-        "user_id": user_id,
-        "card_id": card_id,
-        "name": f"Sub-{_tag()}",
-        "amount": 9.99,
-        "frequency": "monthly",
-        "start_date": date.today().isoformat(),
-        "next_billing_date": date.today().isoformat(),
-        "category": "entertainment",
-    }
-
-
-def _row_merchant_category(user_id: str, **_):
-    return {
-        "user_id": user_id,
-        "merchant": f"Merch-{_tag()}",
-        "category": "coffee",
-    }
-
-
-def _row_user_memory(user_id: str, **_):
-    return {
-        "user_id": user_id,
-        "fact": f"fact-{_tag()}",
-        "category": "spending_pattern",
-    }
-
-
-def _row_mcp_tokens(user_id: str, **_):
-    token_hash = hashlib.sha256(_tag().encode()).hexdigest()
-    return {
-        "user_id": user_id,
-        "token_hash": token_hash,
-        "name": f"token-{_tag()}",
-    }
-
-
-def _row_users_meta(user_id: str, **_):
-    # PK is user_id — one row per user. Session fixture ensures we only insert
-    # once per user per test run.
-    return {"user_id": user_id, "active_device_id": f"dev-{_tag()}"}
-
-
-def _row_chat_messages(user_id: str, **_):
-    # One row per turn; conversation_id is a plain UUID grouper. The
-    # update-isolation test mutates `role` (the only updatable text-ish
-    # field besides content_blocks); flipping role through the CHECK
-    # constraint requires a valid value.
-    return {
-        "user_id": user_id,
-        "conversation_id": str(uuid.uuid4()),
-        "role": "user",
-        "content_blocks": [{"type": "text", "text": f"msg-{_tag()}"}],
-    }
-
-
-def _row_chat_turn_trace(user_id: str, **_):
-    # One row per turn; `messages` is the full Anthropic message-list
-    # slice. The update-isolation test mutates `messages` (JSONB).
-    return {
-        "user_id": user_id,
-        "conversation_id": str(uuid.uuid4()),
-        "messages": [
-            {"role": "user", "content": f"hi-{_tag()}"},
-            {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
-        ],
-    }
-
-
 # (table_name, row_factory, pk_column, needs_card)
 USER_OWNED_TABLES = [
-    ("cards", _row_cards, "id", False),
-    ("transactions", _row_transactions, "id", False),
-    ("subscriptions", _row_subscriptions, "id", True),
-    ("merchant_category", _row_merchant_category, "id", False),
-    ("user_memory", _row_user_memory, "id", False),
-    ("mcp_tokens", _row_mcp_tokens, "id", False),
-    ("users_meta", _row_users_meta, "user_id", False),
-    ("chat_messages", _row_chat_messages, "id", False),
-    ("chat_turn_trace", _row_chat_turn_trace, "id", False),
+    ("cards", "_row_cards", "id", False),
+    ("transactions", "_row_transactions", "id", False),
+    ("subscriptions", "_row_subscriptions", "id", True),
+    ("merchant_category", "_row_merchant_category", "id", False),
+    ("user_memory", "_row_user_memory", "id", False),
+    ("mcp_tokens", "_row_mcp_tokens", "id", False),
+    ("users_meta", "_row_users_meta", "user_id", False),
+    ("chat_messages", "_row_chat_messages", "id", False),
+    ("chat_turn_trace", "_row_chat_turn_trace", "id", False),
 ]
-
-
-@pytest.fixture(scope="session")
-def _seed_users_meta_once(user_a):
-    """users_meta has user_id as PK. Upsert so this is idempotent regardless
-    of whether the parametrized read test already seeded the row."""
-    client = supabase_for_user(user_a.jwt)
-    client.table("users_meta").upsert(
-        {"user_id": user_a.id}, on_conflict="user_id"
-    ).execute()
-    return user_a.id
 
 
 @pytest.mark.parametrize(
@@ -166,18 +61,25 @@ def _seed_users_meta_once(user_a):
 def test_user_b_cannot_read_user_a_rows(
     table, factory, pk, needs_card, user_a, user_b, card_a
 ):
+    """Verify that user b cannot read user a rows."""
+    factory = globals()[factory]
     client_a = supabase_for_user(user_a.jwt)
     client_b = supabase_for_user(user_b.jwt)
 
     payload = factory(user_a.id, card_id=card_a)
-    ins = client_a.table(table).insert(payload).execute()
+    if table == "users_meta":
+        ins = client_a.table(table).upsert(payload, on_conflict=pk).execute()
+    else:
+        ins = client_a.table(table).insert(payload).execute()
     assert ins.data, f"user A failed to insert into {table}: {ins}"
+    row_key = ins.data[0][pk]
 
-    # Deliberately no `user_id` filter — RLS must return zero rows on its own.
+    # Deliberately no `user_id` filter — RLS may return user B's own rows,
+    # but it must not return the row user A just wrote.
     resp = client_b.table(table).select("*").execute()
-    assert resp.data == [], (
-        f"RLS leak: user B can read {table} rows owned by user A "
-        f"(got {len(resp.data)} rows)"
+    assert all(row.get(pk) != row_key for row in resp.data), (
+        f"RLS leak: user B can read user A's {table} row "
+        f"(pk={row_key}, returned {resp.data})"
     )
 
 
@@ -191,6 +93,8 @@ def test_user_b_cannot_read_user_a_rows(
 def test_user_b_cannot_update_user_a_rows(
     table, factory, pk, needs_card, user_a, user_b, card_a
 ):
+    """Verify that user b cannot update user a rows."""
+    factory = globals()[factory]
     client_a = supabase_for_user(user_a.jwt)
     client_b = supabase_for_user(user_b.jwt)
 
@@ -232,6 +136,7 @@ def test_user_b_cannot_update_user_a_rows(
 
 
 def test_user_b_cannot_update_user_a_users_meta(_seed_users_meta_once, user_a, user_b):
+    """Verify that user b cannot update user a users meta."""
     client_a = supabase_for_user(user_a.jwt)
     client_b = supabase_for_user(user_b.jwt)
 
@@ -259,6 +164,7 @@ def test_user_b_cannot_update_user_a_users_meta(_seed_users_meta_once, user_a, u
 
 
 def test_user_b_cannot_read_user_a_ai_call_log(admin_client, user_a, user_b):
+    """Verify that user b cannot read user a ai call log."""
     admin_client.table("ai_call_log").insert(
         {
             "user_id": user_a.id,
@@ -275,6 +181,7 @@ def test_user_b_cannot_read_user_a_ai_call_log(admin_client, user_a, user_b):
 
 
 def test_user_b_cannot_read_user_a_ai_call_log_daily(admin_client, user_a, user_b):
+    """Verify that user b cannot read user a ai call log daily."""
     admin_client.table("ai_call_log_daily").insert(
         {
             "date": date.today().isoformat(),
@@ -288,19 +195,6 @@ def test_user_b_cannot_read_user_a_ai_call_log_daily(admin_client, user_a, user_
     client_b = supabase_for_user(user_b.jwt)
     resp = client_b.table("ai_call_log_daily").select("*").execute()
     assert resp.data == [], "RLS leak: user B read user A's ai_call_log_daily rows"
-
-
-def _ai_call_log_row(user_id: str) -> dict:
-    # prompt_version tagged per row so we can find the exact row back later
-    # without worrying about other test rows for the same user.
-    return {
-        "user_id": user_id,
-        "provider": "anthropic",
-        "model": "claude-haiku-4-5",
-        "task_type": "chat_turn",
-        "prompt_version": f"rls-probe-{_tag()}",
-        "success": True,
-    }
 
 
 def test_user_a_can_insert_own_ai_call_log_row(user_a):
@@ -384,3 +278,125 @@ def test_user_a_cannot_delete_own_ai_call_log_row(user_a):
     assert fetched.data["id"] == row_id, (
         "ai_call_log row was deleted despite no DELETE policy"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _tag() -> str:
+    """Support tag."""
+    return uuid.uuid4().hex[:8]
+
+def _row_cards(user_id: str, **_):
+    """Support row cards."""
+    return {
+        "user_id": user_id,
+        "name": f"Card-{_tag()}",
+        "issuer": "Chase",
+        "program": "UR",
+    }
+
+def _row_transactions(user_id: str, **_):
+    """Support row transactions."""
+    return {
+        "user_id": user_id,
+        "merchant": f"Shop-{_tag()}",
+        "amount": 12.34,
+        "date": date.today().isoformat(),
+        "category": "groceries",
+        "source": "manual",
+    }
+
+def _row_subscriptions(user_id: str, *, card_id: str, **_):
+    """Support row subscriptions."""
+    return {
+        "user_id": user_id,
+        "card_id": card_id,
+        "name": f"Sub-{_tag()}",
+        "amount": 9.99,
+        "frequency": "monthly",
+        "start_date": date.today().isoformat(),
+        "next_billing_date": date.today().isoformat(),
+        "category": "entertainment",
+    }
+
+def _row_merchant_category(user_id: str, **_):
+    """Support row merchant category."""
+    return {
+        "user_id": user_id,
+        "merchant": f"Merch-{_tag()}",
+        "category": "coffee",
+    }
+
+def _row_user_memory(user_id: str, **_):
+    """Support row user memory."""
+    return {
+        "user_id": user_id,
+        "fact": f"fact-{_tag()}",
+        "category": "spending_pattern",
+    }
+
+def _row_mcp_tokens(user_id: str, **_):
+    """Support row mcp tokens."""
+    token_hash = hashlib.sha256(_tag().encode()).hexdigest()
+    return {
+        "user_id": user_id,
+        "token_hash": token_hash,
+        "name": f"token-{_tag()}",
+    }
+
+def _row_users_meta(user_id: str, **_):
+    # PK is user_id — one row per user. Session fixture ensures we only insert
+    # once per user per test run.
+    """Support row users meta."""
+    return {"user_id": user_id, "active_device_id": f"dev-{_tag()}"}
+
+def _row_chat_messages(user_id: str, **_):
+    # One row per turn; conversation_id is a plain UUID grouper. The
+    # update-isolation test mutates `role` (the only updatable text-ish
+    # field besides content_blocks); flipping role through the CHECK
+    # constraint requires a valid value.
+    """Support row chat messages."""
+    return {
+        "user_id": user_id,
+        "conversation_id": str(uuid.uuid4()),
+        "role": "user",
+        "content_blocks": [{"type": "text", "text": f"msg-{_tag()}"}],
+    }
+
+def _row_chat_turn_trace(user_id: str, **_):
+    # One row per turn; `messages` is the full Anthropic message-list
+    # slice. The update-isolation test mutates `messages` (JSONB).
+    """Support row chat turn trace."""
+    return {
+        "user_id": user_id,
+        "conversation_id": str(uuid.uuid4()),
+        "messages": [
+            {"role": "user", "content": f"hi-{_tag()}"},
+            {"role": "assistant", "content": [{"type": "text", "text": "ack"}]},
+        ],
+    }
+
+@pytest.fixture(scope="session")
+def _seed_users_meta_once(user_a):
+    """users_meta has user_id as PK. Upsert so this is idempotent regardless
+    of whether the parametrized read test already seeded the row."""
+    client = supabase_for_user(user_a.jwt)
+    client.table("users_meta").upsert(
+        {"user_id": user_a.id}, on_conflict="user_id"
+    ).execute()
+    return user_a.id
+
+def _ai_call_log_row(user_id: str) -> dict:
+    # prompt_version tagged per row so we can find the exact row back later
+    # without worrying about other test rows for the same user.
+    """Support ai call log row."""
+    return {
+        "user_id": user_id,
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "task_type": "chat_turn",
+        "prompt_version": f"rls-probe-{_tag()}",
+        "success": True,
+    }

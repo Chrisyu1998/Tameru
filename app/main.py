@@ -12,42 +12,9 @@ from app.routes import transactions as transactions_routes
 app = FastAPI(title="Tameru")
 
 
-def _cors_allowed_origins() -> list[str]:
-    """Explicit cross-origin allowlist for the Vite dev server and the
-    production Vercel frontend (DESIGN.md §5.3, §9.3).
-
-    - Local dev always allows http://localhost:5173.
-    - Production adds whatever FRONTEND_ORIGIN is set to in Railway
-      (e.g. https://tameru.app).
-
-    No wildcards, no *.vercel.app catch-all — any Vercel tenant could
-    otherwise reach the API. Preview-deploy URLs hit a staging backend
-    when/if staging exists; v1 does not ship one.
-    """
-    origins = ["http://localhost:5173"]
-    prod_origin = os.environ.get("FRONTEND_ORIGIN")
-    if prod_origin:
-        origins.append(prod_origin)
-    return origins
-
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_allowed_origins(),
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "X-Device-Id", "Content-Type"],
-    # Bearer tokens in the Authorization header — never cookies. Keeping
-    # credentials off sidesteps SameSite / third-party-cookie complexity.
-    allow_credentials=False,
-)
-
-app.include_router(auth_routes.router)
-app.include_router(transactions_routes.router)
-app.include_router(chat_routes.router)
-
-
 @app.get("/healthz")
 def healthz() -> dict[str, bool]:
+    """Provide healthz."""
     return {"ok": True}
 
 
@@ -76,3 +43,36 @@ def me(user: AuthedUser = Depends(get_current_user_jwt)) -> dict[str, str | None
         "email": user.email,
         "home_currency": home_currency,
     }
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+
+def _cors_allowed_origins() -> list[str]:
+    """Explicit cross-origin allowlist for dev and production frontends.
+
+    Local dev always allows the Vite server. Production adds
+    `FRONTEND_ORIGIN`, with no wildcard or `*.vercel.app` catch-all.
+    """
+    origins = ["http://localhost:5173"]
+    prod_origin = os.environ.get("FRONTEND_ORIGIN")
+    if prod_origin:
+        origins.append(prod_origin)
+    return origins
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_allowed_origins(),
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "X-Device-Id", "Content-Type"],
+    # Bearer tokens in the Authorization header — never cookies. Keeping
+    # credentials off sidesteps SameSite / third-party-cookie complexity.
+    allow_credentials=False,
+)
+
+app.include_router(auth_routes.router)
+app.include_router(transactions_routes.router)
+app.include_router(chat_routes.router)

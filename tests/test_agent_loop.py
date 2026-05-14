@@ -46,35 +46,26 @@ class _Block(dict):
     serialize path (which calls model_dump)."""
 
     def model_dump(self) -> dict[str, Any]:
+        """Provide model dump."""
         return dict(self)
-
-
-def _text(text: str) -> _Block:
-    return _Block(type="text", text=text)
-
-
-def _tool_use(name: str, tool_input: dict[str, Any], use_id: str | None = None) -> _Block:
-    return _Block(
-        type="tool_use",
-        id=use_id or f"toolu_{uuid.uuid4().hex[:8]}",
-        name=name,
-        input=tool_input,
-    )
 
 
 @dataclass
 class _Usage:
+    """Represent Usage."""
     input_tokens: int = 100
     output_tokens: int = 20
 
 
 @dataclass
 class _MockMessage:
+    """Represent MockMessage."""
     content: list[_Block]
     stop_reason: str
     usage: _Usage = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
+        """Support post init."""
         if self.usage is None:
             self.usage = _Usage()
 
@@ -86,13 +77,16 @@ class _ScriptedClient:
     calls raise so a runaway loop fails the test instead of hanging."""
 
     def __init__(self, responses: list[_MockMessage]):
+        """Support the instance."""
         self._responses = list(responses)
         self.call_count = 0
 
         outer = self
 
         class _Messages:
+            """Represent Messages."""
             def create(self, **_: Any) -> _MockMessage:
+                """Provide create."""
                 outer.call_count += 1
                 if not outer._responses:
                     raise AssertionError(
@@ -105,64 +99,11 @@ class _ScriptedClient:
 
 @pytest.fixture
 def authed_user(user_a) -> AuthedUser:
+    """Provide authed user."""
     return AuthedUser(
         jwt=user_a.jwt,
         user_id=UUID(user_a.id),
         email=user_a.email,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _set_anthropic_api_key(monkeypatch):
-    """The loop's lazy client init asserts ANTHROPIC_API_KEY is set even
-    though we monkeypatch the client itself. Set a dummy value so the
-    assertion path is exercised but we never make a real network call."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-real")
-    # Reset the module's cached client so a prior test's mock doesn't leak.
-    monkeypatch.setattr(loop_module, "_client", None)
-
-
-def _install_scripted_anthropic(monkeypatch, responses: list[_MockMessage]) -> _ScriptedClient:
-    scripted = _ScriptedClient(responses)
-    monkeypatch.setattr(loop_module, "_anthropic_client", lambda: scripted)
-    return scripted
-
-
-def _seed_transaction(
-    user, *, card_id: str, merchant: str, amount: str, category: str = "Dining"
-) -> str:
-    """Insert one transaction via the user's RLS-scoped client and return its id."""
-    client = supabase_for_user(user.jwt)
-    resp = (
-        client.table("transactions")
-        .insert(
-            {
-                "user_id": user.id,
-                "card_id": card_id,
-                "merchant": merchant,
-                "amount": amount,
-                "date": "2026-04-01",
-                "category": category,
-                "source": "manual",
-                "client_request_id": str(uuid.uuid4()),
-            }
-        )
-        .execute()
-    )
-    return resp.data[0]["id"]
-
-
-def _ai_call_log_chat_rows(user: AuthedUser) -> list[dict[str, Any]]:
-    client = supabase_for_user(user.jwt)
-    return (
-        client.table("ai_call_log")
-        .select("model, task_type, prompt_version, success, error_code")
-        .eq("user_id", str(user.user_id))
-        .eq("task_type", "chat_turn")
-        .order("timestamp", desc=True)
-        .execute()
-        .data
-        or []
     )
 
 
@@ -172,6 +113,7 @@ def _ai_call_log_chat_rows(user: AuthedUser) -> list[dict[str, Any]]:
 
 
 def test_one_hop_turn_returns_text(authed_user, monkeypatch):
+    """Verify that one hop turn returns text."""
     scripted = _install_scripted_anthropic(
         monkeypatch,
         [
@@ -204,6 +146,7 @@ def test_one_hop_turn_returns_text(authed_user, monkeypatch):
 def test_two_hop_turn_executes_tool_and_synthesizes(
     authed_user, user_a, card_a, monkeypatch
 ):
+    """Verify that two hop turn executes tool and synthesizes."""
     merchant = f"Nobu-{uuid.uuid4().hex[:6]}"
     _seed_transaction(user_a, card_id=card_a, merchant=merchant, amount="42.50")
     _seed_transaction(user_a, card_id=card_a, merchant=merchant, amount="17.50")
@@ -258,6 +201,7 @@ def test_loop_limit_enforced(authed_user, user_a, card_a, monkeypatch):
     # run forever if the cap weren't enforced. The +1 guarantees the
     # ScriptedClient never runs out of responses (which would cause an
     # AssertionError that would mask the real failure).
+    """Verify that loop limit enforced."""
     responses = [
         _MockMessage(
             content=[_tool_use("calculate_total", {})],
@@ -279,6 +223,7 @@ def test_loop_limit_enforced(authed_user, user_a, card_a, monkeypatch):
 
 
 def test_unknown_tool_recovers_via_error_result(authed_user, monkeypatch):
+    """Verify that unknown tool recovers via error result."""
     scripted = _install_scripted_anthropic(
         monkeypatch,
         [
@@ -302,3 +247,71 @@ def test_unknown_tool_recovers_via_error_result(authed_user, monkeypatch):
     assert scripted.call_count == 2
 
 
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _text(text: str) -> _Block:
+    """Support text."""
+    return _Block(type="text", text=text)
+
+def _tool_use(name: str, tool_input: dict[str, Any], use_id: str | None = None) -> _Block:
+    """Support tool use."""
+    return _Block(
+        type="tool_use",
+        id=use_id or f"toolu_{uuid.uuid4().hex[:8]}",
+        name=name,
+        input=tool_input,
+    )
+
+@pytest.fixture(autouse=True)
+def _set_anthropic_api_key(monkeypatch):
+    """The loop's lazy client init asserts ANTHROPIC_API_KEY is set even
+    though we monkeypatch the client itself. Set a dummy value so the
+    assertion path is exercised but we never make a real network call."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-real")
+    # Reset the module's cached client so a prior test's mock doesn't leak.
+    monkeypatch.setattr(loop_module, "_client", None)
+
+def _install_scripted_anthropic(monkeypatch, responses: list[_MockMessage]) -> _ScriptedClient:
+    """Support install scripted anthropic."""
+    scripted = _ScriptedClient(responses)
+    monkeypatch.setattr(loop_module, "_anthropic_client", lambda: scripted)
+    return scripted
+
+def _seed_transaction(
+    user, *, card_id: str, merchant: str, amount: str, category: str = "Dining"
+) -> str:
+    """Insert one transaction via the user's RLS-scoped client and return its id."""
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("transactions")
+        .insert(
+            {
+                "user_id": user.id,
+                "card_id": card_id,
+                "merchant": merchant,
+                "amount": amount,
+                "date": "2026-04-01",
+                "category": category,
+                "source": "manual",
+                "client_request_id": str(uuid.uuid4()),
+            }
+        )
+        .execute()
+    )
+    return resp.data[0]["id"]
+
+def _ai_call_log_chat_rows(user: AuthedUser) -> list[dict[str, Any]]:
+    """Support ai call log chat rows."""
+    client = supabase_for_user(user.jwt)
+    return (
+        client.table("ai_call_log")
+        .select("model, task_type, prompt_version, success, error_code")
+        .eq("user_id", str(user.user_id))
+        .eq("task_type", "chat_turn")
+        .order("timestamp", desc=True)
+        .execute()
+        .data
+        or []
+    )

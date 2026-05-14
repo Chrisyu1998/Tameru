@@ -20,34 +20,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.prompts.categories import ALLOWED_CATEGORIES
 
 
-def _validate_category(value: str) -> str:
-    if value not in ALLOWED_CATEGORIES:
-        raise ValueError(
-            f"category {value!r} is not in the closed enum (see app/prompts/categories.py)"
-        )
-    return value
-
-
-def _validate_positive_amount(value: Decimal) -> Decimal:
-    if value <= 0:
-        raise ValueError(f"amount must be > 0 (got {value})")
-    return value
-
-
-def _validate_merchant_nonblank(value: str) -> str:
-    """Strip leading/trailing whitespace and reject empty/whitespace-only.
-
-    `Field(min_length=1)` counts characters, not meaningful content — '   '
-    passes that check. We trim on the way in (trailing whitespace is almost
-    never intended user input) and reject the all-whitespace case outright.
-    Internal whitespace in a merchant name like 'Trader Joes' is preserved.
-    """
-    stripped = value.strip()
-    if not stripped:
-        raise ValueError("merchant cannot be empty or whitespace-only")
-    return stripped
-
-
 class TransactionProposal(BaseModel):
     """Wire shape for a chat-originated transaction create.
 
@@ -81,9 +53,32 @@ class TransactionProposal(BaseModel):
     gemini_suggestion: str | None = None
     client_request_id: UUID
 
-    _v_merchant = field_validator("merchant")(_validate_merchant_nonblank)
-    _v_category = field_validator("category")(_validate_category)
-    _v_amount = field_validator("amount")(_validate_positive_amount)
+    @field_validator("merchant")
+    @classmethod
+    def _v_merchant(cls, value: str) -> str:
+        """Strip leading/trailing whitespace and reject empty merchant names."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("merchant cannot be empty or whitespace-only")
+        return stripped
+
+    @field_validator("category")
+    @classmethod
+    def _v_category(cls, value: str) -> str:
+        """Reject categories outside Tameru's closed enum."""
+        if value not in ALLOWED_CATEGORIES:
+            raise ValueError(
+                f"category {value!r} is not in the closed enum (see app/prompts/categories.py)"
+            )
+        return value
+
+    @field_validator("amount")
+    @classmethod
+    def _v_amount(cls, value: Decimal) -> Decimal:
+        """Reject non-positive transaction amounts."""
+        if value <= 0:
+            raise ValueError(f"amount must be > 0 (got {value})")
+        return value
 
 
 class TransactionConfirmRequest(TransactionProposal):
@@ -130,17 +125,31 @@ class TransactionPatchRequest(BaseModel):
     @field_validator("merchant")
     @classmethod
     def _vp_merchant(cls, v: str | None) -> str | None:
-        return None if v is None else _validate_merchant_nonblank(v)
+        """Strip non-null merchant patches and reject empty names."""
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("merchant cannot be empty or whitespace-only")
+        return stripped
 
     @field_validator("category")
     @classmethod
     def _vp_category(cls, v: str | None) -> str | None:
-        return None if v is None else _validate_category(v)
+        """Reject non-null category patches outside the closed enum."""
+        if v is not None and v not in ALLOWED_CATEGORIES:
+            raise ValueError(
+                f"category {v!r} is not in the closed enum (see app/prompts/categories.py)"
+            )
+        return v
 
     @field_validator("amount")
     @classmethod
     def _vp_amount(cls, v: Decimal | None) -> Decimal | None:
-        return None if v is None else _validate_positive_amount(v)
+        """Reject non-null amount patches that are not positive."""
+        if v is not None and v <= 0:
+            raise ValueError(f"amount must be > 0 (got {v})")
+        return v
 
 
 class TransactionRow(BaseModel):

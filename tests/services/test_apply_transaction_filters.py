@@ -29,23 +29,29 @@ class _RecordingBuilder:
     calls: list[tuple[str, tuple[Any, ...]]] = field(default_factory=list)
 
     def _record(self, op: str, *args: Any) -> "_RecordingBuilder":
+        """Support record."""
         self.calls.append((op, args))
         return self
 
     def eq(self, col: str, value: Any) -> "_RecordingBuilder":
+        """Provide eq."""
         return self._record("eq", col, value)
 
     def ilike(self, col: str, pattern: str) -> "_RecordingBuilder":
+        """Provide ilike."""
         return self._record("ilike", col, pattern)
 
     def gte(self, col: str, value: Any) -> "_RecordingBuilder":
+        """Provide gte."""
         return self._record("gte", col, value)
 
     def lte(self, col: str, value: Any) -> "_RecordingBuilder":
+        """Provide lte."""
         return self._record("lte", col, value)
 
 
 def test_empty_filters_apply_no_constraints():
+    """Verify that empty filters apply no constraints."""
     builder = _RecordingBuilder()
     result = apply_transaction_filters(builder, TransactionFilters())
     assert result is builder
@@ -53,6 +59,7 @@ def test_empty_filters_apply_no_constraints():
 
 
 def test_each_filter_applies_exactly_once():
+    """Verify that each filter applies exactly once."""
     card_id = uuid4()
     builder = _RecordingBuilder()
     filters = TransactionFilters(

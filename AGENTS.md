@@ -1,10 +1,10 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project
 
-**Tameru** is a mobile-first PWA for spending intelligence. Manual transaction entry + AI-assisted categorization + agentic chat over your spending data + an MCP server. Multi-tenant from day one. **v1 scope: invite-only, ~10 friends and family, free for everyone, no Stripe, no paid tier** (DESIGN.md §3.3). A forward plan for conditional scaling to ~100 users with paid tier via Stripe is documented in DESIGN.md §17 — that plan is not v1 scope and only activates on an explicit later decision. The full design lives in `DESIGN.md` — read it before making non-trivial decisions. This file captures only the invariants future Claude instances will trip on if they don't know.
+**Tameru** is a mobile-first PWA for spending intelligence. Manual transaction entry + AI-assisted categorization + agentic chat over your spending data + an MCP server. Multi-tenant from day one. **v1 scope: invite-only, ~10 friends and family, free for everyone, no Stripe, no paid tier** (DESIGN.md §3.3). A forward plan for conditional scaling to ~100 users with paid tier via Stripe is documented in DESIGN.md §17 — that plan is not v1 scope and only activates on an explicit later decision. The full design lives in `DESIGN.md` — read it before making non-trivial decisions. This file captures only the invariants future Codex instances will trip on if they don't know.
 
 ## Stack
 
@@ -27,7 +27,7 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 
 1. **RLS is enforced via the user's JWT, not the service role.** FastAPI receives `Authorization: Bearer <user_jwt>` and instantiates a per-request Supabase client passing that JWT. Postgres enforces `auth.uid() = user_id` automatically. In v1, the `SUPABASE_SERVICE_ROLE_KEY` is reserved for **two callers only**: the `pg_cron` daily auto-logger (DB function, no app context) and Supabase CLI migrations. Application handlers never use the service role. If you find yourself reaching for it in a request handler, stop — you're about to bypass RLS. **Forward-plan addition (only if the §17 scaling plan activates):** a Stripe webhook handler would become a sanctioned third caller, because no user JWT is in scope for a Stripe-initiated request — it resolves `user_id` via `stripe_customer_id` on `users_meta`. Do not add this path until the scaling decision is made.
 
-2. **The Claude agent loop runs in FastAPI using the Messages API with `tool_use` blocks.** Not Claude Managed Agents (designed for long-running autonomous work in Anthropic's container — wrong fit for 4–6s chat turns and DB-backed tools). Not LangChain. Not the standalone Agent SDK as a wrapper. The loop is ~80 lines and lives in our process so the user's JWT is in scope when typed tools execute.
+2. **The Codex agent loop runs in FastAPI using the Messages API with `tool_use` blocks.** Not Codex Managed Agents (designed for long-running autonomous work in Anthropic's container — wrong fit for 4–6s chat turns and DB-backed tools). Not LangChain. Not the standalone Agent SDK as a wrapper. The loop is ~80 lines and lives in our process so the user's JWT is in scope when typed tools execute.
 
 3. **MCP server is read-only and uses per-user bearer tokens.** Tokens are 32 random bytes, stored as `sha256` in `mcp_tokens`, returned to the user once. No `add_transaction` over MCP in v1 — leaked tokens read data; they cannot mutate it.
 
@@ -39,7 +39,7 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 
 7. **PWA today. Expo and Capacitor rejected. Swift admitted as a possible future migration — not on the roadmap.** PWA is the ship target for v1 (~10-user invite-only) and remains the only surface unless and until a scaling decision changes that. Expo and Capacitor were evaluated and rejected (see DESIGN.md §10.3). Native Swift may later be worth it if three signals all fire: explicit user demand, measurable PWA UX drag on retention, and sustained paid-tier revenue (§10.4) — none of which can exist at the v1 scale. Do not start Swift work speculatively. iOS web push limitations are accepted; the weekly digest is email-first via Resend.
 
-8. **Chat is the only user-initiated create surface in v1, and no row is ever written or mutated from inside a `tool_use` handler.** Users create transactions, cards, and subscriptions by typing or speaking in chat → Claude Haiku extracts fields via `tool_use` args (no separate Gemini NL-parse call) → the tool returns a proposal payload → the UI renders it as a preview card (UX frame 15) → a `POST /<resource>/confirm` endpoint writes the row only after the user taps "looks right." There is no separate `+`-button entry form in v1; do not add one. The agent has no direct-mutate tools — no `edit_transaction`, no `delete_transaction`, no `add_*` — its mutation role is retrieval + proposal only. Edits and deletes reach the backend via explicit HTTP `PATCH` / `DELETE` calls triggered by a user tap on the edit sheet (UX frame 11b), reached from the per-category list or from a chat-rendered candidate-card list produced by `get_transactions(...)`. An inline chat confirm card for the exact-1-match case is documented in §6.2 as a post-launch enhancement; v1 does not implement it. The load-bearing rule is that the `tool_use` call is never the commit — not which UI surface the confirming tap lives on; future surfaces can be added without violating this invariant as long as mutation flows through an explicit HTTP call. CSV import and receipt photo (deferred) remain Gemini-parsed — bulk/async, not user-typed chat text.
+8. **Chat is the only user-initiated create surface in v1, and no row is ever written or mutated from inside a `tool_use` handler.** Users create transactions, cards, and subscriptions by typing or speaking in chat → Codex Haiku extracts fields via `tool_use` args (no separate Gemini NL-parse call) → the tool returns a proposal payload → the UI renders it as a preview card (UX frame 15) → a `POST /<resource>/confirm` endpoint writes the row only after the user taps "looks right." There is no separate `+`-button entry form in v1; do not add one. The agent has no direct-mutate tools — no `edit_transaction`, no `delete_transaction`, no `add_*` — its mutation role is retrieval + proposal only. Edits and deletes reach the backend via explicit HTTP `PATCH` / `DELETE` calls triggered by a user tap on the edit sheet (UX frame 11b), reached from the per-category list or from a chat-rendered candidate-card list produced by `get_transactions(...)`. An inline chat confirm card for the exact-1-match case is documented in §6.2 as a post-launch enhancement; v1 does not implement it. The load-bearing rule is that the `tool_use` call is never the commit — not which UI surface the confirming tap lives on; future surfaces can be added without violating this invariant as long as mutation flows through an explicit HTTP call. CSV import and receipt photo (deferred) remain Gemini-parsed — bulk/async, not user-typed chat text.
 
 9. **The dashboard fits on one screen with no scrolling.** Adding a tile requires removing one. Historical analysis lives in the AI chat (generative charts), not in the dashboard. The entry-moment insight is the primary behavioral intervention — not the dashboard.
 
@@ -59,9 +59,9 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 |---|---|---|
 | Categorization, CSV parse, receipt vision | Gemini (env-resolved) | Resolved from `GEMINI_MODEL` (override) or `GEMINI_MODEL_DEFAULT` (platform default) at call time — **no hardcoded model strings in the code**. v1 production default: `GEMINI_MODEL_DEFAULT=gemini-2.5-flash` (GA, stable). The preview model `gemini-3.1-flash-lite-preview` is available via `GEMINI_MODEL` for eval experiments; observed to 503 intermittently, which is why it's not the default. Paid tier only. Do not use Gemini 3.1 Pro — it's a reasoning model, overkill and expensive for simple extraction. Rotate env vars (no code change) if Google deprecates either model. |
 | Card multiplier lookup | Perplexity Sonar | One call per card add. Citations stored as `cards.source_urls`. |
-| Chat agent | `claude-haiku-4-5` | Messages API + `tool_use`. Gemini 3.1 Flash-Lite was evaluated and rejected for v1 chat — see DESIGN.md §11.4. Re-evaluation is a planned post-launch A/B via the multi-hop eval suite. Do not switch unilaterally. |
-| Weekly digest narrative | `claude-sonnet-4-6` | Called weekly; prose quality matters |
-| Memory distillation | `claude-haiku-4-5` | Background after each chat session |
+| Chat agent | `Codex-haiku-4-5` | Messages API + `tool_use`. Gemini 3.1 Flash-Lite was evaluated and rejected for v1 chat — see DESIGN.md §11.4. Re-evaluation is a planned post-launch A/B via the multi-hop eval suite. Do not switch unilaterally. |
+| Weekly digest narrative | `Codex-sonnet-4-6` | Called weekly; prose quality matters |
+| Memory distillation | `Codex-haiku-4-5` | Background after each chat session |
 
 Model strings are read from environment variables, not hardcoded — change a model by changing the env, not the code.
 
@@ -88,7 +88,7 @@ If you find yourself adding any field to a PostHog event that contains user-gene
 
 ## Commit message rules
 
-- **Never include `Co-Authored-By: Claude` or any "generated by Claude" footer in commit messages.** The user has explicitly opted out of this attribution style. Write commit messages as if a human author wrote them. The same applies to PR descriptions.
+- **Never include `Co-Authored-By: Codex` or any "generated by Codex" footer in commit messages.** The user has explicitly opted out of this attribution style. Write commit messages as if a human author wrote them. The same applies to PR descriptions.
 
 ## Keeping `DESIGN.md` in sync with decisions
 
@@ -98,7 +98,7 @@ Specifically:
 
 - If a schema migration deviates from what §8 says (column nullability, FK on-delete behavior, RLS shape, indexes that affect behavior, CHECK constraints) — update §8.
 - If an architectural invariant is added, relaxed, or clarified — update both the relevant `DESIGN.md` section and the "Architectural invariants" list in this file.
-- If a design-doc contradiction is discovered and resolved pragmatically (e.g., two sections disagree and we pick one) — record the resolution in `DESIGN.md` so future Claude doesn't re-litigate it.
+- If a design-doc contradiction is discovered and resolved pragmatically (e.g., two sections disagree and we pick one) — record the resolution in `DESIGN.md` so future Codex doesn't re-litigate it.
 
 Small typo fixes don't need ceremony. Substantive architectural changes still need explicit user agreement before editing (see "Things to ask the user before doing").
 

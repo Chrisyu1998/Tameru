@@ -30,6 +30,8 @@ import datetime as _dt
 from decimal import Decimal
 from typing import Any, Callable
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.models.transactions import (
@@ -50,6 +52,151 @@ RESULT_ROW_CAP = 5_000
 # normally bounded by user count (subs <50, cards <10), but a defensive
 # cap keeps a runaway tool call from blowing the context budget.
 SUBSCRIPTIONS_ROW_CAP = 200
+
+
+class CalculateTotalRequest(BaseModel):
+    """Tool input for `calculate_total`.
+
+    Example request:
+        {"category": "Dining", "date_from": "2026-03-01", "date_to": "2026-03-31"}
+
+    `user` is injected by the server-side loop, not supplied by Claude.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: str | None = Field(default=None, description="Closed-enum category filter.")
+    card_id: str | None = Field(default=None, description="Card UUID filter.")
+    merchant_contains: str | None = Field(
+        default=None,
+        description="Case-insensitive merchant substring filter.",
+    )
+    date_from: _dt.date | None = Field(default=None, description="Inclusive date lower bound.")
+    date_to: _dt.date | None = Field(default=None, description="Inclusive date upper bound.")
+    amount_min: Decimal | None = Field(default=None, description="Inclusive amount lower bound.")
+    amount_max: Decimal | None = Field(default=None, description="Inclusive amount upper bound.")
+
+    @field_validator("category")
+    @classmethod
+    def _category_is_allowed(cls, value: str | None) -> str | None:
+        """Reject categories outside Tameru's closed enum."""
+        if value is not None and value not in ALLOWED_CATEGORIES:
+            raise ValueError(f"category {value!r} is not in the closed enum")
+        return value
+
+
+class CalculateTotalResponse(BaseModel):
+    """Tool result for `calculate_total`.
+
+    Example response:
+        {"total": "123.45", "count": 8, "truncated": false}
+    """
+
+    total: str
+    count: int
+    truncated: bool
+
+
+class GetTransactionsRequest(CalculateTotalRequest):
+    """Tool input for `get_transactions`.
+
+    Example request:
+        {"merchant_contains": "coffee", "limit": 10, "offset": 0}
+    """
+
+    limit: int = Field(default=DEFAULT_LIMIT, ge=1)
+    offset: int = Field(default=0, ge=0)
+
+
+class GetTransactionsResponse(BaseModel):
+    """Tool result for `get_transactions`.
+
+    Example response:
+        {"items": [{"id": "...", "merchant": "Coffee Bar"}], "has_more": false}
+    """
+
+    items: list[dict[str, Any]]
+    has_more: bool
+
+
+class GetSubscriptionsRequest(BaseModel):
+    """Tool input for `get_subscriptions`.
+
+    Example request:
+        {"status": "active"}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def _status_is_allowed(cls, value: str | None) -> str | None:
+        """Reject subscription statuses outside the SQL enum."""
+        allowed = {"active", "paused", "cancelled"}
+        if value is not None and value not in allowed:
+            raise ValueError(f"status {value!r} is not in {sorted(allowed)}")
+        return value
+
+
+class GetSubscriptionsResponse(BaseModel):
+    """Tool result for `get_subscriptions`.
+
+    Example response:
+        {"items": [{"name": "Netflix", "status": "active"}], "truncated": false}
+    """
+
+    items: list[dict[str, Any]]
+    truncated: bool
+
+
+class GetSpendingSummaryRequest(BaseModel):
+    """Tool input for `get_spending_summary`.
+
+    Example request:
+        {"months": 3}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    months: int = Field(default=1)
+
+
+class SpendingSummaryRow(BaseModel):
+    """One category row inside a spending-summary tool response."""
+
+    category: str
+    total: str
+    count: int
+
+
+class GetSpendingSummaryResponse(BaseModel):
+    """Tool result for `get_spending_summary`.
+
+    Example response:
+        {
+            "window_start": "2026-03-01",
+            "window_months": 3,
+            "breakdown": [{"category": "Dining", "total": "123.45", "count": 8}],
+            "truncated": false
+        }
+    """
+
+    window_start: str
+    window_months: int
+    breakdown: list[SpendingSummaryRow]
+    truncated: bool
+
+
+class GetCardsResponse(BaseModel):
+    """Tool result for `get_cards`.
+
+    Example response:
+        {"items": [{"id": "...", "name": "Amex Gold", "active": true}]}
+    """
+
+    items: list[dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
@@ -216,60 +363,33 @@ GET_CARDS_TOOL: dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
-# Helpers.
-# ---------------------------------------------------------------------------
-
-
-def _first_of_month(d: _dt.date) -> _dt.date:
-    return d.replace(day=1)
-
-
-def _subtract_months(d: _dt.date, months: int) -> _dt.date:
-    """Subtract `months` calendar months, anchored at day=1.
-
-    Pure-stdlib; avoids dragging in dateutil for one call site.
-    """
-    total = d.year * 12 + (d.month - 1) - months
-    year, month = divmod(total, 12)
-    return _dt.date(year, month + 1, 1)
-
-
-def _filters_from_input(payload: dict[str, Any], *, allow_pagination: bool) -> TransactionFilters:
-    """Build a `TransactionFilters` from a raw tool-input dict.
-
-    Pydantic does the type coercion (strings → date / Decimal). When the
-    tool doesn't accept pagination (`calculate_total`), strip `limit`
-    and `offset` defensively so a hallucinated field can't push us into
-    a different code path.
-    """
-    if not allow_pagination:
-        payload = {k: v for k, v in payload.items() if k not in {"limit", "offset"}}
-    return TransactionFilters.model_validate(payload)
-
-
-def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
-    """Drop redundant keys from a tool response.
-
-    RLS already scopes by `user_id`, so emitting it on every row just
-    burns tokens. Same for any per-row metadata Claude won't reason
-    about."""
-    return {k: v for k, v in row.items() if k not in keys}
-
-
-# ---------------------------------------------------------------------------
 # Tool implementations.
 # ---------------------------------------------------------------------------
 
 
 def calculate_total(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
-    """Sum `amount` over transactions matching the (optional) filters.
+    """Return the sum of transactions matching optional filters.
+
+    Request:
+        {
+            "category": "Dining",
+            "date_from": "2026-03-01",
+            "date_to": "2026-03-31",
+            "merchant_contains": "coffee",
+            "amount_min": 5,
+            "amount_max": 25
+        }
+
+    Response:
+        {"total": "123.45", "count": 8, "truncated": false}
 
     Implementation note: PostgREST has no native SUM, so we fetch up to
     `RESULT_ROW_CAP + 1` matching rows and sum in Python. The +1 is what
     detects truncation without a separate COUNT query (same pattern as
     `list_transactions`'s `has_more`).
     """
-    filters = _filters_from_input(kwargs, allow_pagination=False)
+    request = CalculateTotalRequest.model_validate(kwargs)
+    filters = _filters_from_input(request.model_dump(exclude_none=True), allow_pagination=False)
     client = supabase_for_user(user.jwt)
     query = client.table("transactions").select("amount")
     query = apply_transaction_filters(query, filters)
@@ -282,41 +402,57 @@ def calculate_total(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     # Decimal sum — `numeric` columns come back as strings from Supabase.
     total = sum((Decimal(str(row["amount"])) for row in rows), Decimal("0"))
 
-    return {
-        "total": str(total),
-        "count": len(rows),
-        "truncated": truncated,
-    }
+    return CalculateTotalResponse(
+        total=str(total),
+        count=len(rows),
+        truncated=truncated,
+    ).model_dump(mode="json")
 
 
 def get_transactions(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
-    """List transactions matching the filters.
+    """Return transaction rows matching optional filters.
+
+    Request:
+        {"merchant_contains": "coffee", "limit": 10, "offset": 0}
+
+    Response:
+        {"items": [{"id": "...", "merchant": "Coffee Bar"}], "has_more": false}
 
     Delegates to `list_transactions` (Day 5 service) so HTTP + agent
     callers share one query builder. The returned shape is plain dict
     (not a pydantic model) so the loop's `json.dumps(tool_result)` step
     serializes cleanly.
     """
-    filters = _filters_from_input(kwargs, allow_pagination=True)
+    request = GetTransactionsRequest.model_validate(kwargs)
+    filters = _filters_from_input(request.model_dump(exclude_none=True), allow_pagination=True)
     result = list_transactions(user, filters)
-    return {
-        "items": [
+    return GetTransactionsResponse(
+        items=[
             _strip_keys(item.model_dump(mode="json"), ("user_id",))
             for item in result.items
         ],
-        "has_more": result.has_more,
-    }
+        has_more=result.has_more,
+    ).model_dump(mode="json")
 
 
 def get_subscriptions(user: AuthedUser, *, status: str | None = None) -> dict[str, Any]:
+    """Return recurring subscriptions, optionally filtered by status.
+
+    Request:
+        {"status": "active"}
+
+    Response:
+        {"items": [{"name": "Netflix", "status": "active"}], "truncated": false}
+    """
+    request = GetSubscriptionsRequest(status=status)
     client = supabase_for_user(user.jwt)
     query = (
         client.table("subscriptions")
         .select("*")
         .order("next_billing_date", desc=False)
     )
-    if status is not None:
-        query = query.eq("status", status)
+    if request.status is not None:
+        query = query.eq("status", request.status)
     # Fetch one over the cap to detect truncation — same pattern as
     # calculate_total / list_transactions.
     resp = query.range(0, SUBSCRIPTIONS_ROW_CAP).execute()
@@ -324,19 +460,32 @@ def get_subscriptions(user: AuthedUser, *, status: str | None = None) -> dict[st
     truncated = len(rows) > SUBSCRIPTIONS_ROW_CAP
     if truncated:
         rows = rows[:SUBSCRIPTIONS_ROW_CAP]
-    return {
-        "items": [_strip_keys(row, ("user_id",)) for row in rows],
-        "truncated": truncated,
-    }
+    return GetSubscriptionsResponse(
+        items=[_strip_keys(row, ("user_id",)) for row in rows],
+        truncated=truncated,
+    ).model_dump(mode="json")
 
 
 def get_spending_summary(user: AuthedUser, *, months: int = 1) -> dict[str, Any]:
-    """Per-category totals over a trailing calendar-month window.
+    """Return per-category totals over a trailing calendar-month window.
+
+    Request:
+        {"months": 3}
+
+    Response:
+        {
+            "window_start": "2026-03-01",
+            "window_months": 3,
+            "breakdown": [{"category": "Dining", "total": "123.45", "count": 8}],
+            "truncated": false
+        }
 
     `months=1` is "this month so far"; `months=3` includes the current
     month plus the previous two. Anchored at the first of the start
     month so partial months don't skew totals.
     """
+    request = GetSpendingSummaryRequest.model_validate({"months": months})
+    months = request.months
     if months < 1:
         months = 1
     if months > 24:
@@ -378,15 +527,23 @@ def get_spending_summary(user: AuthedUser, *, months: int = 1) -> dict[str, Any]
         {"category": cat, "total": str(totals[cat]), "count": counts[cat]}
         for cat in sorted(totals.keys(), key=lambda c: totals[c], reverse=True)
     ]
-    return {
-        "window_start": start.isoformat(),
-        "window_months": months,
-        "breakdown": breakdown,
-        "truncated": truncated,
-    }
+    return GetSpendingSummaryResponse(
+        window_start=start.isoformat(),
+        window_months=months,
+        breakdown=breakdown,
+        truncated=truncated,
+    ).model_dump(mode="json")
 
 
 def get_cards(user: AuthedUser) -> dict[str, Any]:
+    """Return active cards available to the agent.
+
+    Request:
+        {}
+
+    Response:
+        {"items": [{"id": "...", "name": "Amex Gold", "active": true}]}
+    """
     client = supabase_for_user(user.jwt)
     resp = (
         client.table("cards")
@@ -396,9 +553,9 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
         .execute()
     )
     rows = resp.data or []
-    return {
-        "items": [_strip_keys(row, ("user_id",)) for row in rows],
-    }
+    return GetCardsResponse(
+        items=[_strip_keys(row, ("user_id",)) for row in rows],
+    ).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
@@ -433,3 +590,46 @@ def execute_tool(name: str, tool_input: dict[str, Any], user: AuthedUser) -> dic
     """
     _schema, executor = TOOL_REGISTRY[name]
     return executor(user, **tool_input)
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+
+def _first_of_month(d: _dt.date) -> _dt.date:
+    """Return the first day of the month containing `d`."""
+    return d.replace(day=1)
+
+
+def _subtract_months(d: _dt.date, months: int) -> _dt.date:
+    """Subtract `months` calendar months, anchored at day=1.
+
+    Pure-stdlib; avoids dragging in dateutil for one call site.
+    """
+    total = d.year * 12 + (d.month - 1) - months
+    year, month = divmod(total, 12)
+    return _dt.date(year, month + 1, 1)
+
+
+def _filters_from_input(payload: dict[str, Any], *, allow_pagination: bool) -> TransactionFilters:
+    """Build `TransactionFilters` from validated tool input.
+
+    Pydantic does the type coercion (strings to date / Decimal). When the
+    tool doesn't accept pagination (`calculate_total`), strip `limit`
+    and `offset` defensively so a hallucinated field can't push us into
+    a different code path.
+    """
+    if not allow_pagination:
+        payload = {k: v for k, v in payload.items() if k not in {"limit", "offset"}}
+    return TransactionFilters.model_validate(payload)
+
+
+def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Drop redundant keys from a tool response.
+
+    RLS already scopes by `user_id`, so emitting it on every row just
+    burns tokens. Same for any per-row metadata Claude won't reason
+    about.
+    """
+    return {k: v for k, v in row.items() if k not in keys}

@@ -25,38 +25,6 @@ from app.auth import AuthedUser
 from app.db import supabase_for_user
 
 
-def _seed_ai_call_log_row(
-    user,
-    *,
-    task_type: str,
-    input_tokens: int,
-    output_tokens: int,
-    timestamp: _dt.datetime,
-    provider: str = "anthropic",
-    model: str = "claude-haiku-4-5",
-) -> None:
-    """Direct insert into ai_call_log via the user's JWT.
-
-    The table's narrow INSERT policy (WITH CHECK user_id = auth.uid()) is
-    what this test exercises end-to-end — and incidentally what the
-    middleware's SELECT path relies on.
-    """
-    client = supabase_for_user(user.jwt)
-    client.table("ai_call_log").insert({
-        "user_id": user.id,
-        "provider": provider,
-        "model": model,
-        "task_type": task_type,
-        "prompt_version": "chat_v2",
-        "prompt_hash": "x" * 64,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "latency_ms": 1,
-        "success": True,
-        "timestamp": timestamp.isoformat(),
-    }).execute()
-
-
 @pytest.fixture
 def authed(user_a, admin_client) -> AuthedUser:
     """Wraps the session-scoped user_a, but wipes today's ai_call_log
@@ -73,29 +41,8 @@ def authed(user_a, admin_client) -> AuthedUser:
     return AuthedUser(jwt=user_a.jwt, user_id=uuid.UUID(user_a.id), email=user_a.email)
 
 
-@pytest.fixture(autouse=True)
-def _low_cap(monkeypatch):
-    """Drop the cap to 500 tokens so a few hundred seeded tokens push us
-    over. The default 200K would force seeding ~1700 turns per test."""
-    monkeypatch.setenv("CHAT_USAGE_CAP_TOKENS_PER_DAY", "500")
-
-
-@pytest.fixture(autouse=True)
-def _no_anthropic_calls(monkeypatch):
-    """If the cap check passes when it shouldn't, this fixture turns the
-    silent failure (an accidental network call) into a loud one."""
-    class _Boom:
-        class messages:
-            @staticmethod
-            def create(**_):
-                raise AssertionError(
-                    "agent loop made an Anthropic call despite the cap check"
-                )
-
-    monkeypatch.setattr(loop_module, "_anthropic_client", lambda: _Boom())
-
-
 def test_over_cap_raises_before_any_anthropic_call(authed, user_a):
+    """Verify that over cap raises before any anthropic call."""
     now = _dt.datetime.now(_dt.timezone.utc)
     _seed_ai_call_log_row(
         user_a,
@@ -163,3 +110,63 @@ def test_categorization_tokens_do_not_count_against_chat_cap(authed, user_a, mon
     )
     turn = run_turn(authed, [], "even with 5k gemini tokens today?")
     assert turn.assistant_text == "Still fine."
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _seed_ai_call_log_row(
+    user,
+    *,
+    task_type: str,
+    input_tokens: int,
+    output_tokens: int,
+    timestamp: _dt.datetime,
+    provider: str = "anthropic",
+    model: str = "claude-haiku-4-5",
+) -> None:
+    """Direct insert into ai_call_log via the user's JWT.
+
+    The table's narrow INSERT policy (WITH CHECK user_id = auth.uid()) is
+    what this test exercises end-to-end — and incidentally what the
+    middleware's SELECT path relies on.
+    """
+    client = supabase_for_user(user.jwt)
+    client.table("ai_call_log").insert({
+        "user_id": user.id,
+        "provider": provider,
+        "model": model,
+        "task_type": task_type,
+        "prompt_version": "chat_v2",
+        "prompt_hash": "x" * 64,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "latency_ms": 1,
+        "success": True,
+        "timestamp": timestamp.isoformat(),
+    }).execute()
+
+@pytest.fixture(autouse=True)
+def _low_cap(monkeypatch):
+    """Drop the cap to 500 tokens so a few hundred seeded tokens push us
+    over. The default 200K would force seeding ~1700 turns per test."""
+    monkeypatch.setenv("CHAT_USAGE_CAP_TOKENS_PER_DAY", "500")
+
+@pytest.fixture(autouse=True)
+def _no_anthropic_calls(monkeypatch):
+    """If the cap check passes when it shouldn't, this fixture turns the
+    silent failure (an accidental network call) into a loud one."""
+    class _Boom:
+        """Represent Boom."""
+        class messages:
+            """Represent messages."""
+
+            @staticmethod
+            def create(**_):
+                """Provide create."""
+                raise AssertionError(
+                    "agent loop made an Anthropic call despite the cap check"
+                )
+
+    monkeypatch.setattr(loop_module, "_anthropic_client", lambda: _Boom())

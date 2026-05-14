@@ -33,47 +33,6 @@ from app.auth import AuthedUser
 from app.db import supabase_for_user
 
 
-def _rate_limit_error() -> anthropic.RateLimitError:
-    """Construct a real RateLimitError instance — its constructor wants
-    a status code + a body, not just a message."""
-    return anthropic.RateLimitError(
-        message="rate limited",
-        response=httpx.Response(429, request=httpx.Request("POST", "https://x")),
-        body={"error": {"type": "rate_limit_error"}},
-    )
-
-
-def _bad_request_error() -> anthropic.BadRequestError:
-    return anthropic.BadRequestError(
-        message="bad",
-        response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
-        body={"error": {"type": "invalid_request_error"}},
-    )
-
-
-def _today_chat_rows(user) -> list[dict]:
-    """Read today's chat_turn rows for a user, oldest first.
-
-    Order matters for the row-count tests — the first attempt's row
-    must come before the retry's row."""
-    midnight = _dt.datetime.combine(
-        _dt.datetime.now(_dt.timezone.utc).date(),
-        _dt.time.min,
-        tzinfo=_dt.timezone.utc,
-    )
-    client = supabase_for_user(user.jwt)
-    resp = (
-        client.table("ai_call_log")
-        .select("success, error_code, timestamp")
-        .eq("user_id", user.id)
-        .eq("task_type", "chat_turn")
-        .gte("timestamp", midnight.isoformat())
-        .order("timestamp", desc=False)
-        .execute()
-    )
-    return resp.data or []
-
-
 @pytest.fixture
 def authed(user_a, admin_client) -> AuthedUser:
     """Wraps user_a; wipes today's chat_turn rows before each test so
@@ -90,20 +49,6 @@ def authed(user_a, admin_client) -> AuthedUser:
         "task_type", "chat_turn"
     ).gte("timestamp", midnight.isoformat()).execute()
     return AuthedUser(jwt=user_a.jwt, user_id=uuid.UUID(user_a.id), email=user_a.email)
-
-
-@pytest.fixture(autouse=True)
-def _no_real_sleep(monkeypatch):
-    """The loop's retry path sleeps 2s; tests don't need the wall-clock
-    pause. Patch on loop_module (where time.sleep is now called, since
-    `with_429_backoff` was removed from middleware)."""
-    monkeypatch.setattr(loop_module.time, "sleep", lambda _: None)
-
-
-@pytest.fixture(autouse=True)
-def _anthropic_api_key(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
-    monkeypatch.setattr(loop_module, "_client", None)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +97,7 @@ def test_run_turn_recovers_from_single_429_and_logs_both_attempts(
 def test_run_turn_surfaces_provider_rate_limited_after_two_429s(
     authed, user_a, monkeypatch
 ):
+    """Verify that run turn surfaces provider rate limited after two 429s."""
     client = MagicMock()
     client.messages.create.side_effect = [
         _rate_limit_error(),
@@ -200,3 +146,60 @@ def test_run_turn_does_not_retry_non_429(authed, user_a, monkeypatch):
     assert len(rows) == 1
     assert rows[0]["success"] is False
     assert rows[0]["error_code"] == "BadRequestError"
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _rate_limit_error() -> anthropic.RateLimitError:
+    """Construct a real RateLimitError instance — its constructor wants
+    a status code + a body, not just a message."""
+    return anthropic.RateLimitError(
+        message="rate limited",
+        response=httpx.Response(429, request=httpx.Request("POST", "https://x")),
+        body={"error": {"type": "rate_limit_error"}},
+    )
+
+def _bad_request_error() -> anthropic.BadRequestError:
+    """Support bad request error."""
+    return anthropic.BadRequestError(
+        message="bad",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://x")),
+        body={"error": {"type": "invalid_request_error"}},
+    )
+
+def _today_chat_rows(user) -> list[dict]:
+    """Read today's chat_turn rows for a user, oldest first.
+
+    Order matters for the row-count tests — the first attempt's row
+    must come before the retry's row."""
+    midnight = _dt.datetime.combine(
+        _dt.datetime.now(_dt.timezone.utc).date(),
+        _dt.time.min,
+        tzinfo=_dt.timezone.utc,
+    )
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("ai_call_log")
+        .select("success, error_code, timestamp")
+        .eq("user_id", user.id)
+        .eq("task_type", "chat_turn")
+        .gte("timestamp", midnight.isoformat())
+        .order("timestamp", desc=False)
+        .execute()
+    )
+    return resp.data or []
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    """The loop's retry path sleeps 2s; tests don't need the wall-clock
+    pause. Patch on loop_module (where time.sleep is now called, since
+    `with_429_backoff` was removed from middleware)."""
+    monkeypatch.setattr(loop_module.time, "sleep", lambda _: None)
+
+@pytest.fixture(autouse=True)
+def _anthropic_api_key(monkeypatch):
+    """Support anthropic api key."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only")
+    monkeypatch.setattr(loop_module, "_client", None)

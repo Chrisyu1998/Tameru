@@ -45,43 +45,16 @@ _jwks_client: PyJWKClient | None = None
 _jwt_issuer: str | None = None
 
 
-def _jwks() -> tuple[PyJWKClient, str]:
-    """Lazy-init the JWKS client + issuer string.
-
-    Kept lazy so that `app.main` imports cleanly even when `SUPABASE_URL` is
-    unset — unauthenticated routes (/healthz, /docs) stay available, and a
-    call to a protected route surfaces the misconfiguration as a 500 on
-    that route rather than a full application boot failure.
-    """
-    global _jwks_client, _jwt_issuer
-    if _jwks_client is None:
-        url = os.environ.get("SUPABASE_URL")
-        if not url:
-            raise RuntimeError("SUPABASE_URL is not set. See .env.example.")
-        base = url.rstrip("/")
-        _jwks_client = PyJWKClient(
-            f"{base}/auth/v1/.well-known/jwks.json", cache_keys=True
-        )
-        _jwt_issuer = f"{base}/auth/v1"
-    return _jwks_client, _jwt_issuer
-
-
 @dataclass(frozen=True)
 class AuthedUser:
+    """Represent AuthedUser."""
     jwt: str
     user_id: UUID
     email: str
 
 
-def _unauthorized(detail: str) -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=detail,
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
 def get_current_user_jwt(request: Request) -> AuthedUser:
+    """Provide get current user jwt."""
     header = request.headers.get("authorization") or request.headers.get("Authorization")
     if not header or not header.lower().startswith("bearer "):
         raise _unauthorized("missing bearer token")
@@ -108,29 +81,6 @@ def get_current_user_jwt(request: Request) -> AuthedUser:
         raise _unauthorized("token missing sub/email")
 
     return AuthedUser(jwt=token, user_id=UUID(sub), email=email)
-
-
-def _device_displaced() -> HTTPException:
-    """401 with the structured `DEVICE_DISPLACED` payload the frontend
-    branches on to render the displacement modal (Day 7 prompt). The
-    `MISSING_DEVICE_ID` branch is the same status code so a frontend that
-    forgets to send the header surfaces the same modal — a missing header
-    is, from the user's seat, indistinguishable from a stale session and
-    the only safe action is to sign in again.
-    """
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail={"code": "DEVICE_DISPLACED", "message": "session ended on this device"},
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-def _missing_device() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail={"code": "MISSING_DEVICE_ID", "message": "X-Device-Id header required"},
-        headers={"WWW-Authenticate": "Bearer"},
-    )
 
 
 def get_current_user_with_device(
@@ -163,3 +113,58 @@ def get_current_user_with_device(
     if not resp.data or resp.data[0].get("active_device_id") != device_id:
         raise _device_displaced()
     return user
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _jwks() -> tuple[PyJWKClient, str]:
+    """Lazy-init the JWKS client + issuer string.
+
+    Kept lazy so that `app.main` imports cleanly even when `SUPABASE_URL` is
+    unset — unauthenticated routes (/healthz, /docs) stay available, and a
+    call to a protected route surfaces the misconfiguration as a 500 on
+    that route rather than a full application boot failure.
+    """
+    global _jwks_client, _jwt_issuer
+    if _jwks_client is None:
+        url = os.environ.get("SUPABASE_URL")
+        if not url:
+            raise RuntimeError("SUPABASE_URL is not set. See .env.example.")
+        base = url.rstrip("/")
+        _jwks_client = PyJWKClient(
+            f"{base}/auth/v1/.well-known/jwks.json", cache_keys=True
+        )
+        _jwt_issuer = f"{base}/auth/v1"
+    return _jwks_client, _jwt_issuer
+
+def _unauthorized(detail: str) -> HTTPException:
+    """Support unauthorized."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+def _device_displaced() -> HTTPException:
+    """401 with the structured `DEVICE_DISPLACED` payload the frontend
+    branches on to render the displacement modal (Day 7 prompt). The
+    `MISSING_DEVICE_ID` branch is the same status code so a frontend that
+    forgets to send the header surfaces the same modal — a missing header
+    is, from the user's seat, indistinguishable from a stale session and
+    the only safe action is to sign in again.
+    """
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "DEVICE_DISPLACED", "message": "session ended on this device"},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+def _missing_device() -> HTTPException:
+    """Support missing device."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "MISSING_DEVICE_ID", "message": "X-Device-Id header required"},
+        headers={"WWW-Authenticate": "Bearer"},
+    )

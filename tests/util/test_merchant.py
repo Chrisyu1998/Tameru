@@ -62,6 +62,7 @@ from app.util.merchant import normalize_merchant
     ],
 )
 def test_normalize_merchant(raw: str, expected: str) -> None:
+    """Verify that normalize merchant."""
     assert normalize_merchant(raw) == expected
 
 

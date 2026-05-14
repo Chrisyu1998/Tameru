@@ -51,71 +51,14 @@ from app.models.transactions import MAX_LIMIT
 
 @pytest.fixture
 def authed_user_a(user_a) -> AuthedUser:
+    """Provide authed user a."""
     return AuthedUser(jwt=user_a.jwt, user_id=uuid.UUID(user_a.id), email=user_a.email)
 
 
 @pytest.fixture
 def authed_user_b(user_b) -> AuthedUser:
+    """Provide authed user b."""
     return AuthedUser(jwt=user_b.jwt, user_id=uuid.UUID(user_b.id), email=user_b.email)
-
-
-def _tag() -> str:
-    return uuid.uuid4().hex[:8]
-
-
-def _seed_transaction(
-    user,
-    *,
-    card_id: str | None,
-    merchant: str,
-    amount: str,
-    category: str = "Dining",
-    txn_date: date | None = None,
-) -> str:
-    """Insert one transaction via the user's RLS-scoped client; return id."""
-    client = supabase_for_user(user.jwt)
-    row: dict[str, object] = {
-        "user_id": user.id,
-        "merchant": merchant,
-        "amount": amount,
-        "date": (txn_date or date.today()).isoformat(),
-        "category": category,
-        "source": "manual",
-        "client_request_id": str(uuid.uuid4()),
-    }
-    if card_id is not None:
-        row["card_id"] = card_id
-    return client.table("transactions").insert(row).execute().data[0]["id"]
-
-
-def _seed_subscription(
-    user,
-    *,
-    card_id: str,
-    name: str,
-    next_billing: date,
-    amount: str = "9.99",
-    frequency: str = "monthly",
-    status: str = "active",
-    category: str = "Streaming",
-) -> str:
-    client = supabase_for_user(user.jwt)
-    return (
-        client.table("subscriptions")
-        .insert({
-            "user_id": user.id,
-            "card_id": card_id,
-            "name": name,
-            "amount": amount,
-            "frequency": frequency,
-            "start_date": next_billing.isoformat(),
-            "next_billing_date": next_billing.isoformat(),
-            "category": category,
-            "status": status,
-        })
-        .execute()
-        .data[0]["id"]
-    )
 
 
 # ===========================================================================
@@ -124,6 +67,7 @@ def _seed_subscription(
 
 
 def test_registry_contains_only_day9a_read_tools():
+    """Verify that registry contains only day9a read tools."""
     expected = {
         "calculate_total",
         "get_transactions",
@@ -177,6 +121,7 @@ def test_calculate_total_no_matches_returns_zero(authed_user_a):
 
 
 def test_calculate_total_category_filter_narrows(authed_user_a, user_a, card_a):
+    """Verify that calculate total category filter narrows."""
     tag = _tag()
     _seed_transaction(user_a, card_id=card_a, merchant=f"Dn-{tag}", amount="50.00", category="Dining")
     _seed_transaction(user_a, card_id=card_a, merchant=f"Gr-{tag}", amount="40.00", category="Groceries")
@@ -224,6 +169,7 @@ def test_calculate_total_date_range_is_inclusive(authed_user_a, user_a, card_a):
 
 
 def test_calculate_total_amount_range_is_inclusive(authed_user_a, user_a, card_a):
+    """Verify that calculate total amount range is inclusive."""
     tag = _tag()
     _seed_transaction(user_a, card_id=card_a, merchant=f"Amt-{tag}", amount="9.99")
     _seed_transaction(user_a, card_id=card_a, merchant=f"Amt-{tag}", amount="10.00")
@@ -308,6 +254,7 @@ def test_calculate_total_truncation_flag_fires(authed_user_a, user_a, card_a, mo
 
 
 def test_calculate_total_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
+    """Verify that calculate total rls isolates users."""
     tag = _tag()
     _seed_transaction(user_a, card_id=card_a, merchant=f"OnlyA-{tag}", amount="100.00")
     _seed_transaction(user_b, card_id=card_b, merchant=f"OnlyB-{tag}", amount="200.00")
@@ -325,6 +272,7 @@ def test_calculate_total_rls_isolates_users(authed_user_a, authed_user_b, user_a
 
 
 def test_get_transactions_no_matches_returns_empty(authed_user_a):
+    """Verify that get transactions no matches returns empty."""
     result = get_transactions(authed_user_a, merchant_contains=f"nonexistent-{_tag()}")
     assert result == {"items": [], "has_more": False}
 
@@ -356,6 +304,7 @@ def test_get_transactions_ordering_is_date_desc(authed_user_a, user_a, card_a):
 
 
 def test_get_transactions_has_more_fires_when_over_limit(authed_user_a, user_a, card_a):
+    """Verify that get transactions has more fires when over limit."""
     tag = _tag()
     for _ in range(5):
         _seed_transaction(user_a, card_id=card_a, merchant=f"Page-{tag}", amount="1.00")
@@ -366,6 +315,7 @@ def test_get_transactions_has_more_fires_when_over_limit(authed_user_a, user_a, 
 
 
 def test_get_transactions_no_has_more_when_under_limit(authed_user_a, user_a, card_a):
+    """Verify that get transactions no has more when under limit."""
     tag = _tag()
     for _ in range(3):
         _seed_transaction(user_a, card_id=card_a, merchant=f"Under-{tag}", amount="1.00")
@@ -434,6 +384,7 @@ def test_get_transactions_filter_combinations(authed_user_a, user_a, card_a):
 
 
 def test_get_transactions_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
+    """Verify that get transactions rls isolates users."""
     tag = _tag()
     _seed_transaction(user_a, card_id=card_a, merchant=f"OnlyA-{tag}", amount="1.00")
     _seed_transaction(user_b, card_id=card_b, merchant=f"OnlyB-{tag}", amount="2.00")
@@ -460,6 +411,7 @@ def test_get_subscriptions_empty_for_user_with_none(authed_user_b, user_b, admin
 
 
 def test_get_subscriptions_no_filter_returns_all_statuses(authed_user_a, user_a, card_a):
+    """Verify that get subscriptions no filter returns all statuses."""
     tag = _tag()
     today = date.today()
     _seed_subscription(user_a, card_id=card_a, name=f"S-active-{tag}", next_billing=today + timedelta(days=5), status="active")
@@ -508,6 +460,7 @@ def test_get_subscriptions_ordering_is_next_billing_asc(authed_user_a, user_a, c
 
 
 def test_get_subscriptions_strips_user_id(authed_user_a, user_a, card_a):
+    """Verify that get subscriptions strips user id."""
     _seed_subscription(
         user_a, card_id=card_a, name=f"Strip-{_tag()}",
         next_billing=date.today() + timedelta(days=1),
@@ -518,6 +471,7 @@ def test_get_subscriptions_strips_user_id(authed_user_a, user_a, card_a):
 
 
 def test_get_subscriptions_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
+    """Verify that get subscriptions rls isolates users."""
     tag = _tag()
     today = date.today()
     _seed_subscription(user_a, card_id=card_a, name=f"OnlyA-{tag}", next_billing=today + timedelta(days=5))
@@ -545,6 +499,7 @@ def test_get_spending_summary_empty_window(authed_user_b, user_b, admin_client):
 
 
 def test_get_spending_summary_groups_and_orders_by_total_desc(authed_user_a, user_a, card_a):
+    """Verify that get spending summary groups and orders by total desc."""
     tag = _tag()
     # Aggregate across categories — Dining=70, Groceries=100, Coffee=5
     _seed_transaction(user_a, card_id=card_a, merchant=f"D-{tag}", amount="50.00", category="Dining")
@@ -603,6 +558,7 @@ def test_get_spending_summary_window_starts_at_first_of_month(authed_user_a, use
 
 def test_get_spending_summary_months_param_clamps(authed_user_a):
     # Below 1 clamps up to 1; above 24 clamps down to 24.
+    """Verify that get spending summary months param clamps."""
     assert get_spending_summary(authed_user_a, months=0)["window_months"] == 1
     assert get_spending_summary(authed_user_a, months=-5)["window_months"] == 1
     assert get_spending_summary(authed_user_a, months=24)["window_months"] == 24
@@ -680,12 +636,14 @@ def test_get_spending_summary_rls_isolates_users(authed_user_a, authed_user_b, u
 
 
 def test_get_cards_returns_active_card(authed_user_a, card_a):
+    """Verify that get cards returns active card."""
     result = get_cards(authed_user_a)
     card_ids = {c["id"] for c in result["items"]}
     assert card_a in card_ids
 
 
 def test_get_cards_strips_user_id(authed_user_a):
+    """Verify that get cards strips user id."""
     for item in get_cards(authed_user_a)["items"]:
         assert "user_id" not in item
 
@@ -712,6 +670,7 @@ def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
 
 
 def test_get_cards_returns_multiple_cards(authed_user_a, user_a):
+    """Verify that get cards returns multiple cards."""
     client = supabase_for_user(user_a.jwt)
     extra_id = (
         client.table("cards")
@@ -731,6 +690,7 @@ def test_get_cards_returns_multiple_cards(authed_user_a, user_a):
 
 
 def test_get_cards_rls_isolates_users(authed_user_a, authed_user_b, card_a, card_b):
+    """Verify that get cards rls isolates users."""
     a_ids = {c["id"] for c in get_cards(authed_user_a)["items"]}
     b_ids = {c["id"] for c in get_cards(authed_user_b)["items"]}
     assert card_a in a_ids and card_b not in a_ids
@@ -757,3 +717,66 @@ def test_execute_tool_unknown_name_raises_keyerror(authed_user_a):
     that recovery path depends on."""
     with pytest.raises(KeyError):
         execute_tool("phantom_tool", {}, authed_user_a)
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _tag() -> str:
+    """Support tag."""
+    return uuid.uuid4().hex[:8]
+
+def _seed_transaction(
+    user,
+    *,
+    card_id: str | None,
+    merchant: str,
+    amount: str,
+    category: str = "Dining",
+    txn_date: date | None = None,
+) -> str:
+    """Insert one transaction via the user's RLS-scoped client; return id."""
+    client = supabase_for_user(user.jwt)
+    row: dict[str, object] = {
+        "user_id": user.id,
+        "merchant": merchant,
+        "amount": amount,
+        "date": (txn_date or date.today()).isoformat(),
+        "category": category,
+        "source": "manual",
+        "client_request_id": str(uuid.uuid4()),
+    }
+    if card_id is not None:
+        row["card_id"] = card_id
+    return client.table("transactions").insert(row).execute().data[0]["id"]
+
+def _seed_subscription(
+    user,
+    *,
+    card_id: str,
+    name: str,
+    next_billing: date,
+    amount: str = "9.99",
+    frequency: str = "monthly",
+    status: str = "active",
+    category: str = "Streaming",
+) -> str:
+    """Support seed subscription."""
+    client = supabase_for_user(user.jwt)
+    return (
+        client.table("subscriptions")
+        .insert({
+            "user_id": user.id,
+            "card_id": card_id,
+            "name": name,
+            "amount": amount,
+            "frequency": frequency,
+            "start_date": next_billing.isoformat(),
+            "next_billing_date": next_billing.isoformat(),
+            "category": category,
+            "status": status,
+        })
+        .execute()
+        .data[0]["id"]
+    )

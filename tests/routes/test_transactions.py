@@ -35,67 +35,9 @@ from app.services.transactions import list_transactions
 from app.util.merchant import normalize_merchant
 
 
-def _auth(user) -> dict[str, str]:
-    # Day 7 — every authenticated route except /me and /auth/* runs through
-    # `get_current_user_with_device`, which 401s without `X-Device-Id`. The
-    # session-scoped fixtures pre-populate `device_id`.
-    return {
-        "Authorization": f"Bearer {user.jwt}",
-        "X-Device-Id": user.device_id or "",
-    }
-
-
-def _tag() -> str:
-    return uuid.uuid4().hex[:8]
-
-
-def _proposal(
-    *,
-    merchant: str,
-    amount: str = "12.34",
-    txn_date: date | None = None,
-    card_id: str | None = None,
-    category: str = "Groceries",
-    gemini_suggestion: str | None = "Groceries",
-    notes: str | None = None,
-    client_request_id: str | None = None,
-) -> dict:
-    body = {
-        "merchant": merchant,
-        "amount": amount,
-        "date": (txn_date or date.today()).isoformat(),
-        "category": category,
-        "client_request_id": client_request_id or str(uuid.uuid4()),
-    }
-    if card_id is not None:
-        body["card_id"] = card_id
-    if gemini_suggestion is not None:
-        body["gemini_suggestion"] = gemini_suggestion
-    if notes is not None:
-        body["notes"] = notes
-    return body
-
-
-def _authed_user_from_fixture(u) -> AuthedUser:
-    """Build the AuthedUser that `list_transactions()` expects without going
-    through JWKS verification — the JWT is already known-valid from the
-    session fixture that minted it."""
-    return AuthedUser(jwt=u.jwt, user_id=uuid.UUID(u.id), email=u.email)
-
-
-def _merchant_category_row(user, merchant: str) -> dict | None:
-    client = supabase_for_user(user.jwt)
-    resp = (
-        client.table("merchant_category")
-        .select("*")
-        .eq("merchant", normalize_merchant(merchant))
-        .execute()
-    )
-    return resp.data[0] if resp.data else None
-
-
 @pytest.fixture
 def client() -> TestClient:
+    """Provide client."""
     return TestClient(app)
 
 
@@ -105,6 +47,7 @@ def client() -> TestClient:
 
 
 def test_confirm_creates_row_with_server_hardcoded_source(client, user_a, card_a):
+    """Verify that confirm creates row with server hardcoded source."""
     merchant = f"Shop-{_tag()}"
     crid = str(uuid.uuid4())
     resp = client.post(
@@ -137,6 +80,7 @@ def test_confirm_creates_row_with_server_hardcoded_source(client, user_a, card_a
 
 
 def test_confirm_rejects_category_outside_closed_enum(client, user_a, card_a):
+    """Verify that confirm rejects category outside closed enum."""
     resp = client.post(
         "/transactions/confirm",
         headers=_auth(user_a),
@@ -152,6 +96,7 @@ def test_confirm_rejects_category_outside_closed_enum(client, user_a, card_a):
 
 
 def test_confirm_rejects_non_positive_amount(client, user_a, card_a):
+    """Verify that confirm rejects non positive amount."""
     resp = client.post(
         "/transactions/confirm",
         headers=_auth(user_a),
@@ -166,6 +111,7 @@ def test_confirm_rejects_non_positive_amount(client, user_a, card_a):
 
 
 def test_confirm_rejects_far_future_date(client, user_a, card_a):
+    """Verify that confirm rejects far future date."""
     resp = client.post(
         "/transactions/confirm",
         headers=_auth(user_a),
@@ -194,6 +140,7 @@ def test_confirm_rejects_whitespace_only_merchant(client, user_a, card_a):
 def test_confirm_trims_leading_trailing_whitespace_on_merchant(
     client, user_a, card_a
 ):
+    """Verify that confirm trims leading trailing whitespace on merchant."""
     merchant_raw = f"   TrimShop-{_tag()}   "
     merchant_expected = merchant_raw.strip()
     resp = client.post(
@@ -206,6 +153,7 @@ def test_confirm_trims_leading_trailing_whitespace_on_merchant(
 
 
 def test_patch_rejects_whitespace_only_merchant(client, user_a, card_a):
+    """Verify that patch rejects whitespace only merchant."""
     merchant = f"WsPatch-{_tag()}"
     tx_id = _confirm_and_return_id(client, user_a, card_a, merchant=merchant)
 
@@ -218,6 +166,7 @@ def test_patch_rejects_whitespace_only_merchant(client, user_a, card_a):
 
 
 def test_confirm_rejects_foreign_card_id(client, user_a, card_b):
+    """Verify that confirm rejects foreign card id."""
     resp = client.post(
         "/transactions/confirm",
         headers=_auth(user_a),
@@ -237,6 +186,7 @@ def test_confirm_rejects_foreign_card_id(client, user_a, card_b):
 
 
 def test_confirm_on_override_upserts_merchant_category(client, user_a, card_a):
+    """Verify that confirm on override upserts merchant category."""
     merchant = f"OverrideShop-{_tag()}"
     resp = client.post(
         "/transactions/confirm",
@@ -258,6 +208,7 @@ def test_confirm_on_override_upserts_merchant_category(client, user_a, card_a):
 def test_confirm_without_override_does_not_touch_merchant_category(
     client, user_a, card_a
 ):
+    """Verify that confirm without override does not touch merchant category."""
     merchant = f"ConfirmShop-{_tag()}"
     resp = client.post(
         "/transactions/confirm",
@@ -300,6 +251,7 @@ def test_confirm_without_gemini_suggestion_does_not_upsert(client, user_a, card_
 def test_confirm_replay_returns_existing_row_without_duplicating(
     client, user_a, card_a
 ):
+    """Verify that confirm replay returns existing row without duplicating."""
     merchant = f"ReplayShop-{_tag()}"
     crid = str(uuid.uuid4())
     payload = _proposal(
@@ -335,17 +287,8 @@ def test_confirm_replay_returns_existing_row_without_duplicating(
 # ---------------------------------------------------------------------------
 
 
-def _confirm_and_return_id(client, user_a, card_a, *, merchant, **kwargs) -> str:
-    resp = client.post(
-        "/transactions/confirm",
-        headers=_auth(user_a),
-        json=_proposal(merchant=merchant, card_id=card_a, **kwargs),
-    )
-    assert resp.status_code == 200
-    return resp.json()["transaction"]["id"]
-
-
 def test_patch_category_upserts_merchant_category(client, user_a, card_a):
+    """Verify that patch category upserts merchant category."""
     merchant = f"PatchShop-{_tag()}"
     tx_id = _confirm_and_return_id(
         client, user_a, card_a,
@@ -377,6 +320,7 @@ def test_patch_category_upserts_merchant_category(client, user_a, card_a):
 
 
 def test_patch_merchant_only_does_not_touch_merchant_category(client, user_a, card_a):
+    """Verify that patch merchant only does not touch merchant category."""
     original = f"MerchantPatch-{_tag()}"
     tx_id = _confirm_and_return_id(
         client, user_a, card_a,
@@ -401,6 +345,7 @@ def test_patch_merchant_only_does_not_touch_merchant_category(client, user_a, ca
 def test_patch_merchant_and_category_keys_upsert_on_new_merchant(
     client, user_a, card_a
 ):
+    """Verify that patch merchant and category keys upsert on new merchant."""
     original = f"BothPatch-{_tag()}"
     tx_id = _confirm_and_return_id(
         client, user_a, card_a,
@@ -438,6 +383,7 @@ def test_patch_clears_card_id_on_explicit_null(client, user_a, card_a):
 
 
 def test_patch_clears_notes_on_explicit_null(client, user_a, card_a):
+    """Verify that patch clears notes on explicit null."""
     merchant = f"ClearNotes-{_tag()}"
     tx_id = _confirm_and_return_id(
         client, user_a, card_a, merchant=merchant, notes="original note"
@@ -492,6 +438,7 @@ def test_patch_omitted_field_leaves_stored_value_alone(client, user_a, card_a):
 
 
 def test_patch_same_category_as_stored_does_not_upsert(client, user_a, card_a):
+    """Verify that patch same category as stored does not upsert."""
     merchant = f"NoopPatch-{_tag()}"
     tx_id = _confirm_and_return_id(
         client, user_a, card_a,
@@ -543,6 +490,7 @@ def seeded_transactions(client, user_a, card_a):
 
 
 def test_get_filter_merchant_contains(client, user_a, seeded_transactions):
+    """Verify that get filter merchant contains."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -556,6 +504,7 @@ def test_get_filter_merchant_contains(client, user_a, seeded_transactions):
 
 
 def test_get_filter_category(client, user_a, seeded_transactions):
+    """Verify that get filter category."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -568,6 +517,7 @@ def test_get_filter_category(client, user_a, seeded_transactions):
 
 
 def test_get_filter_amount_bounds(client, user_a, seeded_transactions):
+    """Verify that get filter amount bounds."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -586,6 +536,7 @@ def test_get_filter_amount_bounds(client, user_a, seeded_transactions):
 
 
 def test_get_filter_date_range(client, user_a, seeded_transactions):
+    """Verify that get filter date range."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -603,6 +554,7 @@ def test_get_filter_date_range(client, user_a, seeded_transactions):
 
 
 def test_get_is_ordered_by_date_desc(client, user_a, seeded_transactions):
+    """Verify that get is ordered by date desc."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -616,6 +568,7 @@ def test_get_is_ordered_by_date_desc(client, user_a, seeded_transactions):
 def test_get_offset_past_end_returns_empty_without_more(
     client, user_a, seeded_transactions
 ):
+    """Verify that get offset past end returns empty without more."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -630,6 +583,7 @@ def test_get_offset_past_end_returns_empty_without_more(
 def test_get_has_more_true_when_more_rows_exist(
     client, user_a, seeded_transactions
 ):
+    """Verify that get has more true when more rows exist."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -644,6 +598,7 @@ def test_get_has_more_true_when_more_rows_exist(
 def test_get_limit_silently_clamps_at_service_max(
     client, user_a, seeded_transactions
 ):
+    """Verify that get limit silently clamps at service max."""
     resp = client.get(
         "/transactions",
         headers=_auth(user_a),
@@ -655,6 +610,7 @@ def test_get_limit_silently_clamps_at_service_max(
 
 
 def test_get_response_has_no_total_field(client, user_a, seeded_transactions):
+    """Verify that get response has no total field."""
     resp = client.get("/transactions", headers=_auth(user_a))
     body = resp.json()
     assert "total" not in body, (
@@ -671,6 +627,7 @@ def test_get_response_has_no_total_field(client, user_a, seeded_transactions):
 def test_service_and_route_return_identical_payloads(
     client, user_a, seeded_transactions
 ):
+    """Verify that service and route return identical payloads."""
     tag = seeded_transactions
     http = client.get(
         "/transactions",
@@ -698,6 +655,7 @@ def test_service_and_route_return_identical_payloads(
 
 
 def test_delete_removes_row(client, user_a, card_a):
+    """Verify that delete removes row."""
     merchant = f"DeleteShop-{_tag()}"
     tx_id = _confirm_and_return_id(client, user_a, card_a, merchant=merchant)
 
@@ -715,6 +673,7 @@ def test_delete_removes_row(client, user_a, card_a):
 
 
 def test_user_b_cannot_get_user_a_transaction(client, user_a, user_b, card_a):
+    """Verify that user b cannot get user a transaction."""
     merchant = f"PrivateShop-{_tag()}"
     tx_id = _confirm_and_return_id(client, user_a, card_a, merchant=merchant)
 
@@ -723,6 +682,7 @@ def test_user_b_cannot_get_user_a_transaction(client, user_a, user_b, card_a):
 
 
 def test_user_b_cannot_patch_user_a_transaction(client, user_a, user_b, card_a):
+    """Verify that user b cannot patch user a transaction."""
     merchant = f"PatchPrivate-{_tag()}"
     tx_id = _confirm_and_return_id(client, user_a, card_a, merchant=merchant)
 
@@ -740,6 +700,7 @@ def test_user_b_cannot_patch_user_a_transaction(client, user_a, user_b, card_a):
 
 
 def test_user_b_cannot_delete_user_a_transaction(client, user_a, user_b, card_a):
+    """Verify that user b cannot delete user a transaction."""
     merchant = f"DeletePrivate-{_tag()}"
     tx_id = _confirm_and_return_id(client, user_a, card_a, merchant=merchant)
 
@@ -757,6 +718,7 @@ def test_user_b_cannot_delete_user_a_transaction(client, user_a, user_b, card_a)
 def test_user_b_list_does_not_include_user_a_rows(
     client, user_a, user_b, seeded_transactions
 ):
+    """Verify that user b list does not include user a rows."""
     tag = seeded_transactions
     resp = client.get(
         "/transactions",
@@ -765,3 +727,76 @@ def test_user_b_list_does_not_include_user_a_rows(
     )
     assert resp.status_code == 200
     assert resp.json()["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# Helpers.
+# ---------------------------------------------------------------------------
+
+def _auth(user) -> dict[str, str]:
+    # Day 7 — every authenticated route except /me and /auth/* runs through
+    # `get_current_user_with_device`, which 401s without `X-Device-Id`. The
+    # session-scoped fixtures pre-populate `device_id`.
+    """Support auth."""
+    return {
+        "Authorization": f"Bearer {user.jwt}",
+        "X-Device-Id": user.device_id or "",
+    }
+
+def _tag() -> str:
+    """Support tag."""
+    return uuid.uuid4().hex[:8]
+
+def _proposal(
+    *,
+    merchant: str,
+    amount: str = "12.34",
+    txn_date: date | None = None,
+    card_id: str | None = None,
+    category: str = "Groceries",
+    gemini_suggestion: str | None = "Groceries",
+    notes: str | None = None,
+    client_request_id: str | None = None,
+) -> dict:
+    """Support proposal."""
+    body = {
+        "merchant": merchant,
+        "amount": amount,
+        "date": (txn_date or date.today()).isoformat(),
+        "category": category,
+        "client_request_id": client_request_id or str(uuid.uuid4()),
+    }
+    if card_id is not None:
+        body["card_id"] = card_id
+    if gemini_suggestion is not None:
+        body["gemini_suggestion"] = gemini_suggestion
+    if notes is not None:
+        body["notes"] = notes
+    return body
+
+def _authed_user_from_fixture(u) -> AuthedUser:
+    """Build the AuthedUser that `list_transactions()` expects without going
+    through JWKS verification — the JWT is already known-valid from the
+    session fixture that minted it."""
+    return AuthedUser(jwt=u.jwt, user_id=uuid.UUID(u.id), email=u.email)
+
+def _merchant_category_row(user, merchant: str) -> dict | None:
+    """Support merchant category row."""
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("merchant_category")
+        .select("*")
+        .eq("merchant", normalize_merchant(merchant))
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+def _confirm_and_return_id(client, user_a, card_a, *, merchant, **kwargs) -> str:
+    """Support confirm and return id."""
+    resp = client.post(
+        "/transactions/confirm",
+        headers=_auth(user_a),
+        json=_proposal(merchant=merchant, card_id=card_a, **kwargs),
+    )
+    assert resp.status_code == 200
+    return resp.json()["transaction"]["id"]
