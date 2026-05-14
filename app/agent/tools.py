@@ -48,7 +48,6 @@ from app.models.transactions import (
 )
 from app.prompts.categories import ALLOWED_CATEGORIES
 from app.services.transactions import apply_transaction_filters, list_transactions
-from app.util.merchant import normalize_merchant
 
 # Hard cap on rows fetched for an aggregation. Above this we still return
 # the partial sum but flag the result as truncated so Claude can ask the
@@ -774,8 +773,21 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     if card_id is not None and not _card_belongs_to_user(client, card_id):
         card_id = None
 
+    # Carry the merchant through in its display form (validator already
+    # stripped leading/trailing whitespace). The §8.2 schema says
+    # transactions.merchant is "as entered or parsed" — the case-preserving
+    # value the user sees in their ledger. normalize_merchant() lowercases
+    # for the merchant_category JOIN key (§8.4), which is a different
+    # column with a different purpose; the confirm route handles that
+    # normalization itself when it upserts the past-correction row
+    # (app/routes/transactions.py:_upsert_merchant_correction), and
+    # categorize() normalizes internally for its own cache lookup. Pre-
+    # normalizing here would defeat Day 9c's canonicalization win — the
+    # whole point is that Claude picks "Kentucky Fried Chicken" from the
+    # top_user_merchants block, and the user should see that exact form
+    # on the parse card, not "kentucky fried chicken".
     proposal = TransactionProposal(
-        merchant=normalize_merchant(request.merchant),
+        merchant=request.merchant,
         amount=request.amount,
         date=request.date,
         card_id=card_id,

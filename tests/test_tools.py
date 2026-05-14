@@ -773,8 +773,16 @@ def test_propose_transaction_fills_category_via_gemini(
     )
     assert result["category"] == "Groceries"
     assert result["gemini_suggestion"] == "Groceries"
-    # Merchant comes back lowercased + whitespace-normalized.
-    assert result["merchant"] == "trader joe's"
+    # Merchant comes back in its display form — case-preserving, with
+    # only leading/trailing whitespace stripped by the field validator.
+    # transactions.merchant is "as entered or parsed" per §8.2; the
+    # lowercase form is for the merchant_category JOIN key (§8.4), which
+    # the confirm route normalizes separately on upsert. Pre-normalizing
+    # here would also defeat Day 9c's canonicalization win — the whole
+    # point is for Claude to pick "Kentucky Fried Chicken" from the
+    # top_user_merchants block and have that exact spelling reach the
+    # user's parse card.
+    assert result["merchant"] == "Trader Joe's"
     # Fresh client_request_id minted by the tool.
     uuid.UUID(result["client_request_id"])
     # No actual write to transactions — verify the user's table has no

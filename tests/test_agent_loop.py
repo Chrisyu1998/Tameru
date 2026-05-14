@@ -133,7 +133,7 @@ def test_one_hop_turn_returns_text(authed_user, monkeypatch):
     rows = _ai_call_log_chat_rows(authed_user)
     assert rows, "expected at least one ai_call_log row for chat_turn"
     assert rows[0]["task_type"] == "chat_turn"
-    assert rows[0]["prompt_version"] == "chat_v3"
+    assert rows[0]["prompt_version"] == "chat_v4"
     assert rows[0]["success"] is True
 
 

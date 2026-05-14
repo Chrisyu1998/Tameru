@@ -158,7 +158,12 @@ def run_turn(
     client = _anthropic_client()
     model = _model_name()
     schemas = tool_schemas()
-    system = render_system_prompt()
+    # Day 9c: render_system_prompt returns a two-block content array.
+    # Block 0 is the static preamble (cached via cache_control: ephemeral);
+    # block 1 is the dynamic tail (Today is … + per-user merchants). The
+    # merchant query fires once at turn entry — the set is stable across
+    # the iterations below, so we don't pay it per-hop.
+    system = render_system_prompt(user_jwt=user.jwt)
     prompt_hash = system_prompt_hash(system, schemas)
 
     messages: list[dict[str, Any]] = list(conversation_history)

@@ -328,6 +328,101 @@ seed_second_card() {
     | jq '.[0] | {id, name, program, active}'
 }
 
+# ---- Day 9c: merchant canonicalization helpers ---------------------------
+#
+# The Python helpers below import from `app.prompts.chat`. They need the
+# project venv on PATH — run `source .venv/bin/activate` in this shell
+# before calling them. They degrade with a clear error otherwise.
+
+view_top_merchants() {
+  # Query the `top_user_merchants` view directly via PostgREST under the
+  # user's JWT. This is the raw view data — what render_user_merchants
+  # reads before it wraps the rows in framing text. RLS firing here is
+  # how you visually confirm `security_invoker = true` on the view DDL:
+  # if it weren't set, you'd see every user's merchants here too.
+  curl -fsS "$SUPABASE_URL/rest/v1/top_user_merchants?select=*" \
+    -H "apikey: $SUPABASE_ANON_KEY" \
+    -H "Authorization: Bearer $JWT" | jq
+}
+
+show_user_merchants_block() {
+  # Print render_user_merchants($JWT) — the exact string that lands in
+  # block[1] of the system prompt. Use to verify your seeded merchants
+  # appear with the expected frequencies before firing a chat turn that
+  # depends on canonicalization.
+  python3 - <<'PY' 2>&1
+import os, sys
+try:
+    from app.prompts.chat import render_user_merchants
+except ImportError:
+    sys.exit("ERROR: cannot import app.prompts.chat — activate the venv first:\n  source .venv/bin/activate")
+print(render_user_merchants(os.environ["JWT"]))
+PY
+}
+
+show_system_prompt() {
+  # Print the two-block content array render_system_prompt returns. Block 0
+  # is the static preamble with cache_control: ephemeral (cached across all
+  # users); block 1 is the per-user dynamic tail (Today is … + merchants,
+  # uncached). Confirm the shape before sending it to Claude.
+  python3 - <<'PY' 2>&1
+import json, os, sys
+try:
+    from app.prompts.chat import render_system_prompt, system_prompt_hash
+    from app.agent.tools import tool_schemas
+except ImportError:
+    sys.exit("ERROR: cannot import app modules — activate the venv first:\n  source .venv/bin/activate")
+blocks = render_system_prompt(user_jwt=os.environ["JWT"])
+for i, b in enumerate(blocks):
+    cc = b.get("cache_control")
+    print(f"=== block[{i}] (type={b['type']}, cache_control={cc}, chars={len(b['text'])}) ===")
+    print(b["text"])
+    print()
+print(f"prompt_hash (block[0] + tool schemas): {system_prompt_hash(blocks, tool_schemas())}")
+PY
+}
+
+seed_canonical_merchant() {
+  # Seed N visits (default 5) to a canonical merchant name so it ranks
+  # high enough to land in top_user_merchants. Usage:
+  #
+  #   seed_canonical_merchant                              # 5 × Kentucky Fried Chicken
+  #   seed_canonical_merchant "Trader Joe's"               # 5 × Trader Joe's
+  #   seed_canonical_merchant "Kentucky Fried Chicken" 8   # 8 visits
+  #
+  # After this, asking Claude "spent $10 at KFC" should canonicalize to
+  # the seeded name via the merchants block.
+  local name="${1:-Kentucky Fried Chicken}"
+  local n="${2:-5}"
+  local i
+  for ((i=1; i<=n; i++)); do
+    _seed_txn "$name" "12.00" "$TODAY" "Dining"
+  done
+  echo "✓ Seeded $n visits to '$name'"
+}
+
+test_canonicalization() {
+  # End-to-end smoke for Day 9c. Seeds canonical history, prints the
+  # merchants block so you can see what Claude sees, then fires a chat
+  # turn that uses a variant spelling. Inspect tool_calls[].input.merchant
+  # in the chat response — it should be the seeded canonical name, not
+  # the variant the user typed.
+  local canonical="${1:-Kentucky Fried Chicken}"
+  local variant="${2:-KFC}"
+  echo "Seeding 5 × '$canonical'…"
+  seed_canonical_merchant "$canonical" 5
+  echo ""
+  echo "Current merchants block (block[1] of the system prompt):"
+  echo "--------------------------------------------------------"
+  show_user_merchants_block
+  echo "--------------------------------------------------------"
+  echo ""
+  echo "Asking Claude: 'spent \$10 at $variant'"
+  echo "Expect tool_calls[].input.merchant == '$canonical' (not '$variant')."
+  echo ""
+  chat "spent \$10 at $variant"
+}
+
 tameru_teardown() {
   curl -s -X DELETE "$SUPABASE_URL/auth/v1/admin/users/$USER_ID" \
     -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
@@ -336,6 +431,8 @@ tameru_teardown() {
   unset JWT USER_ID DEVICE_ID CARD_ID EMAIL PASSWORD TAMERU_CONV_ID
   unset -f chat chat_reset tameru_audit tameru_seed_future_dining tameru_teardown \
     confirm_last_propose list_goals list_txns deactivate_card seed_second_card \
+    view_top_merchants show_user_merchants_block show_system_prompt \
+    seed_canonical_merchant test_canonicalization \
     _last_propose_payload 2>/dev/null
 }
 
@@ -363,6 +460,14 @@ echo ""
 echo "Defensive guard tests (Day 9b):"
 echo "  seed_second_card \"Amex Gold\" MR    # for alias-resolution tests"
 echo "  deactivate_card \$CARD_ID            # then propose with the now-inactive UUID"
+echo ""
+echo "Merchant canonicalization (Day 9c):"
+echo "  view_top_merchants                  # raw view rows under your JWT (RLS check)"
+echo "  show_user_merchants_block           # the string render_user_merchants returns"
+echo "  show_system_prompt                  # both system-prompt blocks + prompt_hash"
+echo "  seed_canonical_merchant             # 5 × 'Kentucky Fried Chicken' (or pass a name)"
+echo "  test_canonicalization               # seed history + ask Claude about 'KFC'"
+echo "  (these helpers need: source .venv/bin/activate)"
 echo ""
 echo "Diagnostics:"
 echo "  tameru_audit                        # last 10 chat_turn ai_call_log rows"
