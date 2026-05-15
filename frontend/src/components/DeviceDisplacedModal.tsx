@@ -20,11 +20,13 @@ export function DeviceDisplacedModal() {
       await signOut();
     } finally {
       // Whether signOut hits the network or not, we want to release the
-      // user from the modal. clearSession() also wipes the JWT so the
-      // /signin page renders cleanly without a stale identity flicker.
+      // user from the modal. clearSession() wipes the JWT so the onboarding
+      // gate renders cleanly without a stale identity flicker.
       useAppStore.getState().clearSession();
       useAppStore.getState().setDisplaced(false);
-      window.location.replace('/signin');
+      // The dedicated /signin page is gone (step 1 import collapsed it into
+      // the onboarding wizard); / is the canonical sign-in entry now.
+      window.location.replace('/');
     }
   };
 
@@ -35,16 +37,16 @@ export function DeviceDisplacedModal() {
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim px-6"
     >
       <div className="flex w-full max-w-sm flex-col gap-5 rounded-2xl bg-elevated p-6">
-        <h2 className="font-display text-2xl text-primary">
+        <h2 className="font-serif text-2xl text-ink lowercase-title">
           you signed in on another device.
         </h2>
-        <p className="font-sans text-sm text-secondary">
+        <p className="text-sm text-ink-secondary">
           this session has ended.
         </p>
         <button
           type="button"
           onClick={handleSignInAgain}
-          className="rounded-2xl bg-accent-emphasis px-5 py-3 font-sans text-base text-elevated"
+          className="rounded-2xl bg-moss-deep px-5 py-3 text-base text-surface hover:bg-moss"
         >
           sign in again
         </button>

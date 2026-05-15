@@ -27,21 +27,21 @@ export function UpdateToast() {
       aria-live="polite"
       className="fixed inset-x-4 bottom-4 z-50 flex items-center justify-between gap-3 rounded-2xl border border-hairline bg-elevated px-4 py-3"
     >
-      <span className="font-sans text-sm text-primary">
+      <span className="text-sm text-ink">
         a new version is available.
       </span>
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={() => setNeedRefresh(false)}
-          className="font-sans text-sm text-tertiary"
+          className="text-sm text-ink-tertiary"
         >
           later
         </button>
         <button
           type="button"
           onClick={() => void updateServiceWorker(true)}
-          className="font-sans text-sm font-medium text-accent-emphasis"
+          className="text-sm font-medium text-moss-deep"
         >
           refresh
         </button>

@@ -132,6 +132,10 @@ export function initAuth(): Promise<void> {
           jwt: session.access_token,
           deviceId,
         });
+        // Best-effort: refresh home_currency on every auth change so the
+        // onboarding gate sees the latest server view (e.g. post-bootstrap
+        // re-auth on a different tab).
+        void refreshHomeCurrency();
       } else {
         // Sign-out / token-refresh-failed — clear the JWT but keep deviceId
         // around so we don't churn it on a re-sign-in.
@@ -149,6 +153,11 @@ export function initAuth(): Promise<void> {
         jwt: data.session.access_token,
         deviceId,
       });
+      // Block init on /me so the first paint of the onboarding gate /
+      // home redirect already knows whether home_currency is set. If /me
+      // fails we leave homeCurrency=undefined and the gate falls through
+      // to a signed-in-but-unknown state — the user can still navigate.
+      await refreshHomeCurrency();
     } else {
       // No persisted session — preseed deviceId so api.ts has it ready.
       useAppStore.getState().setSession({
@@ -159,6 +168,51 @@ export function initAuth(): Promise<void> {
     }
   })();
   return _initPromise;
+}
+
+/**
+ * Fetch /me, stash home_currency, and — if the user has already bootstrapped
+ * — claim this browser as the active device.
+ *
+ * Called from initAuth on boot and from onAuthStateChange after any sign-in.
+ * After a successful /auth/bootstrap, callers should set home_currency in the
+ * store directly (we already have the value) rather than round-tripping /me.
+ *
+ * The claim_device call here is what makes "sign in on a second browser"
+ * actually work: without it, /me succeeds (auth is JWT-only), but the next
+ * authenticated request 401s with DEVICE_DISPLACED because the server's
+ * active_device_id still points at the previous browser. claimDevice tells
+ * the server "this browser is the new active one" — the previous browser's
+ * next /auth/check_device poll will then see it's been displaced.
+ *
+ * Skipped when home_currency is null — that means the user hasn't completed
+ * /auth/bootstrap yet, and bootstrap itself sets active_device_id in the
+ * same transaction. Calling claim_device first would fail.
+ */
+export async function refreshHomeCurrency(): Promise<void> {
+  try {
+    const me = await fetchMe();
+    useAppStore.getState().setHomeCurrency(me.home_currency);
+    if (me.home_currency !== null) {
+      const { deviceId } = useAppStore.getState();
+      if (deviceId) {
+        try {
+          await claimDevice(deviceId);
+          // Successful claim invalidates any latched displacement state
+          // that was left over from a previous session.
+          useAppStore.getState().setDisplaced(false);
+        } catch {
+          // claim_device 4xx isn't fatal — if it failed because the user
+          // genuinely is displaced (e.g. they're signed in elsewhere too),
+          // the next API call will surface it via the 401 latch and the
+          // user can re-sign-in from there.
+        }
+      }
+    }
+  } catch {
+    // /me failure: leave whatever's in the store. The displaced modal
+    // handles the 401 DEVICE_DISPLACED path on its own.
+  }
 }
 
 /**
