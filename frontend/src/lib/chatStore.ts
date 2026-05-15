@@ -14,7 +14,9 @@
 import { useEffect, useState } from "react";
 import {
   isDailyCapEngaged,
+  setDailyCapEngaged,
   newId,
+  type ChartSpec,
   type ChatMessage,
   type ParseDraft,
   type ToolName,
@@ -23,8 +25,10 @@ import { ledger } from "./ledger";
 import type { Category } from "./categories";
 import type { Transaction } from "./fixtures";
 import {
+  getChatMessages,
   postChatTurn,
   toChatTurnError,
+  type ChatMessageWire,
   type ChatToolCall,
   type ChatTurnResponse,
 } from "./chatApi";
@@ -48,14 +52,47 @@ interface ChatState {
   conversationId: string | null;
   /** True while a turn is in flight. UI uses this to disable the input. */
   busy: boolean;
+  /**
+   * Latched when /chat/turn returns 429 UCAP_EXCEEDED. UI swaps the input
+   * row for <DailyCapCard />. Cleared on newChat() or any subsequent
+   * successful turn (e.g., after midnight UTC reset + new send).
+   */
+  capEngaged: boolean;
+}
+
+/**
+ * localStorage key the chat page rehydrates from on mount. Persists the
+ * server's conversation_id so a page refresh continues the same thread
+ * instead of starting fresh (Day 10b §3). Cleared on `newChat()`.
+ */
+const CONVO_ID_KEY = "tameru-chat-conversation-id";
+
+function readPersistedConvoId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(CONVO_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedConvoId(next: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (next === null) window.localStorage.removeItem(CONVO_ID_KEY);
+    else window.localStorage.setItem(CONVO_ID_KEY, next);
+  } catch {
+    // ignore — localStorage can be unavailable in private mode
+  }
 }
 
 let state: ChatState = {
   messages: [],
   drawerOpen: false,
   drawerExpanded: false,
-  conversationId: null,
+  conversationId: readPersistedConvoId(),
   busy: false,
+  capEngaged: isDailyCapEngaged(),
 };
 
 const listeners = new Set<Listener>();
@@ -103,7 +140,7 @@ export const chatStore = {
     const text = raw.trim();
     if (!text) return;
     if (state.busy) return;
-    if (isDailyCapEngaged()) return;
+    if (state.capEngaged) return;
 
     appendMessages({ id: newId("user"), role: "user", text });
     setState({ busy: true });
@@ -123,14 +160,18 @@ export const chatStore = {
 
     try {
       const res = await postChatTurn(text, state.conversationId);
+      // A successful turn clears any latched cap state — the bucket either
+      // rolled over (midnight UTC) or the dev toggle was wrong.
+      if (state.capEngaged) setState({ capEngaged: false });
+      if (state.conversationId !== res.conversation_id) {
+        writePersistedConvoId(res.conversation_id);
+      }
       setState({ conversationId: res.conversation_id });
       _renderTurn(res);
     } catch (err) {
       const e = toChatTurnError(err);
       if (e.code === "UCAP_EXCEEDED") {
-        appendAssistantText(
-          "we've hit today's chat budget. try again tomorrow.",
-        );
+        setState({ capEngaged: true });
       } else if (e.code === "PROVIDER_RATE_LIMITED") {
         appendAssistantText(
           "our ai is having a moment. try again in a few minutes.",
@@ -154,7 +195,40 @@ export const chatStore = {
    * Next turn starts a fresh conversation (server mints a new UUID).
    */
   newChat() {
-    setState({ messages: [], conversationId: null });
+    writePersistedConvoId(null);
+    setState({ messages: [], conversationId: null, capEngaged: false });
+  },
+
+  /**
+   * Pull /chat/messages for the current `conversationId` and replace the
+   * thread. Called from the chat page mount when there's a persisted
+   * conversation id but no in-memory messages.
+   *
+   * Map rules (Day 10b §3 spec — "for v1, all blocks render as text bubbles"):
+   *   - user text blocks    → UserMessage
+   *   - assistant text blocks → AssistantTextMessage (no `via` chip — we
+   *     don't know which tool produced the text without the trace)
+   *   - non-text blocks (tool_use/tool_result, future image)    → dropped
+   *
+   * Failures are swallowed deliberately — a refresh that can't reach the
+   * backend should still render the empty composer rather than wedging
+   * the UI on an error state.
+   */
+  async hydrateMessages(): Promise<void> {
+    const cid = state.conversationId;
+    if (!cid) return;
+    if (state.messages.length > 0) return;
+    try {
+      const res = await getChatMessages(cid);
+      const rehydrated = res.messages
+        .map((m) => _wireMessageToLocal(m))
+        .filter((m): m is ChatMessage => m !== null);
+      if (rehydrated.length > 0) {
+        setState({ messages: rehydrated });
+      }
+    } catch {
+      // see docstring — silent failure is intentional.
+    }
   },
 
   /**
@@ -242,6 +316,16 @@ export const chatStore = {
   },
 
   /**
+   * Dev-only override for the daily-cap UI. Mirrors the sessionStorage
+   * flag so the state survives a page reload during manual UI testing
+   * — production cap state comes from `send()`'s 429 path instead.
+   */
+  setCapEngaged(next: boolean): void {
+    setDailyCapEngaged(next);
+    setState({ capEngaged: next });
+  },
+
+  /**
    * Mutate a parse card's draft in place — used by the "fix" flow when the
    * user tweaks fields in EditTransactionSheet before tapping confirm.
    * Only fields present in the patch are touched; everything else stays.
@@ -315,12 +399,17 @@ function _renderTurn(res: ChatTurnResponse): void {
   const getTransactionsCalls = res.tool_calls.filter(
     (tc) => tc.name === "get_transactions",
   );
-  // Pick a non-propose, non-get_transactions tool for the attribution chip on
-  // the trailing text bubble (the dedicated renderers already attribute
-  // themselves). First wins.
+  const renderChartCalls = res.tool_calls.filter(
+    (tc) => tc.name === "render_chart",
+  );
+  // Pick a non-propose, non-get_transactions, non-render_chart tool for the
+  // attribution chip on the trailing text bubble (the dedicated renderers
+  // already attribute themselves). First wins.
   const otherToolName = res.tool_calls.find(
     (tc) =>
-      tc.name !== "propose_transaction" && tc.name !== "get_transactions",
+      tc.name !== "propose_transaction" &&
+      tc.name !== "get_transactions" &&
+      tc.name !== "render_chart",
   )?.name;
 
   const drafted: ChatMessage[] = [];
@@ -351,10 +440,15 @@ function _renderTurn(res: ChatTurnResponse): void {
   // the dashboard learns about any older rows the initial /transactions
   // fetch hadn't surfaced.
   //
-  // Default intent is "edit" — tapping a candidate opens the edit sheet,
-  // which already has a delete button, so this also satisfies the "delete
-  // the X" path with one extra tap. Inferring delete-intent from
-  // assistant_text would be cheap but error-prone; punt to v1+.
+  // Intent inference is regex-based on the assistant's prose — cheap and
+  // wrong sometimes, but the candidate cards' tap target still leads to the
+  // edit sheet which has its own delete affordance, so a misclassified
+  // intent is a chip-color mistake, not a broken flow.
+  const candidateIntent: "edit" | "delete" = /\b(delete|remove|drop)\b/i.test(
+    res.assistant_text,
+  )
+    ? "delete"
+    : "edit";
   for (let i = 0; i < getTransactionsCalls.length; i++) {
     const txs = _ingestTransactionRows(getTransactionsCalls[i]);
     if (txs.length === 0) continue;
@@ -371,8 +465,31 @@ function _renderTurn(res: ChatTurnResponse): void {
       kind: "candidates",
       preface,
       candidateIds: txs.map((t) => t.id),
-      intent: "edit",
+      intent: candidateIntent,
       via: "find_transactions",
+    });
+  }
+
+  // Render any render_chart calls. The agent's system prompt says one
+  // chart per turn, but we tolerate N defensively — they stack vertically
+  // in the thread. The first chart consumes the assistant_text as a
+  // preface (same pattern as parse/candidates above) so the bubble above
+  // the chart isn't a duplicate of the title.
+  for (let i = 0; i < renderChartCalls.length; i++) {
+    const spec = _toolToChartSpec(renderChartCalls[i]);
+    if (!spec) continue;
+    const preface =
+      i === 0 && res.assistant_text && !textConsumed
+        ? res.assistant_text
+        : undefined;
+    if (i === 0 && preface) textConsumed = true;
+    drafted.push({
+      id: newId("ai"),
+      role: "assistant",
+      kind: "rich-chart",
+      preface,
+      spec,
+      via: "calculate_total",
     });
   }
 
@@ -436,16 +553,31 @@ function _ingestTransactionRows(call: ChatToolCall): Transaction[] {
  * carry the minimum fields (defensive — should never happen given the
  * server's response_model).
  */
+interface TransactionProposalWire {
+  merchant: string;
+  amount: string | number;
+  date: string;
+  card_id: string | null;
+  category: Category;
+  notes: string | null;
+  gemini_suggestion: string | null;
+  client_request_id: string;
+}
+
 function _proposalToDraft(call: ChatToolCall): ParseDraft | null {
-  const r = call.result;
+  // Backend response_model is TransactionProposal (app/models/transactions.py)
+  // and the local Category union now covers every backend value, so we
+  // trust the wire shape. Day 10b §1: "if a server row still returns
+  // something outside the union it's a real bug, not a cast to paper over."
+  const r = call.result as unknown as TransactionProposalWire;
   const merchant = typeof r.merchant === "string" ? r.merchant : null;
-  const amountRaw = r.amount;
   const date = typeof r.date === "string" ? r.date : null;
-  const category = typeof r.category === "string" ? (r.category as Category) : null;
+  const category = typeof r.category === "string" ? r.category : null;
   const clientRequestId =
     typeof r.client_request_id === "string" ? r.client_request_id : null;
   if (!merchant || !date || !category || !clientRequestId) return null;
 
+  const amountRaw = r.amount;
   const amountNum =
     typeof amountRaw === "number"
       ? amountRaw
@@ -476,6 +608,47 @@ function _proposalToDraft(call: ChatToolCall): ParseDraft | null {
 }
 
 /**
+ * Validate and narrow a render_chart tool result into the local ChartSpec
+ * shape. Anything that doesn't pass the structural check is dropped — the
+ * backend's RenderChartRequest validator already enforces shape on the way
+ * in, so a failure here means the loop returned something we can't trust
+ * to render. Returns null for the caller to skip cleanly.
+ */
+function _toolToChartSpec(call: ChatToolCall): ChartSpec | null {
+  const r = call.result;
+  if (!r || typeof r !== "object") return null;
+  const type = r.type;
+  if (
+    type !== "line" &&
+    type !== "bar" &&
+    type !== "stacked_bar" &&
+    type !== "donut"
+  ) {
+    return null;
+  }
+  if (!Array.isArray(r.x) || r.x.length === 0) return null;
+  const x = r.x.filter((v): v is string => typeof v === "string");
+  if (x.length !== r.x.length) return null;
+  if (!Array.isArray(r.series) || r.series.length === 0) return null;
+  const series: ChartSpec["series"] = [];
+  for (const s of r.series) {
+    if (!s || typeof s !== "object") return null;
+    const name = (s as { name?: unknown }).name;
+    const data = (s as { data?: unknown }).data;
+    if (typeof name !== "string") return null;
+    if (!Array.isArray(data) || data.length !== x.length) return null;
+    if (!data.every((d) => typeof d === "number" && Number.isFinite(d))) {
+      return null;
+    }
+    series.push({ name, data: data as number[] });
+  }
+  const title = typeof r.title === "string" ? r.title : "";
+  if (!title) return null;
+  const y_label = typeof r.y_label === "string" ? r.y_label : undefined;
+  return { type, x, series, title, y_label };
+}
+
+/**
  * Translate a backend tool name into the local `ToolName` union the
  * MessageBubble `via` attribution chip renders. Tools without a local
  * equivalent fall through to undefined (no chip).
@@ -492,4 +665,28 @@ function _toolToVia(name: string | undefined): ToolName | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * Collapse a server-side chat_messages row into the local ChatMessage
+ * shape. v1 rehydrates everything as plain text — the prompt is explicit
+ * that parse cards and candidate lists are session-scoped (their interactive
+ * state would be wrong on rehydrate), so we don't try to reconstruct them
+ * from content_blocks. Tool_use/tool_result blocks live only in the trace
+ * table and never surface here.
+ *
+ * Returns null when the row has no extractable text, so the caller can
+ * skip it cleanly rather than render a blank bubble.
+ */
+function _wireMessageToLocal(m: ChatMessageWire): ChatMessage | null {
+  const text = m.content_blocks
+    .filter((b) => b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+    .join("\n\n")
+    .trim();
+  if (!text) return null;
+  if (m.role === "user") {
+    return { id: newId("user"), role: "user", text };
+  }
+  return { id: newId("ai"), role: "assistant", kind: "text", text };
 }

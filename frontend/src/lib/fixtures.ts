@@ -122,13 +122,13 @@ export const FIXTURE_TRANSACTIONS: Transaction[] = [
   t("Whole Foods", 51.9, 11, "card-citi", "Groceries", "tx-14"),
   t("Greenmarket", 19.0, 14, "card-citi", "Groceries", "tx-15"),
 
-  // Transportation (a bit above usual)
-  t("MTA OMNY", 2.9, 0, "card-citi", "Transportation", "tx-16"),
-  t("Lyft", 18.4, 2, "card-csp", "Transportation", "tx-17"),
-  t("MTA OMNY", 2.9, 2, "card-citi", "Transportation", "tx-18"),
-  t("Lyft", 24.6, 6, "card-csp", "Transportation", "tx-19"),
-  t("MTA OMNY", 33.0, 9, "card-citi", "Transportation", "tx-20"),
-  t("Revel", 14.0, 11, "card-csp", "Transportation", "tx-21"),
+  // Transit (a bit above usual)
+  t("MTA OMNY", 2.9, 0, "card-citi", "Transit", "tx-16"),
+  t("Lyft", 18.4, 2, "card-csp", "Transit", "tx-17"),
+  t("MTA OMNY", 2.9, 2, "card-citi", "Transit", "tx-18"),
+  t("Lyft", 24.6, 6, "card-csp", "Transit", "tx-19"),
+  t("MTA OMNY", 33.0, 9, "card-citi", "Transit", "tx-20"),
+  t("Revel", 14.0, 11, "card-csp", "Transit", "tx-21"),
 
   // Shopping (below usual)
   t("Uniqlo", 49.5, 6, "card-citi", "Shopping", "tx-22"),
@@ -163,16 +163,21 @@ export const FIXTURE_TRANSACTIONS: Transaction[] = [
  * In a real app this would come from a rolling N-month average.
  */
 export const CATEGORY_BASELINES: Record<Category, number> = {
-  Dining: 50000,        // $500
-  Groceries: 25000,     // $250
-  Transportation: 6000, // $60
-  Travel: 20000,        // $200
-  Entertainment: 9000,  // $90
-  Shopping: 12000,      // $120
-  Utilities: 9000,      // $90
-  Health: 5000,         // $50
-  Subscriptions: 3500,  // $35
-  Other: 5000,          // $50
+  Dining: 50000,            // $500
+  Groceries: 25000,         // $250
+  "Coffee Shops": 4500,     // $45
+  Gas: 8000,                // $80
+  Transit: 6000,            // $60
+  Travel: 20000,            // $200
+  Streaming: 4500,          // $45
+  Subscriptions: 3500,      // $35
+  Entertainment: 9000,      // $90
+  Shopping: 12000,          // $120
+  Drugstores: 3500,         // $35
+  Home: 6000,               // $60
+  Utilities: 9000,          // $90
+  Health: 5000,             // $50
+  Other: 5000,              // $50
 };
 
 /** "Usual" monthly total, cents. Drives the hero "+14% vs your avg" pill. */

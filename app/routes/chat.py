@@ -32,7 +32,7 @@ import uuid
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.loop import (
@@ -52,6 +52,13 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # turn contained (DESIGN.md §7.2.1, §8.12). Encoding the cap from day one
 # means Day 16's memory layer doesn't need to retrofit it.
 HISTORY_TURN_LIMIT = 5
+
+# Cap GET /chat/messages at the most recent 50 rows. "Recent" is what the
+# user wants to see after a page refresh; deep scrollback is a Day 16+
+# concern (memory + summarization layer). 50 rows = 25 turns assuming the
+# 1 user + 1 assistant row pattern, which comfortably exceeds the 5-turn
+# replay cap above.
+MESSAGES_PAGE_LIMIT = 50
 
 
 class ChatTurnRequest(BaseModel):
@@ -74,6 +81,28 @@ class ChatTurnResponse(BaseModel):
     conversation_id: UUID
     assistant_text: str
     tool_calls: list[ChatToolCallResponse]
+
+
+class ChatMessageResponse(BaseModel):
+    """One row of human-visible chat history.
+
+    `content_blocks` is the raw JSONB we stored at turn time — the same
+    Anthropic-shaped block list as `chat_turn` returns in `assistant_text`,
+    minus the tool_use/tool_result hops which live only in `chat_turn_trace`.
+    Frontend collapses these to plain text for rehydration (Day 10b §3 spec:
+    parse cards / candidate lists are NOT re-rendered as interactive cards).
+    """
+
+    role: str
+    content_blocks: list[dict[str, Any]]
+    created_at: str
+
+
+class ChatMessagesResponse(BaseModel):
+    """Represent ChatMessagesResponse."""
+
+    messages: list[ChatMessageResponse]
+    has_more: bool
 
 
 @router.post("/turn", response_model=ChatTurnResponse)
@@ -121,6 +150,55 @@ def chat_turn(
         assistant_text=turn.assistant_text,
         tool_calls=_to_response_tool_calls(turn.tool_calls),
     )
+
+
+@router.get("/messages", response_model=ChatMessagesResponse)
+def chat_messages(
+    conversation_id: UUID = Query(...),
+    user: AuthedUser = Depends(get_current_user_with_device),
+) -> ChatMessagesResponse:
+    """Return human-visible history for one conversation, oldest-first.
+
+    Caller: chat page mount, when a `tameru-chat-conversation-id` is in
+    localStorage but `chatStore.messages` is empty (Day 10b §3). The wire
+    shape mirrors `chat_messages` minus internal columns — `role +
+    content_blocks + created_at` is the minimum the UI needs to re-render
+    text bubbles. Tool-use trace rows live in `chat_turn_trace` and are
+    deliberately not surfaced.
+
+    Capped at MESSAGES_PAGE_LIMIT recent rows. `has_more=true` tells the
+    UI there's older history (no pagination cursor in v1 — the user is
+    expected to start a new conversation, not paginate backwards).
+
+    RLS: read scoped via the user's JWT against `chat_messages_owner`.
+    """
+    client = supabase_for_user(user.jwt)
+    # Fetch limit+1 to detect more rows without a separate count query.
+    resp = (
+        client.table("chat_messages")
+        .select("role, content_blocks, created_at, seq")
+        .eq("conversation_id", str(conversation_id))
+        .order("seq", desc=True)
+        .limit(MESSAGES_PAGE_LIMIT + 1)
+        .execute()
+    )
+    rows = resp.data or []
+    has_more = len(rows) > MESSAGES_PAGE_LIMIT
+    if has_more:
+        rows = rows[:MESSAGES_PAGE_LIMIT]
+    # We pulled newest-first to apply the limit; flip back to chronological
+    # order for the UI so the rendering code stays the simpler append-only
+    # shape.
+    rows.reverse()
+    messages = [
+        ChatMessageResponse(
+            role=row["role"],
+            content_blocks=row["content_blocks"],
+            created_at=row["created_at"],
+        )
+        for row in rows
+    ]
+    return ChatMessagesResponse(messages=messages, has_more=has_more)
 
 
 # ---------------------------------------------------------------------------

@@ -72,7 +72,7 @@ export function DesktopComposer() {
     <div
       data-desktop-composer
       className={cn(
-        "pointer-events-none fixed bottom-0 z-30 hidden md:block transition-all duration-300 ease-out",
+        "pointer-events-none fixed bottom-0 z-40 hidden md:block transition-all duration-300 ease-out",
         containerCls
       )}
     >

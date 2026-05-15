@@ -1,6 +1,6 @@
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Eraser, RotateCcw } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { SketchIcon } from "@/components/SketchIcon";
 import { cn } from "@/lib/utils";
 import { resetOnboarded } from "@/lib/onboarding";

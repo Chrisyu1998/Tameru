@@ -1,10 +1,11 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 
 import { DeviceDisplacedModal } from './components/DeviceDisplacedModal';
 import { UpdateToast } from './components/UpdateToast';
 import { initAuth, startDeviceCheckPoll } from './lib/auth';
+import { useAppStore } from './store';
 import Layout, { NotFoundPage } from './pages/_layout';
 import HomePage from './pages/home';
 import ChatPage from './pages/chat';
@@ -27,7 +28,24 @@ import './index.css';
  * briefly see jwt=null and trigger an onboarding/signin bounce. The route
  * layout itself comes from pages/_layout.tsx (imported from the Lovable
  * mock); the auth wiring above it stays ours so invariants 1 + 5 hold.
+ *
+ * RequireOnboarded replaces the Day 7 Splash dispatcher that the Lovable
+ * import dropped. Everything except /onboarding/* sits behind it: a user
+ * without a JWT, or with a JWT but no home_currency yet, is redirected to
+ * /onboarding (the wizard itself picks the right step from store state).
+ * Without this gate, signed-in-but-unbootstrapped users land on Home,
+ * which calls /transactions and 401s with DEVICE_DISPLACED because no
+ * users_meta row exists yet.
  */
+function RequireOnboarded() {
+  const jwt = useAppStore((s) => s.jwt);
+  const homeCurrency = useAppStore((s) => s.homeCurrency);
+  if (!jwt || typeof homeCurrency !== 'string') {
+    return <Navigate to="/onboarding" replace />;
+  }
+  return <Outlet />;
+}
+
 function App() {
   const [authReady, setAuthReady] = useState(false);
 
@@ -54,20 +72,24 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/cards" element={<CardsPage />} />
-          <Route path="/subscriptions" element={<SubscriptionsPage />} />
-          <Route path="/memory" element={<MemoryPage />} />
-          <Route path="/more" element={<MorePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/connections" element={<ConnectionsPage />} />
-          <Route path="/privacy" element={<PrivacyPage />} />
-          <Route path="/breakdown" element={<BreakdownPage />} />
-          <Route path="/breakdown/:category" element={<CategoryListPage />} />
-          <Route path="/chat" element={<ChatPage />} />
+          {/* Always reachable — the gate's destination and the 404. */}
           <Route path="/onboarding" element={<OnboardingWizard />} />
           <Route path="/onboarding/tour" element={<TourPage />} />
           <Route path="*" element={<NotFoundPage />} />
+          {/* Gated: require a JWT and a confirmed home_currency. */}
+          <Route element={<RequireOnboarded />}>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/cards" element={<CardsPage />} />
+            <Route path="/subscriptions" element={<SubscriptionsPage />} />
+            <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/more" element={<MorePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/connections" element={<ConnectionsPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/breakdown" element={<BreakdownPage />} />
+            <Route path="/breakdown/:category" element={<CategoryListPage />} />
+            <Route path="/chat" element={<ChatPage />} />
+          </Route>
         </Route>
       </Routes>
       <DeviceDisplacedModal />

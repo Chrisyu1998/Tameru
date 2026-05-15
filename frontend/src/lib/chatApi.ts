@@ -57,6 +57,25 @@ export async function postChatTurn(
   });
 }
 
+export interface ChatMessageWire {
+  role: 'user' | 'assistant';
+  content_blocks: Array<{ type: string; text?: string; [k: string]: unknown }>;
+  created_at: string;
+}
+
+export interface ChatMessagesResponse {
+  messages: ChatMessageWire[];
+  has_more: boolean;
+}
+
+export async function getChatMessages(
+  conversationId: string,
+): Promise<ChatMessagesResponse> {
+  return apiJson<ChatMessagesResponse>(
+    `/chat/messages?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
+}
+
 /**
  * Normalize a thrown ApiError into the structured shape the chat store
  * dispatches on. Non-ApiError throws (network failures, unexpected JSON,

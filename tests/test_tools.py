@@ -69,15 +69,20 @@ def authed_user_b(user_b) -> AuthedUser:
 # ===========================================================================
 
 
-def test_registry_contains_expected_day9b_surface():
-    """Verify the post-9b registry holds reads + propose_transaction + set_goal.
+def test_registry_contains_expected_surface():
+    """Verify the registry holds reads + propose_transaction + set_goal + render_chart.
 
-    After Day 9b lands, the registry expands by two: `propose_transaction`
-    (the propose-then-confirm tool for chat-entered purchases) and
-    `set_goal` (the lone direct-write carve-out). `propose_card` and
-    `propose_subscription` remain out — they land on Day 14 / Day 19
-    alongside their confirm endpoints. If one of those slips in early,
-    this test fails as the structural alarm.
+    Cumulative as of Day 10b:
+      * Day 9a — read tools (`calculate_total`, `get_transactions`,
+        `get_subscriptions`, `get_spending_summary`, `get_cards`).
+      * Day 9b — `propose_transaction` (propose-then-confirm) and
+        `set_goal` (lone direct-write carve-out).
+      * Day 10b — `render_chart` (transport-only echo for generative
+        charts; see app/agent/tools.py:render_chart).
+
+    `propose_card` / `propose_subscription` remain out — they land on
+    Day 14 / Day 19 alongside their confirm endpoints. If one of those
+    slips in early, this test fails as the structural alarm.
     """
     expected = {
         "calculate_total",
@@ -87,11 +92,13 @@ def test_registry_contains_expected_day9b_surface():
         "get_cards",
         "propose_transaction",
         "set_goal",
+        "render_chart",
     }
     assert set(TOOL_REGISTRY) == expected, (
-        "Day 9b registers reads + propose_transaction + set_goal. "
-        "propose_card / propose_subscription belong to Day 14 / Day 19; "
-        "if one of those landed early, this test failing is the alarm."
+        "Reads + propose_transaction + set_goal + render_chart are the "
+        "expected v1 surface. propose_card / propose_subscription belong "
+        "to Day 14 / Day 19; if one of those landed early, this test "
+        "failing is the alarm."
     )
 
 
@@ -734,6 +741,14 @@ def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
         # file so this smoke test won't race with their assertions on a
         # shared session-scoped row.
         "set_goal": {"amount": 999_999, "period": "year", "category": "Drugstores"},
+        # render_chart is transport-only; minimal spec that satisfies
+        # RenderChartRequest (one series, len(data)==len(x), non-empty title).
+        "render_chart": {
+            "type": "bar",
+            "x": ["Mar"],
+            "series": [{"name": "Dining", "data": [42.0]}],
+            "title": "smoke",
+        },
     }
     for name in TOOL_REGISTRY:
         result = execute_tool(name, minimal_inputs.get(name, {}), authed_user_a)

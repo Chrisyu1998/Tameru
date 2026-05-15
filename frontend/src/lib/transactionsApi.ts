@@ -22,7 +22,7 @@ export interface TransactionRowWire {
   merchant: string;
   amount: string; // Decimal serialized as string
   date: string; // YYYY-MM-DD
-  category: string;
+  category: Category;
   gemini_suggestion: string | null;
   source: string;
   notes: string | null;
@@ -86,7 +86,7 @@ export function fromWire(row: TransactionRowWire): Transaction {
     amountCents: amountToCents(row.amount),
     date: row.date,
     cardId: row.card_id ?? '',
-    category: row.category as Category,
+    category: row.category,
     autoLogged: row.source !== 'nlp',
   };
 }
@@ -104,7 +104,7 @@ export interface ConfirmTransactionBody {
   amount: string; // decimal dollars as string
   date: string;   // YYYY-MM-DD
   card_id: string | null;
-  category: string;
+  category: Category;
   notes: string | null;
   gemini_suggestion: string | null;
   client_request_id: string;
@@ -130,7 +130,7 @@ export interface PatchTransactionBody {
   amount?: string;
   date?: string;
   card_id?: string | null;
-  category?: string;
+  category?: Category;
   notes?: string | null;
 }
 

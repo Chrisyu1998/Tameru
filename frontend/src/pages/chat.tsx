@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, Mic, Send, SquarePen, WifiOff } from "lucide-react";
 import { CandidateCards } from "@/components/chat/CandidateCards";
+import { Chart } from "@/components/chat/Chart";
 import { DailyCapCard } from "@/components/chat/DailyCapCard";
 import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble";
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
@@ -12,9 +13,7 @@ import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { ledger, useLedger } from "@/lib/ledger";
 import { consumeChatSeed } from "@/lib/chatSeed";
 import {
-  isDailyCapEngaged,
   parseTransaction,
-  setDailyCapEngaged,
   type ChatMessage,
 } from "@/lib/chat";
 import { chatStore, useChatStore } from "@/lib/chatStore";
@@ -26,11 +25,10 @@ const SILENCE_WINDOW_MS = 1500;
 export default function ChatPage() {
   const navigate = useNavigate();
   const { transactions, cards } = useLedger();
-  const { messages, busy } = useChatStore();
+  const { messages, busy, capEngaged } = useChatStore();
 
   const [input, setInput] = useState("");
   const [voiceMode, setVoiceMode] = useState(false);
-  const [capEngaged, setCapEngaged] = useState(false);
   const [serviceDown, setServiceDown] = useState(false);
   const [online, setOnline] = useState(true);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -41,15 +39,17 @@ export default function ChatPage() {
     null,
   );
 
-  // Hydrate dev-only daily-cap toggle from sessionStorage.
-  useEffect(() => {
-    setCapEngaged(isDailyCapEngaged());
-  }, []);
-
   // Pre-fill the input from a session-scoped seed (set by /cards, /subscriptions).
   useEffect(() => {
     const seed = consumeChatSeed();
     if (seed) setInput(seed + " ");
+  }, []);
+
+  // On mount, if the store has a persisted conversation id but no in-memory
+  // thread (page refresh), pull history from the server so the user doesn't
+  // lose context. Fire-and-forget; failures fall back to an empty thread.
+  useEffect(() => {
+    void chatStore.hydrateMessages();
   }, []);
 
   // Track online status for the offline notice.
@@ -167,11 +167,7 @@ export default function ChatPage() {
 
   /* ─── Dev: daily-cap toggle (hidden behind the title) ───────── */
 
-  const toggleCap = () => {
-    const next = !capEngaged;
-    setDailyCapEngaged(next);
-    setCapEngaged(next);
-  };
+  const toggleCap = () => chatStore.setCapEngaged(!capEngaged);
 
 
   /* ─── Render ────────────────────────────────────────────────── */
@@ -315,6 +311,18 @@ function MessageRow({
           <MiniBarChart bars={msg.bars} />
         </MessageBubble>
         <ToolAttribution name={msg.via} />
+      </div>
+    );
+  }
+
+  if (msg.kind === "rich-chart") {
+    return (
+      <div>
+        <MessageBubble role="assistant">
+          {msg.preface && <p>{msg.preface}</p>}
+          <Chart spec={msg.spec} />
+        </MessageBubble>
+        {msg.via && <ToolAttribution name={msg.via} />}
       </div>
     );
   }

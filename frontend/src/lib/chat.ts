@@ -58,12 +58,43 @@ export interface AssistantChartMessage {
   via: ToolName;
 }
 
+/**
+ * Rich chart message — driven by the backend `render_chart` tool. Spec is
+ * stored verbatim from the tool result so the renderer (Chart.tsx) can
+ * dispatch on `type`. Distinct from `AssistantChartMessage` because that
+ * one carries the legacy local-mock {label, valueCents} shape; merging
+ * them would force the local mock to learn the richer spec for no v1
+ * benefit. Both render via the same `MessageRow` switch.
+ */
+export interface ChartSeriesSpec {
+  name: string;
+  data: number[];
+}
+
+export interface ChartSpec {
+  type: "line" | "bar" | "stacked_bar" | "donut";
+  x: string[];
+  series: ChartSeriesSpec[];
+  y_label?: string;
+  title: string;
+}
+
+export interface AssistantRichChartMessage {
+  id: string;
+  role: "assistant";
+  kind: "rich-chart";
+  preface?: string;
+  spec: ChartSpec;
+  via?: ToolName;
+}
+
 export type ChatMessage =
   | UserMessage
   | AssistantTextMessage
   | AssistantParseMessage
   | AssistantCandidatesMessage
-  | AssistantChartMessage;
+  | AssistantChartMessage
+  | AssistantRichChartMessage;
 
 /* ─── Parse draft (the commit surface) ───────────────────────────── */
 
@@ -161,15 +192,20 @@ function extractMerchant(input: string): { value: string; confidence: number } {
 function inferCategory(input: string, merchant: string): { value: Category; confidence: number } {
   const hay = `${input} ${merchant}`.toLowerCase();
   const rules: Array<[Category, RegExp, number]> = [
-    ["Dining", /\b(coffee|cafe|café|restaurant|lunch|dinner|breakfast|deli|pizza|sushi|ramen|bar|brunch|roji|lupa|misi|wayan)\b/, 0.9],
+    ["Coffee Shops", /\b(coffee|cafe|café|starbucks|blue bottle|roji)\b/, 0.92],
+    ["Dining", /\b(restaurant|lunch|dinner|breakfast|deli|pizza|sushi|ramen|bar|brunch|lupa|misi|wayan|le crocodile)\b/, 0.9],
     ["Groceries", /\b(grocery|groceries|whole foods|trader joe|market|sahadi|greenmarket|supermarket)\b/, 0.92],
-    ["Transportation", /\b(uber|lyft|taxi|cab|mta|omny|subway|bus|revel|gas)\b/, 0.92],
+    ["Gas", /\b(shell|chevron|bp|exxon|mobil|gas station|gas bill)\b/, 0.92],
+    ["Transit", /\b(uber|lyft|taxi|cab|mta|omny|subway|bus|revel|toll|parking)\b/, 0.92],
     ["Travel", /\b(amtrak|delta|united|jetblue|airbnb|hotel|airline|flight)\b/, 0.9],
+    ["Streaming", /\b(netflix|spotify|hulu|apple music|youtube premium|disney\+)\b/, 0.95],
+    ["Subscriptions", /\b(nyt|icloud|patreon|substack|gym|class pass)\b/, 0.9],
     ["Entertainment", /\b(metrograph|movie|cinema|concert|brooklyn steel|theater|theatre)\b/, 0.85],
     ["Shopping", /\b(uniqlo|amazon|etsy|store|shop|mcnally)\b/, 0.7],
-    ["Subscriptions", /\b(spotify|netflix|nyt|icloud|hulu|patreon|substack)\b/, 0.95],
-    ["Utilities", /\b(con edison|verizon|electric|internet|gas bill|water bill)\b/, 0.9],
-    ["Health", /\b(cvs|walgreens|pharmacy|doctor|clinic|gym|class pass)\b/, 0.85],
+    ["Drugstores", /\b(cvs|walgreens|rite aid|drugstore|pharmacy)\b/, 0.92],
+    ["Home", /\b(home depot|ikea|lowes|furniture)\b/, 0.88],
+    ["Utilities", /\b(con edison|verizon|electric|internet|water bill)\b/, 0.9],
+    ["Health", /\b(doctor|dentist|vet|clinic|therapy|copay)\b/, 0.85],
   ];
   for (const [cat, re, conf] of rules) {
     if (re.test(hay)) return { value: cat, confidence: conf };
@@ -193,11 +229,18 @@ function inferDate(input: string): { value: string; confidence: number } {
 }
 
 function pickCard(category: Category): { id: string; confidence: number } {
-  // Mild affinity: dining → amex, groceries → citi, otherwise csp.
-  if (category === "Dining" || category === "Health") {
+  // Mild affinity: dining / coffee → amex, groceries / utilities → citi,
+  // otherwise csp. Keeps the local-mock proposal feeling deliberate.
+  if (category === "Dining" || category === "Coffee Shops" || category === "Health") {
     return { id: "card-amex", confidence: 0.6 };
   }
-  if (category === "Groceries" || category === "Subscriptions" || category === "Utilities") {
+  if (
+    category === "Groceries" ||
+    category === "Subscriptions" ||
+    category === "Streaming" ||
+    category === "Utilities" ||
+    category === "Drugstores"
+  ) {
     return { id: "card-citi", confidence: 0.6 };
   }
   return { id: "card-csp", confidence: 0.55 };

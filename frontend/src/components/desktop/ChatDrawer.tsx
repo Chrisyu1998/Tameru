@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronsLeft, ChevronsRight, SquarePen, X } from "lucide-react";
 import { CandidateCards } from "@/components/chat/CandidateCards";
+import { Chart } from "@/components/chat/Chart";
 import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble";
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
 import { ParseCard } from "@/components/chat/ParseCard";
@@ -163,6 +164,17 @@ function MessageRow({
           <MiniBarChart bars={msg.bars} />
         </MessageBubble>
         <ToolAttribution name={msg.via} />
+      </div>
+    );
+  }
+  if (msg.kind === "rich-chart") {
+    return (
+      <div>
+        <MessageBubble role="assistant">
+          {msg.preface && <p>{msg.preface}</p>}
+          <Chart spec={msg.spec} />
+        </MessageBubble>
+        {msg.via && <ToolAttribution name={msg.via} />}
       </div>
     );
   }

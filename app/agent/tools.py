@@ -312,6 +312,67 @@ _TRANSACTION_FILTER_PROPERTIES: dict[str, Any] = {
 }
 
 
+class ChartSeries(BaseModel):
+    """One labeled series in a render_chart spec.
+
+    Length contract: `data` length must equal `len(x)` on the parent
+    `RenderChartRequest`. Pydantic can't express that cross-field rule
+    statically, so we enforce it on the parent validator below.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    data: list[float]
+
+
+class RenderChartRequest(BaseModel):
+    """Tool input for `render_chart`.
+
+    Example request:
+        {
+            "type": "line",
+            "x": ["Mar W1", "Mar W2"],
+            "series": [{"name": "Dining", "data": [142.0, 211.5]}],
+            "y_label": "USD",
+            "title": "dining by week, march"
+        }
+
+    `series` must be non-empty, each `data` array must match `len(x)`,
+    and `donut` charts take exactly one series.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = Field(pattern="^(line|bar|stacked_bar|donut)$")
+    x: list[str] = Field(min_length=1)
+    series: list[ChartSeries] = Field(min_length=1)
+    y_label: str | None = None
+    title: str
+
+    @field_validator("series")
+    @classmethod
+    def _series_data_lengths(
+        cls, value: list[ChartSeries], info: Any  # noqa: ARG003 — used by side
+    ) -> list[ChartSeries]:
+        """All series must agree on length; donut takes exactly one."""
+        # Pydantic v2 sneaks the model values in via `info.data` once the
+        # x field has already validated. If x failed earlier validation,
+        # this validator is skipped — no need to defend against missing x.
+        x = info.data.get("x")
+        if not isinstance(x, list):
+            return value
+        for s in value:
+            if len(s.data) != len(x):
+                raise ValueError(
+                    f"series {s.name!r} has {len(s.data)} points but x has {len(x)}"
+                )
+        chart_type = info.data.get("type")
+        if chart_type == "donut" and len(value) != 1:
+            raise ValueError("donut charts take exactly one series")
+        return value
+
+
 CALCULATE_TOTAL_TOOL: dict[str, Any] = {
     "name": "calculate_total",
     "description": (
@@ -478,6 +539,90 @@ PROPOSE_TRANSACTION_TOOL: dict[str, Any] = {
             "notes": {
                 "type": "string",
                 "description": "Free-form notes the user mentioned.",
+            },
+        },
+    },
+}
+
+
+RENDER_CHART_TOOL: dict[str, Any] = {
+    "name": "render_chart",
+    "description": (
+        "Render a chart in the chat thread. Use for any question whose "
+        "answer is shaped like a comparison or trend over time — 'chart my "
+        "dining by week in March', 'compare groceries vs dining last month', "
+        "'how has subscriptions changed'. ALWAYS extract the numbers first "
+        "with calculate_total / get_spending_summary, then feed them in as "
+        "the `series` array. This tool is pure presentation — it does NOT "
+        "query the database; it echoes the spec back so the frontend can "
+        "draw it (DESIGN.md §7.8). One render_chart call per turn; if the "
+        "user asks for multiple unrelated charts, prefer to answer in prose."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["type", "x", "series", "title"],
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["line", "bar", "stacked_bar", "donut"],
+                "description": (
+                    "line for trends over time, bar/stacked_bar for category "
+                    "comparisons, donut for share-of-total breakdowns."
+                ),
+            },
+            "x": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "X-axis labels (e.g. ['Mar W1', 'Mar W2', ...] or "
+                    "['Groceries', 'Dining', ...]). For donut charts this "
+                    "is the slice labels."
+                ),
+            },
+            "series": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["name", "data"],
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": (
+                                "Series label shown in the legend. For "
+                                "donut charts, use a single series."
+                            ),
+                        },
+                        "data": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": (
+                                "One value per x-axis label. Length MUST "
+                                "equal len(x)."
+                            ),
+                        },
+                    },
+                },
+                "description": (
+                    "One series for line/bar/donut, two or more for "
+                    "stacked_bar. Use home-currency dollars (not cents)."
+                ),
+            },
+            "y_label": {
+                "type": "string",
+                "description": (
+                    "Y-axis label, e.g. 'USD' or 'transactions'. Omit for "
+                    "donut charts."
+                ),
+            },
+            "title": {
+                "type": "string",
+                "description": (
+                    "Short chart title, ~6 words. Lowercase preferred to "
+                    "match the app's voice."
+                ),
             },
         },
     },
@@ -833,6 +978,38 @@ def set_goal(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     return Goal.model_validate(resp.data[0]).model_dump(mode="json")
 
 
+def render_chart(_user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
+    """Echo a chart spec for the frontend to render.
+
+    Request:
+        {
+            "type": "line",
+            "x": ["Mar W1", "Mar W2", "Mar W3", "Mar W4"],
+            "series": [{"name": "Dining", "data": [142.0, 211.5, 180.0, 175.0]}],
+            "y_label": "USD",
+            "title": "dining by week, march"
+        }
+
+    Response:
+        Same shape, verbatim. The agent loop ships it to the frontend
+        inside a tool_call block; the frontend renders it via
+        components/chat/Chart.tsx.
+
+    No DB read, no DB write — `render_chart` is purely a transport for
+    "the model decided to chart this." Data extraction belongs upstream
+    in calculate_total / get_spending_summary; mixing it into this tool
+    would couple presentation to query logic and make eval traces harder
+    to read. The structural test in tests/contracts/test_tool_write_invariant.py
+    is satisfied by the no-DB body — keep it that way on future edits.
+
+    The `_user` parameter exists because every executor signs the same
+    `(user, **kwargs)` contract — `execute_tool` passes it positionally.
+    render_chart legitimately doesn't read it; underscore signals intent
+    to readers and quiets static analyzers without dropping the slot.
+    """
+    return RenderChartRequest.model_validate(kwargs).model_dump(mode="json")
+
+
 # ---------------------------------------------------------------------------
 # Registry.
 # ---------------------------------------------------------------------------
@@ -850,6 +1027,7 @@ TOOL_REGISTRY: dict[str, tuple[dict[str, Any], Callable[..., Any]]] = {
     GET_CARDS_TOOL["name"]: (GET_CARDS_TOOL, get_cards),
     PROPOSE_TRANSACTION_TOOL["name"]: (PROPOSE_TRANSACTION_TOOL, propose_transaction),
     SET_GOAL_TOOL["name"]: (SET_GOAL_TOOL, set_goal),
+    RENDER_CHART_TOOL["name"]: (RENDER_CHART_TOOL, render_chart),
 }
 
 

@@ -45,7 +45,18 @@ The insight is computed inside `POST /transactions/confirm` (Day 5) and returned
 
 ### Frontend — entry-moment insight (chat bubble, not toast)
 
-The insight is rendered as a quiet AI bubble below the just-committed transaction by the `EntryInsightBubble` component, which lives in Day 10's chat UI and consumes the `insight` field returned by `POST /transactions/confirm`. **This day ships only the backend** — Day 10 owns the rendering. No `EntryInsightToast.tsx` — the toast pattern is gone now that the write flow is in chat.
+The insight is rendered as a quiet AI bubble below the just-committed transaction by the `EntryInsightBubble` component. It consumes the `insight` field returned by `POST /transactions/confirm`. No `EntryInsightToast.tsx` — the toast pattern is gone now that the write flow is in chat.
+
+> **Carried over from Day 10b §5.** The Day 10b prompt deferred this component because the `insight` field was returning null until Day 13's backend rule set landed. Now that the rules are shipping in this prompt, `EntryInsightBubble` is a Day 13 deliverable — do not skip it.
+
+Build details (mirrors Day 10b §5 spec so you don't have to bounce between files):
+
+- New component at `frontend/src/components/chat/EntryInsightBubble.tsx`. Lovable scaffold has nothing like it — net new. One sentence, quiet AI-bubble styling, auto-fade-in, no buttons. Reuse the moss-on-elevated treatment from the existing `MessageBubble` (`bubble={true}`, `role="assistant"`, no `via` chip).
+- In `chatStore.commitDraft`, after the optimistic ledger insert, if `confirmTransaction()`'s response includes a non-null `insight`, append an `AssistantTextMessage` (or a new `kind: "insight"` if you want to differentiate styling — `via: "entry_insight"` works inside the existing union too). The append must happen *after* the parse card flips to committed state so the bubble lands below it visually.
+- Spec is firm: never a modal, never a toast. Inline chat bubble only. Don't render anything when `insight === null` — that includes the idempotent-replay case (the backend returns null there by contract, so no client-side branching needed).
+- Tests in `frontend/tests/EntryInsightBubble.test.tsx`: renders the sentence when `insight` is non-null; renders nothing when `insight` is null. Wire `tests/frontend/ParseCard.test.tsx` (or add a chatStore-level test) to verify a successful `commitDraft` with a non-null insight appends exactly one extra message and that a null insight appends zero.
+
+The Day 10b prompt's `Don't` list still applies here: do not render `chat_turn_trace` rows into the insight bubble; the field originates from `/transactions/confirm`, not the chat history fetch.
 
 ### Tests
 
@@ -68,3 +79,4 @@ The insight is rendered as a quiet AI bubble below the just-committed transactio
 - `POST /transactions/confirm` returns three different insight sentences for three transactions in three different categories, matching the deterministic rule set.
 - `POST /transactions/confirm` returns `insight: null` for a first-transaction-in-category case.
 - Baseline calc returns sensible numbers and the `baseline_ready: false` path for new users.
+- After tapping "looks right" on a parse card whose confirm response includes an `insight`, an `EntryInsightBubble` appears beneath the committed card with that sentence. When `insight` is null, no bubble appears.
