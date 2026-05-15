@@ -5,23 +5,28 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { DeviceDisplacedModal } from './components/DeviceDisplacedModal';
 import { UpdateToast } from './components/UpdateToast';
 import { initAuth, startDeviceCheckPoll } from './lib/auth';
-import { ConfirmHomeCurrency } from './pages/ConfirmHomeCurrency';
-import { Home } from './pages/Home';
-import { SignIn } from './pages/SignIn';
-import { Splash } from './pages/Splash';
+import Layout, { NotFoundPage } from './pages/_layout';
+import HomePage from './pages/home';
+import ChatPage from './pages/chat';
+import CardsPage from './pages/cards';
+import SubscriptionsPage from './pages/subscriptions';
+import MemoryPage from './pages/memory';
+import MorePage from './pages/more';
+import SettingsPage from './pages/settings';
+import ConnectionsPage from './pages/connections';
+import PrivacyPage from './pages/privacy';
+import BreakdownPage from './pages/breakdown.index';
+import CategoryListPage from './pages/breakdown.category';
+import OnboardingWizard from './pages/onboarding';
+import TourPage from './pages/onboarding.tour';
 import './index.css';
 
 /*
- * Routes (Day 7):
- *   /                  Splash + post-auth dispatcher (also OAuth landing)
- *   /signin            Google OAuth + magic-link disclosure
- *   /confirm-currency  one-time home-currency picker (immutable post-confirm)
- *   /home              dashboard placeholder (real screen lands Day 15)
- *
- * The shell awaits initAuth() before rendering routes so the first paint
- * already reflects the persisted Supabase session — without this, Splash
- * would briefly see jwt=null on a refresh and bounce the user to /signin
- * before the session loaded.
+ * The shell awaits initAuth() before mounting routes so first paint already
+ * reflects the persisted Supabase session — without this, a refresh would
+ * briefly see jwt=null and trigger an onboarding/signin bounce. The route
+ * layout itself comes from pages/_layout.tsx (imported from the Lovable
+ * mock); the auth wiring above it stays ours so invariants 1 + 5 hold.
  */
 function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -38,12 +43,9 @@ function App() {
   }, []);
 
   if (!authReady) {
-    // Same visual as Splash, but unrouted — we don't want to mount Splash's
-    // dispatch effect before the store is hydrated, or it would prematurely
-    // route an authenticated refresh to /signin.
     return (
       <main className="flex min-h-dvh items-center justify-center bg-canvas px-6">
-        <h1 className="font-display text-5xl text-primary">tameru</h1>
+        <h1 className="font-serif text-5xl text-ink lowercase-title">tameru</h1>
       </main>
     );
   }
@@ -51,10 +53,22 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Splash />} />
-        <Route path="/signin" element={<SignIn />} />
-        <Route path="/confirm-currency" element={<ConfirmHomeCurrency />} />
-        <Route path="/home" element={<Home />} />
+        <Route element={<Layout />}>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/cards" element={<CardsPage />} />
+          <Route path="/subscriptions" element={<SubscriptionsPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/more" element={<MorePage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/connections" element={<ConnectionsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/breakdown" element={<BreakdownPage />} />
+          <Route path="/breakdown/:category" element={<CategoryListPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/onboarding" element={<OnboardingWizard />} />
+          <Route path="/onboarding/tour" element={<TourPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
       </Routes>
       <DeviceDisplacedModal />
       <UpdateToast />

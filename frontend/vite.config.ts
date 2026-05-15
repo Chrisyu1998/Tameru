@@ -1,7 +1,11 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // App-shell PWA: the Service Worker caches the built shell (HTML + hashed JS/CSS
 // + fonts) for offline load. No API responses are cached — authenticated
@@ -9,6 +13,11 @@ import { VitePWA } from 'vite-plugin-pwa';
 // The IndexedDB-backed offline transaction queue is a separate Week 3 concern.
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),

@@ -92,3 +92,52 @@ When a turn response (or in Day 12+, an SSE `error` event) surfaces `code: "DAIL
 - "chart my grocery spending by week in March" → inline line chart via `render_chart`.
 - Switching conversations preserves their state.
 - Hitting the daily cap during a turn renders the frame-16 treatment and freezes further sends until reset.
+
+## Status (as built — 2026-05-14)
+
+Day 10 landed alongside an unrelated frontend overhaul: the Lovable-mock import (steps 1–4 in `frontend-import-from-lovable`) replaced the original scaffold. As a result, the file paths and component boundaries differ from the spec above. The behavior is largely the same, but a future reader of the spec needs to look at the actually-shipped tree, not the planned one.
+
+### Files that shipped (not what the spec named)
+
+- Chat thread + input + busy indicator: [frontend/src/pages/chat.tsx](frontend/src/pages/chat.tsx) (Lovable scaffold, not the spec's `pages/Chat.tsx`).
+- Shared chat session store: [frontend/src/lib/chatStore.ts](frontend/src/lib/chatStore.ts) — singleton + listener Set, hydrates the mobile route and the desktop `ChatDrawer` from one source of truth. Holds `messages`, `conversationId`, `busy`, and `drawerOpen / drawerExpanded`.
+- Typed `/chat/turn` wrapper + error normalization: [frontend/src/lib/chatApi.ts](frontend/src/lib/chatApi.ts).
+- Typed `/transactions` wrappers + camelCase↔snake_case + Decimal↔cents translation: [frontend/src/lib/transactionsApi.ts](frontend/src/lib/transactionsApi.ts).
+- Ledger store, now backed by `GET /transactions` with auth-driven refresh, optimistic PATCH/DELETE, optimistic insert on confirm: [frontend/src/lib/ledger.ts](frontend/src/lib/ledger.ts).
+- Parse card: [frontend/src/components/chat/ParseCard.tsx](frontend/src/components/chat/ParseCard.tsx) (Lovable; not `components/ParseCard.tsx`). Today renders only the `transaction` kind — card/subscription kinds aren't a Day 10 deliverable in this build (see deferred list below).
+- Candidate list rendering: [frontend/src/components/chat/CandidateCards.tsx](frontend/src/components/chat/CandidateCards.tsx) (Lovable; not `CandidateList.tsx`).
+- Edit sheet (used by candidate-tap, by chat "let me fix it", and by the dashboard/breakdown rows): [frontend/src/components/EditTransactionSheet.tsx](frontend/src/components/EditTransactionSheet.tsx). Accepts optional `onSave`/`onRequestDelete` overrides — the dashboard path PATCHes the row; the chat-draft path mutates the in-flight parse card via `chatStore.updateDraft()`.
+
+### Deliverables shipped against spec
+
+- **Chat thread**: built. POSTs to `/chat/turn` non-streaming; renders `assistant_text` + walks `tool_calls`. Auto-scrolls on new content.
+- **Input bar**: built. Multiline textarea, Enter/Cmd-Enter submit, disabled while a turn is in flight.
+- **Tool-use indicator**: built but **diverges from spec**. The "thinking…" pill renders above the input row, not as a small pill in the bubble. Works for the current non-streaming wire; revisit when Day 12 lands per-tool SSE events.
+- **`POST /chat/turn` integration**: built. Persists server-minted `conversation_id` in `chatStore` and replays it on every subsequent turn so the agent loop sees the last 5 turns of history.
+- **`ParseCard` for transactions (UX frame 15)**: built. Five editable rows, "looks right" + "let me fix it", no client-side writes. "Looks right" → `POST /transactions/confirm` with the `client_request_id` minted by `propose_transaction`, round-tripping unchanged across edits (idempotency invariant). On success, the returned row is optimistically inserted into the ledger.
+- **"Let me fix it"**: built. Opens `EditTransactionSheet` on a synthetic temp `Transaction`; saves route to `chatStore.updateDraft()` (not the ledger), so the draft mutates in place and the eventual confirm carries the user's edited values. Delete on a draft calls `chatStore.discardDraft()` — no spurious DELETE request.
+- **`CandidateList` rendering for `get_transactions`**: built. When the tool result returns ≥1 rows, the rows are injected into the ledger (so the candidate-card lookup resolves) and rendered as tappable rows. Tap opens `EditTransactionSheet` against the real row → `PATCH /transactions/{id}`. Intent defaults to `"edit"`; delete-intent inference is deferred (see day-10b).
+- **Daily-cap UI / error handling**: partial. 429 `UCAP_EXCEEDED`, 503 `PROVIDER_RATE_LIMITED`, and 500 `LOOP_LIMIT` each surface as a specific inline text bubble in chat. The full frame-16 amber inline-replacement treatment is **not** built — the existing `DailyCapCard` component still renders only when the dev `sessionStorage` flag is set; it isn't wired to the real UCAP_EXCEEDED path yet.
+- **Backend `/chat/turn`**: was already in place per Day 8 + 9a/b/c. No changes today.
+
+### Deliverables explicitly NOT shipped (and where they go)
+
+- **`ParseCard` for `card` and `subscription` kinds** — spec already deferred these to Day 14 / Day 19 (no `/cards/confirm` or `/subscriptions/confirm` endpoints exist yet). Today's `ParseCard` only renders the `transaction` kind; the `kind` switch is implicit (we only build parse messages when the agent emits `propose_transaction`). Day 14 / 19 wire the other branches.
+- **`EntryInsightBubble`** — `POST /transactions/confirm` already returns `insight: string | null` per the Day 5 contract, but it's currently always null (Day 13 wires `entry_moment_insight()`). The bubble component doesn't exist yet; when Day 13 lands, plumb the field through `chatStore.commitDraft` and render below the confirmed parse card.
+- **Generative charts** (`Chart.tsx`, `render_chart` agent tool) — not built. The `assistant_text` falls through to a plain text bubble for chart-shaped questions. Recharts is **not** in the package.json yet; add when Day 10's chart deliverable lands (see day-10b).
+- **Conversation list / switching** — `chatStore.conversationId` is per-session; reloading the page loses both the conversation pointer and the visible messages. `chat_messages` rows exist server-side; we just don't fetch them. No `GET /chat/messages` endpoint exists either — needs a small backend addition.
+- **Tests** — `ParseCard.test.tsx`, `CandidateList.test.tsx`, `Chart.test.tsx`, `test_chart_spec.py` are not written. Typecheck + production build are clean; behavior is verified manually.
+
+### Bonus work outside the Day 10 spec
+
+These shipped alongside Day 10 because the Lovable-mock import made them load-bearing for chat-confirm to work at all:
+
+- **Real-data ledger**: `useLedger()` now sources from `GET /transactions`. The store subscribes to JWT changes and refetches; sign-out clears the cache. The hook signature is preserved so all dozen Lovable consumers (home, breakdown, cards, sidebar, chat candidate lookup) keep working unchanged.
+- **`card_id` UUID sanitization at the wire boundary**: Lovable's `FIXTURE_CARDS` use slug ids like `card-amex`. There's no `/cards` endpoint yet, so any non-UUID `cardId` is downgraded to `null` on the way out of `confirmTransaction` / `patchTransaction`. See `sanitizeCardId()` in `transactionsApi.ts`.
+- **`claim_device` wired into `refreshHomeCurrency`**: when a returning user signs in, the new `initAuth → refreshHomeCurrency` path calls `POST /auth/claim_device` with the browser's `deviceId` and clears the local `displaced` flag on success. Without this a fresh-localStorage browser deadlocks against a server-side `active_device_id` from a prior session. Original Splash had this; reintroduced after the Lovable replace dropped it.
+
+### Known bugs / open threads (forwarded to day-10b)
+
+- Frontend `CATEGORIES` (`frontend/src/lib/categories.ts`) ≠ backend `ALLOWED_CATEGORIES` (`app/prompts/categories.py`). Only `Groceries / Dining / Travel` overlap. Agent proposals in `Coffee Shops / Gas / Transit / Streaming / ...` get silently coerced by Lovable's `<select>` to whatever's at the top of its own list, and any user pick from Lovable-only entries (`Transportation`, `Entertainment`, etc.) 422s on confirm. **Resolution: unify the frontend list with the backend.**
+- `POST /transactions/confirm` was observed returning 422 in manual testing on 2026-05-14. Response body never captured, so root cause is unconfirmed — likely the category-enum issue above, but possibly something else. Re-test after the category unification.
+- Chat history doesn't survive a page refresh (no `GET /chat/messages`).
