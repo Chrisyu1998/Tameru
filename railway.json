@@ -8,6 +8,7 @@
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 3
+    "restartPolicyMaxRetries": 3,
+    "terminationGracePeriodSeconds": 60
   }
 }
