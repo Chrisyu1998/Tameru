@@ -14,7 +14,9 @@ import {
 import { SketchIcon } from "@/components/SketchIcon";
 import { BottomSheet } from "@/components/BottomSheet";
 import { Pill } from "@/components/Pill";
+import { signOut } from "@/lib/auth";
 import { initialTokens } from "@/lib/claudeTokens";
+import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 
 type SheetKey = "import" | "notifications" | "export" | "signout" | null;
@@ -23,18 +25,21 @@ export default function MorePage() {
   // Mock connected-state for the Claude row chip.
   const claudeConnected = initialTokens.length > 0;
   const [openSheet, setOpenSheet] = useState<SheetKey>(null);
+  const email = useAppStore((s) => s.user?.email ?? "");
+  const handle = email.split("@")[0] || "you";
+  const avatar = (email[0] ?? "t").toUpperCase();
 
   return (
     <div className="mx-auto w-full max-w-md px-5 pt-8 pb-24">
       {/* Identity */}
       <section className="flex items-center gap-3 px-1">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-moss-wash text-moss-deep font-serif text-lg">
-          tk
+          {avatar}
         </div>
         <div className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-[0.95rem] text-ink">taro kobayashi</span>
+          <span className="truncate text-[0.95rem] text-ink">{handle}</span>
           <span className="truncate text-[0.78rem] text-ink-tertiary">
-            taro@tameru.app
+            {email}
           </span>
         </div>
       </section>
@@ -476,7 +481,13 @@ function SignOutDialog({
           </button>
           <button
             type="button"
-            onClick={onClose}
+            onClick={async () => {
+              // The supabase onAuthStateChange listener (lib/auth.ts) clears
+              // the store and the route gate then bounces back to /onboarding;
+              // we close the dialog optimistically so the user sees motion.
+              onClose();
+              await signOut();
+            }}
             className="inline-flex h-11 items-center justify-center rounded-2xl bg-over text-sm font-medium text-surface hover:opacity-90"
           >
             sign out

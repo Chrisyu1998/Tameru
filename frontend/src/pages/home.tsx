@@ -128,14 +128,19 @@ function PopulatedHome({ monthTx }: { monthTx: ReturnType<typeof currentMonthTra
             delta={Math.round(d.deltaCents / 100)}
           />
         ))}
-        <DeltaTile
-          layout="stacked"
-          tone="neutral"
-          direction="neutral"
-          category="subscriptions"
-          delta={0}
-          band="steady"
-        />
+        {/* Catch-all subscriptions tile only appears when no subscription spend
+            this month would have surfaced it in tilesData — otherwise we'd
+            render the category twice. */}
+        {!tilesData.some((d) => d.category === "Subscriptions") && (
+          <DeltaTile
+            layout="stacked"
+            tone="neutral"
+            direction="neutral"
+            category="subscriptions"
+            delta={0}
+            band="steady"
+          />
+        )}
       </section>
     </>
   );

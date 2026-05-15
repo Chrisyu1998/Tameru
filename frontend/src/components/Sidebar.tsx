@@ -5,6 +5,7 @@ import { SketchIcon } from "@/components/SketchIcon";
 import { cn } from "@/lib/utils";
 import { resetOnboarded } from "@/lib/onboarding";
 import { ledger, useLedger } from "@/lib/ledger";
+import { useAppStore } from "@/store";
 
 type Item = { to: string; label: string; icon: ReactNode };
 
@@ -23,6 +24,9 @@ export function Sidebar() {
   const pathname = useLocation().pathname;
   const navigate = useNavigate();
   const { transactions } = useLedger();
+  const email = useAppStore((s) => s.user?.email ?? "");
+  const handle = email.split("@")[0] || "you";
+  const avatar = (email[0] ?? "t").toLowerCase();
   const isActive = (path: string) => (path === "/" ? pathname === "/" : pathname.startsWith(path));
 
   const restartOnboarding = () => {
@@ -30,11 +34,11 @@ export function Sidebar() {
     navigate("/onboarding");
   };
 
-  const isEmpty = transactions.length === 0;
-  const toggleLedger = () => {
-    if (isEmpty) ledger.resetToFixtures();
-    else ledger.clear();
-  };
+  // Dev-only affordance for clearing the local ledger view. The restore
+  // branch was a no-op once the ledger went backend-driven (lib/ledger.ts);
+  // hide the button entirely when there's nothing to clear so we don't
+  // promise an action that does nothing.
+  const hasTransactions = transactions.length > 0;
 
   return (
     <aside className="hidden md:flex h-screen w-60 flex-col bg-canvas">
@@ -60,14 +64,16 @@ export function Sidebar() {
 
         <div className="flex-1" />
 
-        <button
-          type="button"
-          onClick={toggleLedger}
-          className="mx-1 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
-        >
-          <Eraser className="h-4 w-4" />
-          <span className="lowercase">{isEmpty ? "restore sample data" : "clear ledger"}</span>
-        </button>
+        {hasTransactions && (
+          <button
+            type="button"
+            onClick={() => ledger.clear()}
+            className="mx-1 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
+          >
+            <Eraser className="h-4 w-4" />
+            <span className="lowercase">clear ledger</span>
+          </button>
+        )}
 
         <button
           type="button"
@@ -80,11 +86,11 @@ export function Sidebar() {
 
         <div className="mb-6 mt-2 flex items-center gap-3 px-3 py-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-moss-wash text-moss-deep font-serif">
-            t
+            {avatar}
           </div>
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm text-ink">guest</span>
-            <span className="text-xs text-ink-tertiary">not signed in</span>
+          <div className="flex min-w-0 flex-col leading-tight">
+            <span className="truncate text-sm text-ink">{handle}</span>
+            <span className="truncate text-xs text-ink-tertiary">{email}</span>
           </div>
         </div>
       </nav>

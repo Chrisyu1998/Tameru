@@ -199,18 +199,10 @@ export const ledger = {
   /**
    * Sidebar shortcut — clears the LOCAL view only. The server-side rows
    * remain; the next refresh will pull them back. Kept for the dev-only
-   * "clear ledger" / "restore sample data" sidebar buttons; not a feature.
+   * "clear ledger" sidebar button; not a feature.
    */
   clear() {
     setState({ transactions: [] });
-  },
-
-  resetToFixtures() {
-    // No-op in the real-data world — calling this would put demo rows
-    // alongside live ones in the UI and confuse the user. We log instead
-    // so the sidebar button's click is visible during development.
-    // eslint-disable-next-line no-console
-    console.warn("ledger.resetToFixtures is a no-op when wired to backend");
   },
 };
 

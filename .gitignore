@@ -20,6 +20,9 @@ dist/
 .vite/
 coverage/
 
+# Playwright CLI scratch artifacts (browser snapshots, console/network logs)
+.playwright-cli/
+
 # Supabase
 supabase/.branches/
 supabase/.temp/

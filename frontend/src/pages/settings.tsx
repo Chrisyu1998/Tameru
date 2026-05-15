@@ -9,7 +9,28 @@ import {
   Upload,
   User,
 } from "lucide-react";
+import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
+
+/**
+ * Render a currency code as "USD · $" using Intl. The home-currency invariant
+ * (CLAUDE.md #13) means this is set once at signup; rendering the symbol next
+ * to it keeps the account panel readable without a hand-maintained map.
+ */
+function currencyDisplay(code: string | null | undefined): string {
+  if (!code) return "—";
+  try {
+    const parts = new Intl.NumberFormat("en", {
+      style: "currency",
+      currency: code,
+      currencyDisplay: "narrowSymbol",
+    }).formatToParts(0);
+    const symbol = parts.find((p) => p.type === "currency")?.value;
+    return symbol && symbol !== code ? `${code} · ${symbol}` : code;
+  } catch {
+    return code;
+  }
+}
 
 type SectionId =
   | "account"
@@ -185,12 +206,18 @@ function ReadonlyRow({
 }
 
 function AccountPanel() {
+  const email = useAppStore((s) => s.user?.email ?? "");
+  const homeCurrency = useAppStore((s) => s.homeCurrency);
   return (
     <div>
       <PanelHeading title="account" subtitle="who you are." />
       <div className="rounded-2xl border border-hairline bg-surface px-4">
-        <ReadonlyRow label="email" value="you@tameru.app" note="immutable" />
-        <ReadonlyRow label="home currency" value="USD · $" note="immutable" />
+        <ReadonlyRow label="email" value={email} note="immutable" />
+        <ReadonlyRow
+          label="home currency"
+          value={currencyDisplay(homeCurrency)}
+          note="immutable"
+        />
       </div>
       <p className="mt-3 px-1 text-[0.78rem] text-ink-tertiary">
         these can't be changed yet — by design. your home currency anchors
