@@ -439,11 +439,37 @@ Auto-logged transactions appear in the main list tagged with a 🔄 icon. The AI
 
 The chat agent uses the Anthropic Messages API directly via the `anthropic` Python SDK. The agent loop runs **in the FastAPI process**. No managed agent service.
 
+**The load-bearing property** is a lifetime symmetry: the user's JWT lifetime equals the HTTP request's lifetime, so `ctx.user_jwt` is a request-local Python variable that typed tools close over directly. No session container is needed, no credential is at rest, and Supabase RLS auto-enforces `auth.uid() = user_id` because the JWT is in scope at the moment the tool runs. Any framework that introduces a session abstraction between the request and the tool (Managed Agents, ADK) breaks this symmetry — the JWT then has to live somewhere other than the request frame, which is the deeper reason "JWT in scope" matters more than it might sound.
+
 **Why not Claude Managed Agents:**
 
 Managed Agents (`/v1/sessions`, `/v1/agents`) is Anthropic's hosted harness for **long-running autonomous tasks** — minutes-to-hours work with bash, file, and web tools running in an Anthropic-provisioned container. Tameru's chat turns are 4–6 seconds with typed DB-backed tools. Managed Agents would force every tool call to round-trip through MCP from Anthropic's container to Tameru's MCP server, adding latency and complicating the per-user JWT path. Per Anthropic's own positioning ("custom agent loops and fine-grained control" → Messages API; "long-running tasks and asynchronous work" → Managed Agents), Tameru is the former.
 
-**Why not LangChain:** abstracts away exactly the mechanics that benefit from being explicit (`tool_use`/`tool_result` block protocol, streaming, system prompt injection). Adds a dependency and a moving target without solving any concrete Tameru problem.
+**Why not LangChain (classic):** General-purpose LLM-app toolbox optimized for vendor neutrality, LCEL chain composition, and the `AgentExecutor` pattern. Tameru is pinned to Claude Haiku 4.5 by §11.4, our control flow is a cyclic loop (not a chain), and `AgentExecutor`'s iteration logic *is* the 80-line loop we want to own. The frictions:
+
+1. **Message-shape translation.** `HumanMessage` / `AIMessage` / `ToolMessage` are LangChain's types, not Anthropic's. `chat_turn_trace`'s wire-shape contract (§8.12) requires a translator on every persist — and that translator becomes part of our surface to maintain across `langchain-core` upgrades.
+2. **`langchain-anthropic` feature lag.** Same shape as the ADK/LiteLLM concern above. Prompt caching `cache_control` blocks, `input_json_delta` streaming, `anthropic-beta:` headers all gate on the adapter's version, not Anthropic's SDK.
+3. **`AgentExecutor` opacity.** Loop semantics (max iterations, early stopping, intermediate-step formatting, retry behavior) are subclass-to-customize rather than read-the-code-to-understand. Our loop *is* the customization surface.
+4. **Indirect observability.** Cost logging routes through `BaseCallbackHandler.on_llm_end` rather than the direct `resp.usage` in our loop. Works, but it's an event-bus pattern over what should be a function return value.
+5. **Version churn.** `langchain` → `langchain-core` + `langchain-community` + `langchain-{provider}` split, the LCEL transition, agent-API deprecations — each upgrade is a project.
+
+The one part LangChain handles well is JWT-in-scope: per-request `StructuredTool.from_function(func=closure_over_user_jwt)` instances preserve the lifetime symmetry above, so LangChain doesn't break invariant #1 the way ADK does. But that single property doesn't compensate for the rest.
+
+**Why not LangGraph:** This is the strongest alternative considered. LangGraph (LangChain Inc.'s successor to `AgentExecutor`) provides explicit `StateGraph` state machines with checkpointing, human-in-the-loop interrupts, time-travel debugging, and multi-agent subgraphs — genuine upgrades in expressive power for the right workload. Its sweet spot is multi-step branching workflows (`planner → retriever → reflector → writer`), long-running checkpointed agents that pause and resume across hours-to-days, and mid-call user-approval interrupts. Tameru's chat loop is none of those:
+
+- **Single agent, two states.** `call_model ↔ call_tools` — the graph topology *is* the `while True` loop. The state machine adds inspectability we don't need because there's nothing to inspect beyond one cycle.
+- **4–6 second turns.** Checkpoint resumability is solving a problem we don't have. Our state is Postgres (`chat_turn_trace`), and §7.6 keeps the loop stateless from the app's perspective by design.
+- **Propose-confirm lives at the HTTP boundary, not mid-graph.** Invariant #8 routes confirms through a separate `POST /<resource>/confirm` endpoint triggered by a user tap on the preview card. The natural granularity is two HTTP calls, not one interrupted graph.
+
+The costs if we adopted it anyway: (a) `PostgresSaver` creates its own `checkpoints` / `writes` tables overlapping with `chat_turn_trace`'s purpose, with weaker wire-shape fidelity — LangGraph checkpoints are state snapshots, not Anthropic-shaped messages, so §11.5 cost math goes through framework internals; (b) JWT-in-state becomes JWT-at-rest in the checkpoint table on every node unless `user_jwt` is carefully configured as an ephemeral input-only channel — a footgun our current loop can't have because there's no persistence layer to leak into; (c) `thread_id` (LangGraph's conversation key) duplicates our existing `conversation_id` (§8.11), forcing either redundancy or schema-coupling to LangGraph's API; (d) we still inherit `langchain-anthropic`'s adapter lag on Anthropic-specific features. Revisit if the chat agent ever grows multi-step branches, gains human-in-the-loop interrupts mid-call, or runs long enough that checkpoint resumability earns its keep. None of those are v1.
+
+**Why not Google ADK:** ADK (Agent Development Kit, open-sourced April 2025) is optimized for multi-agent orchestration deployed on Vertex AI Agent Engine, with LiteLLM providing vendor-neutral model access. Its three biggest wins — multi-agent workflows (`SequentialAgent`, `ParallelAgent`, agent transfers, A2A protocol), one-command Vertex deploy, and Gemini/Claude/GPT swap via a model string — do not apply to Tameru: single agent, Railway-hosted, Claude Haiku 4.5 pinned by §11.4. The costs are real and three-fold:
+
+1. **JWT plumbing.** ADK tools receive a `ToolContext` exposing `session.state`, not request-scoped data. The JWT moves from a request-local variable into `session.state["user_jwt"]`, which depending on the `SessionService` backend (`InMemory`, custom Postgres adapter, `VertexAiSessionService`) means the credential is briefly at rest somewhere — breaking the lifetime symmetry above.
+2. **Wire-shape replay erosion.** `chat_turn_trace` (§8.12) stores the literal JSON sent to Anthropic. ADK stores typed events (`LlmRequestEvent`, `ToolCallEvent`, …) and renders them to wire shape via LiteLLM's Anthropic adapter at request time. To preserve §8.12's contract we'd either re-derive Anthropic-shaped messages from ADK events on every turn (maintaining the inverse of LiteLLM) or replace the contract with ADK's own opinionated event-replay model — which makes the §11.5 per-turn token math depend on framework internals.
+3. **Distance from the Anthropic API.** LiteLLM is excellent at vendor abstraction; the cost is that Anthropic-specific features (`cache_control` blocks for prompt caching, `input_json_delta` streaming for partial tool input, `anthropic-beta:` headers for preview features) arrive late through it. For a project where the chat agent is the AI surface, paying an abstraction tax on the API we're closest to is the wrong place to pay it.
+
+Revisit ADK if Tameru ever becomes multi-agent, migrates to Vertex, or genuinely A/Bs models across vendors as a product decision.
 
 **Loop sketch:**
 
@@ -479,12 +505,27 @@ async def chat_turn(user_jwt, user_message):
 
 ### 7.2 Typed Tools, Not Raw SQL
 
-| Approach | Pros | Cons |
-|---|---|---|
-| **Typed tools (Tameru)** | Safe — Claude can't generate bad SQL. Testable. Evaluable. No injection surface. | Must anticipate query patterns upfront. |
-| Raw `run_sql(sql)` | Flexible — handles arbitrary questions. | Silent failures. Injection surface. Hard to eval. |
+The agent's analytical surface is a registry of ~7 typed Python functions (`get_transactions`, `calculate_total`, `get_cards`, …) rather than a single `run_sql(sql)` tool that lets Claude author Postgres directly. This is a deliberate trade-off — raw SQL has real merits and one tempting property (flexibility for arbitrary questions) — but five load-bearing factors push the decision to typed tools for v1.
 
-Phase 1 uses typed tools only. A read-only `run_query(sql)` tool may be added in Phase 2 against a Postgres read replica.
+**The raw-SQL alternative, sketched.** A single `run_sql(sql: str) → rows` tool, with the relevant table schemas dumped into the system prompt so the model can author queries. The model writes SQL on the fly: `"How much on coffee in March?"` becomes `tool_use(run_sql, "SELECT SUM(amount) FROM transactions WHERE category='Dining' AND merchant ILIKE '%coffee%' AND date BETWEEN '2026-03-01' AND '2026-03-31'")`. RLS still scopes rows to the authenticated user.
+
+**The steelman for raw SQL:** flexibility across an open-ended question space, one tool instead of seven (smaller registry), no upfront design work to anticipate query shapes, modern Claude is competent at Postgres given a schema. If Tameru were a general-purpose "talk to your spreadsheet" data-exploration product, raw SQL would be the right primitive.
+
+**Why typed tools win for Tameru:**
+
+1. **Silent wrong answers are the worst failure mode in personal finance, and RLS doesn't protect against them.** RLS stops cross-user reads. It does not stop `WHERE created_at = ...` (wrong column), `WHERE date >= '2025-03-01'` (wrong year), or a `LEFT JOIN cards` that excludes transactions without a card. Each returns a plausible-looking number, confidently, with no error surface. In a finance app, **wrong-but-plausible numbers are worse than errors** — errors get reported, wrong numbers get acted on. Typed tools eliminate the category: each tool's SQL is reviewed, tested against fixtures, and indexed; a wrong number is a bug fixed once, not stochastic per-turn drift.
+
+2. **Invariant #8 (propose-then-confirm) is structurally enforceable only with typed tools.** Today's contract — no ledger row is written from inside a `tool_use` handler — is enforced by the fact that no write tool exists for the model to call (other than `set_goal`, the lone carve-out per §8.13). The structural test `tests/contracts/test_tool_write_invariant.py` fails the build if `ALLOWED_DIRECT_WRITE_TOOLS` widens. A `run_sql` tool that accepts arbitrary SQL would erode this to a Postgres-role configuration (`default_transaction_read_only=on`), which still leaves the model with **affordance to attempt** an `INSERT` — and prompt-injections probe at affordances. Typed tools remove the affordance entirely.
+
+3. **Eval determinism breaks under raw SQL.** §7.10's multi-hop eval harness asserts semantic tool calls: `tool_calls[0] == ("calculate_total", {"category": "Dining", ...})`. That assertion survives prompt rewording (the model can phrase the user's question many ways but the structured call stays stable). With raw SQL, the two alternatives are (a) string-match the SQL — brittle against cosmetic rephrasing (`SUM(amount)` vs `sum(amount)`, table aliases, equivalent date-range expressions); or (b) output-match the final number — passes with wrong SQL that happens to produce the right value on fixtures. Neither survives a real eval lifecycle.
+
+4. **Schema-in-prompt and SQL-in-logs both fight the cost and privacy posture.** Raw SQL requires the table schema in the system prompt (~1–2K tokens/turn forever, ~7% over §11.5's 19K/turn baseline). Worse, every logged SQL string contains filter values — merchant names, amounts, category names — which then have to be regex-scrubbed before they reach PostHog under the privacy posture in CLAUDE.md ("never send transaction amounts or merchant names"). Typed tools log `{tool: "calculate_total", args: {category, start_date, end_date}}` — category names are non-sensitive, dates are non-sensitive, and merchant strings only ever appear inside `propose_transaction` args where they're scrubbed at log time rather than parsed out of free-form SQL.
+
+5. **Invariant #3 (MCP server is read-only) is read-only by construction with typed tools.** The MCP server exposes only the read tools; there is no SQL parser to gate on. A raw-SQL world would need correct, ongoing SQL classification ("is this a SELECT?" — non-trivial with CTEs, `WITH RECURSIVE`, `RETURNING` clauses, subqueries) to maintain the invariant. We'd rather not own that classifier.
+
+**The acknowledged con: typed tools require anticipating query shapes.** This is real — personal finance's question space is bounded (how much on X, what matches Y, recurring charges, goal progress, card list) but the long tail of "merchants I visit most after 10pm" or "categories where YoY growth >20%" doesn't fit any current tool. v1 accepts this gap.
+
+**Phase 2 escape hatch.** A read-only `run_query(sql)` tool may be added in Phase 2 against a Postgres **read replica**, with **separate auth, separate logging, separate rate limits**. The shape matters: read replica (no risk to the write path or to invariant #8), read-only role (no `INSERT`/`UPDATE`/`DELETE` affordance), separate audit trail (SQL strings get their own scrub pipeline rather than commingling with structured tool logs). Adding it is contingent on observing a class of user questions typed tools can't serve — not speculative, not v1.
 
 **Tool definitions (Phase 1):**
 
@@ -889,6 +930,8 @@ Human-visible chat log for the Claude Haiku agent (§7.1, §7.6 layer 1). One us
 ### 8.12 `chat_turn_trace`
 
 Anthropic-shaped replay log for the agent loop. One row per `/chat/turn` call, storing the **full** Anthropic message-list slice contributed by that turn — including the user's typed message, every intermediate `(assistant_with_tool_use, user_with_tool_result)` pair, and the final assistant blocks. The loop reads from this table to reconstruct the exact wire-shape Claude needs on the next turn.
+
+**Why wire-shape fidelity matters:** the stored JSON equals the bytes sent to Anthropic (modulo serialization). This is load-bearing for two things — the per-turn token math in §11.5 (which only stays accurate if no abstraction layer rewrites the message list at send time) and any future prompt-caching work (which requires byte-stable prefixes across turns to actually hit the cache). A framework that owns event-to-message rendering (e.g., ADK + LiteLLM — see §7.1 "Why not Google ADK") loses this property by design; we keep it by storing what we send and sending what we stored.
 
 **Why this is separate from `chat_messages`:**
 
