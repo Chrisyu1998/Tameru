@@ -71,20 +71,26 @@ export default function MemoryPage() {
       <CapacityRow used={used} overEighty={overEighty} />
 
       {/* Facts grid */}
-      <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {facts.map((fact) => (
-          <FactTile
-            key={fact.id}
-            fact={fact}
-            armed={armedId === fact.id}
-            dimmed={armedId !== null && armedId !== fact.id}
-            onArm={() => setArmedId(fact.id)}
-            onCancel={() => setArmedId(null)}
-            onConfirmDelete={() => requestDelete(fact)}
-            longPressMs={LONG_PRESS_MS}
-          />
-        ))}
-      </ul>
+      {facts.length === 0 ? (
+        <p className="mt-10 text-center text-sm text-ink-tertiary">
+          tameru hasn't remembered anything yet — facts get added as you chat.
+        </p>
+      ) : (
+        <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {facts.map((fact) => (
+            <FactTile
+              key={fact.id}
+              fact={fact}
+              armed={armedId === fact.id}
+              dimmed={armedId !== null && armedId !== fact.id}
+              onArm={() => setArmedId(fact.id)}
+              onCancel={() => setArmedId(null)}
+              onConfirmDelete={() => requestDelete(fact)}
+              longPressMs={LONG_PRESS_MS}
+            />
+          ))}
+        </ul>
+      )}
 
       {/* Hint footer */}
       <div className="mt-10 border-t border-hairline pt-6">

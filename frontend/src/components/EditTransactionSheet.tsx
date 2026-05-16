@@ -124,7 +124,7 @@ export function EditTransactionSheet({
         <FieldButton
           label="card"
           icon={<CreditCard className="h-3.5 w-3.5" />}
-          value={selectedCard ? `${selectedCard.name} · ${selectedCard.last4}` : "—"}
+          value={selectedCard ? `${selectedCard.name} · ${selectedCard.last4}` : "Other"}
           onClick={() => setPickerOpen("card")}
         />
 
@@ -159,6 +159,17 @@ export function EditTransactionSheet({
           <>
             <h3 className="font-serif text-lg text-ink lowercase-title">choose a card</h3>
             <ul className="mt-3 flex flex-col">
+              <li>
+                <PickerRow
+                  active={cardId === ""}
+                  label="Other / Cash"
+                  sub="cash or unassigned"
+                  onClick={() => {
+                    setCardId("");
+                    setPickerOpen(null);
+                  }}
+                />
+              </li>
               {cards.map((c) => (
                 <li key={c.id}>
                   <PickerRow

@@ -45,16 +45,21 @@ export default function SubscriptionsPage() {
         </p>
       </header>
 
-      {/* Active */}
-      <ul className="mt-6 flex flex-col">
-        {active.map((sub) => (
-          <SubscriptionRow
-            key={sub.id}
-            sub={sub}
-            onSelect={() => setSelected(sub)}
-          />
-        ))}
-      </ul>
+      {active.length === 0 && inactive.length === 0 ? (
+        <p className="mt-10 text-center text-sm text-ink-tertiary">
+          no subscriptions tracked yet — ask tameru to add one.
+        </p>
+      ) : (
+        <ul className="mt-6 flex flex-col">
+          {active.map((sub) => (
+            <SubscriptionRow
+              key={sub.id}
+              sub={sub}
+              onSelect={() => setSelected(sub)}
+            />
+          ))}
+        </ul>
+      )}
 
       {/* Inactive */}
       {inactive.length > 0 && (

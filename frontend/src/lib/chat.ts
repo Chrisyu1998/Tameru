@@ -229,8 +229,14 @@ function inferDate(input: string): { value: string; confidence: number } {
 }
 
 function pickCard(category: Category): { id: string; confidence: number } {
-  // Mild affinity: dining / coffee → amex, groceries / utilities → citi,
-  // otherwise csp. Keeps the local-mock proposal feeling deliberate.
+  // When no real cards exist (v1 default), every proposal defaults to "Other".
+  // The category affinity below is kept for the post-v1 case when FIXTURE_CARDS
+  // (or a future /cards feed) is populated; non-UUID slugs still get sanitized
+  // to null at the wire boundary (transactionsApi.ts:72), so the affinity is
+  // purely a UI nicety.
+  if (FIXTURE_CARDS.length === 0) {
+    return { id: "", confidence: 0.6 };
+  }
   if (category === "Dining" || category === "Coffee Shops" || category === "Health") {
     return { id: "card-amex", confidence: 0.6 };
   }
@@ -355,7 +361,7 @@ export function compareCategories(
 
 export function cardLabel(cardId: string): { name: string; last4: string } {
   const card = FIXTURE_CARDS.find((c) => c.id === cardId);
-  if (!card) return { name: "Unknown card", last4: "----" };
+  if (!card) return { name: "Other", last4: "—" };
   return { name: card.name, last4: card.last4 };
 }
 

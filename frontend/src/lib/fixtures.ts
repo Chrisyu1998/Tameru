@@ -41,38 +41,11 @@ export interface Transaction {
   autoLogged?: boolean;
 }
 
-export const FIXTURE_CARDS: Card[] = [
-  {
-    id: "card-csp",
-    name: "Chase Sapphire Preferred",
-    last4: "4821",
-    color: "#3b5d6f", // muted slate-blue
-    program: "UR",
-    multipliers: [
-      { label: "travel", factor: 5 },
-      { label: "dining", factor: 3 },
-    ],
-  },
-  {
-    id: "card-amex",
-    name: "Amex Gold",
-    last4: "1009",
-    color: "#a07a3a", // muted gold
-    program: "MR",
-    multipliers: [
-      { label: "dining", factor: 4 },
-      { label: "groceries", factor: 4 },
-    ],
-  },
-  {
-    id: "card-citi",
-    name: "Citi Double Cash",
-    last4: "7733",
-    color: "#5a5a5a", // graphite
-    program: "ThankYou",
-    multipliers: [{ label: "everything", factor: 2 }],
-  },
-];
+// v1 has no /cards backend yet; the Cards page renders an empty state and
+// the chat picker shows only "Other / Cash" until a real cards feed lands.
+// Transactions logged without a card persist as card_id = NULL on the
+// server (transactions.sql:9 — column is nullable).
+export const FIXTURE_CARDS: Card[] = [];
 
 /**
  * Helper to build dated fixtures relative to "today" so the dashboard

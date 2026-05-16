@@ -4,16 +4,11 @@ import { cardLabel, type ParseDraft } from "@/lib/chat";
 import { CATEGORIES, type Category } from "@/lib/categories";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { FIXTURE_CARDS } from "@/lib/fixtures";
-import { looksLikeUuid } from "@/lib/transactionsApi";
 import { cn } from "@/lib/utils";
 
-// v1 has no /cards backend, so any non-UUID id (the Lovable FIXTURE_CARDS
-// slugs, or "") doesn't correspond to a real row. The parse card hides
-// the picker in that case and labels the field "no card linked" — both
-// honest and stable as cards eventually get a backend.
-function isRealCardId(value: string): boolean {
-  return looksLikeUuid(value);
-}
+// "Other / Cash" is the always-available choice — represented by an empty
+// cardId on the draft, persisted server-side as card_id = NULL. Real cards
+// (post-v1, once /cards ships) sit alongside it in the picker.
 
 interface ParseCardProps {
   preface?: string;
@@ -37,8 +32,7 @@ export function ParseCard({
   onFix,
 }: ParseCardProps) {
   const [local, setLocal] = useState<ParseDraft>(draft);
-  const cardIsReal = isRealCardId(local.cardId);
-  const card = cardIsReal ? cardLabel(local.cardId) : null;
+  const card = cardLabel(local.cardId);
 
   // Lower confidence → "check this one" pencil treatment.
   const lowConf = (v: number) => v < 0.75;
@@ -109,12 +103,13 @@ export function ParseCard({
             icon={<CreditCard className="h-3.5 w-3.5" />}
             label="card"
             confident={!lowConf(local.confidence.card)}
-            // Disable the picker while cards are still fixture-only. Re-enable
-            // by removing the `|| !cardIsReal` when a /cards endpoint lands and
-            // useLedger().cards starts returning rows with UUID ids.
-            disabled={committed || !cardIsReal}
+            disabled={committed}
             value={local.cardId}
-            displayValue={card ? `${card.name} · ${card.last4}` : "no card linked"}
+            displayValue={
+              local.cardId && card.last4 !== "—"
+                ? `${card.name} · ${card.last4}`
+                : "Other"
+            }
             asSelect="card"
             onChange={(v) => setLocal({ ...local, cardId: v })}
           />
@@ -264,6 +259,7 @@ function MetaRow({
           }}
           className="rounded-md bg-surface px-2 py-1 text-[0.85rem] text-ink focus:outline-none"
         >
+          <option value="">Other / Cash</option>
           {FIXTURE_CARDS.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name} · {c.last4}
