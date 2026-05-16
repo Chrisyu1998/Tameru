@@ -55,16 +55,24 @@ function setState(next: Partial<LedgerState>) {
 }
 
 /*
- * Auth-driven refresh: when a JWT appears, fetch. When it disappears (sign
- * out, displaced), drop the in-memory transactions so we don't render a
- * previous user's data on the next mount. Cards stay (they're fixtures).
+ * Auth-driven refresh: when a JWT appears AND the user is bootstrapped
+ * (home_currency is set), fetch. When the JWT disappears (sign out,
+ * displaced), drop the in-memory transactions so we don't render a previous
+ * user's data on the next mount. Cards stay (they're fixtures).
+ *
+ * The home_currency gate matters: /transactions runs through the
+ * single-active-device check in app/auth.py:113, which 401s with
+ * DEVICE_DISPLACED when no users_meta row exists. A brand-new OAuth user
+ * has a JWT before they have a users_meta row — firing /transactions there
+ * pops the displacement modal on top of the onboarding currency picker.
  *
  * We subscribe at module load — the store is a singleton, so this fires
  * exactly once per page load no matter how many places import `ledger`.
  */
 let _lastJwt: string | null = null;
 useAppStore.subscribe((s) => {
-  if (s.jwt && s.jwt !== _lastJwt) {
+  const bootstrapped = !!s.jwt && typeof s.homeCurrency === "string";
+  if (bootstrapped && s.jwt !== _lastJwt) {
     _lastJwt = s.jwt;
     void ledger.refresh();
   } else if (!s.jwt && _lastJwt) {
