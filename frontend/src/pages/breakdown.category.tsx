@@ -1,9 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Search, X } from "lucide-react";
 import { AutoLoggedBadge } from "@/components/AutoLoggedBadge";
 import { SwipeableRow } from "@/components/SwipeableRow";
-import { UndoToast, type PendingDelete } from "@/components/UndoToast";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { SketchIllustration } from "@/components/SketchIllustration";
 import { ledger, useLedger } from "@/lib/ledger";
@@ -44,13 +43,12 @@ export default function CategoryListPage() {
 }
 
 function CategoryListBody({ category }: { category: Category }) {
-  const { transactions, cards } = useLedger();
+  const { transactions, cards, pendingDeletes } = useLedger();
 
   const [monthFilter, setMonthFilter] = useState<MonthFilter>("all");
   const [cardFilter, setCardFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Transaction | null>(null);
-  const [pending, setPending] = useState<PendingDelete | null>(null);
 
   const filtered = useMemo(() => {
     const now = new Date();
@@ -79,15 +77,11 @@ function CategoryListBody({ category }: { category: Category }) {
   const total = filtered.reduce((s, t) => s + t.amountCents, 0);
 
   const requestDelete = (tx: Transaction) => {
-    // Hide editor first if open, then queue an undo toast.
+    // The row stays in the list with a moss progress bar; tapping it
+    // during the window calls ledger.undoDelete. The timer lives at
+    // module scope, so navigating away no longer cancels the commit.
     setEditing(null);
-    // If a previous delete is still pending, commit it immediately.
-    if (pending) pending.commit();
-    setPending({
-      id: tx.id,
-      label: `${tx.merchant} · ${formatMoney(tx.amountCents)}`,
-      commit: () => ledger.deleteTransaction(tx.id),
-    });
+    ledger.scheduleDelete(tx.id);
   };
 
   const cardLast4 = (id: string) => cards.find((c) => c.id === id)?.last4 ?? "····";
@@ -170,33 +164,66 @@ function CategoryListBody({ category }: { category: Category }) {
 
       {/* Transaction list */}
       <ul className="mt-6 flex flex-col gap-1.5">
-        {filtered.map((t) => (
-          <li key={t.id}>
-            <SwipeableRow
-              onConfirmDelete={() => requestDelete(t)}
-              onEdit={() => setEditing(t)}
-            >
-              <button
-                type="button"
-                onClick={() => setEditing(t)}
-                className="flex w-full items-center justify-between bg-surface px-4 py-3 text-left transition-colors hover:bg-elevated"
+        {filtered.map((t) => {
+          const pending = pendingDeletes[t.id];
+          return (
+            <li key={t.id}>
+              <SwipeableRow
+                onConfirmDelete={() => requestDelete(t)}
+                onEdit={() => setEditing(t)}
               >
-                <div className="flex flex-col leading-tight min-w-0">
-                  <span className="truncate text-[0.95rem] text-ink inline-flex items-center gap-1.5">
-                    <span className="truncate">{t.merchant}</span>
-                    {t.autoLogged && <AutoLoggedBadge />}
+                <button
+                  type="button"
+                  onClick={() =>
+                    pending ? ledger.undoDelete(t.id) : setEditing(t)
+                  }
+                  className={cn(
+                    "flex w-full items-center justify-between bg-surface px-4 py-3 text-left transition-colors",
+                    pending ? "opacity-55" : "hover:bg-elevated"
+                  )}
+                >
+                  <div className="flex flex-col leading-tight min-w-0">
+                    <span
+                      className={cn(
+                        "truncate text-[0.95rem] text-ink inline-flex items-center gap-1.5",
+                        pending && "line-through decoration-1"
+                      )}
+                    >
+                      <span className="truncate">{t.merchant}</span>
+                      {t.autoLogged && <AutoLoggedBadge />}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-[0.72rem] tabular",
+                        pending ? "text-moss-deep" : "text-ink-tertiary"
+                      )}
+                    >
+                      {pending
+                        ? "deleting · tap to undo"
+                        : `${formatShortDate(t.date)} · ···· ${cardLast4(
+                            t.cardId
+                          )}`}
+                    </span>
+                  </div>
+                  <span
+                    className={cn(
+                      "tabular text-sm shrink-0 ml-3",
+                      pending ? "text-ink-tertiary" : "text-ink"
+                    )}
+                  >
+                    {formatMoney(t.amountCents)}
                   </span>
-                  <span className="text-[0.72rem] tabular text-ink-tertiary">
-                    {formatShortDate(t.date)} · ···· {cardLast4(t.cardId)}
-                  </span>
-                </div>
-                <span className="tabular text-sm text-ink shrink-0 ml-3">
-                  {formatMoney(t.amountCents)}
-                </span>
-              </button>
-            </SwipeableRow>
-          </li>
-        ))}
+                </button>
+                {pending && (
+                  <PendingDeleteProgress
+                    scheduledAt={pending.scheduledAt}
+                    durationMs={pending.durationMs}
+                  />
+                )}
+              </SwipeableRow>
+            </li>
+          );
+        })}
         {filtered.length === 0 && (
           <li className="flex flex-col items-center gap-3 rounded-2xl border border-hairline bg-sunken/40 py-10 text-center text-sm text-ink-tertiary">
             <SketchIllustration kind="empty-list" size={84} className="text-ink-tertiary/70" />
@@ -212,11 +239,42 @@ function CategoryListBody({ category }: { category: Category }) {
         onClose={() => setEditing(null)}
         onRequestDelete={requestDelete}
       />
+    </div>
+  );
+}
 
-      <UndoToast
-        pending={pending}
-        onUndo={() => setPending(null)}
-        onTimeout={() => setPending(null)}
+/**
+ * Thin moss progress bar pinned to the bottom of a pending-delete row.
+ * Animated client-side via requestAnimationFrame off `scheduledAt`; the
+ * actual commit is driven by the ledger's module-level setTimeout, so this
+ * is purely a visual countdown.
+ */
+function PendingDeleteProgress({
+  scheduledAt,
+  durationMs,
+}: {
+  scheduledAt: number;
+  durationMs: number;
+}) {
+  const [progress, setProgress] = useState(() =>
+    Math.min(1, (Date.now() - scheduledAt) / durationMs)
+  );
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const elapsed = Date.now() - scheduledAt;
+      const next = Math.min(1, elapsed / durationMs);
+      setProgress(next);
+      if (next < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [scheduledAt, durationMs]);
+  return (
+    <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-hairline">
+      <div
+        className="h-full bg-moss"
+        style={{ width: `${progress * 100}%` }}
       />
     </div>
   );

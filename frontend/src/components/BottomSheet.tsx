@@ -108,16 +108,20 @@ export function BottomSheet({
 
       <div
         className={cn(
-          "relative w-full max-w-md border border-hairline bg-elevated pb-8 pt-3",
+          "relative flex w-full max-w-md flex-col overflow-hidden border border-hairline bg-elevated",
+          // Cap at 85% of dynamic viewport (svh handles iOS URL bar collapse)
+          // so tall sheets don't run off the top of the screen — content
+          // inside scrolls instead.
+          "max-h-[85svh]",
           // Mobile: bottom sheet
           "rounded-t-[2rem] animate-sheet-up",
           // Desktop: centered dialog
-          "md:rounded-3xl md:pt-6 md:pb-7 md:animate-dialog-in md:max-w-lg md:mx-4",
+          "md:rounded-3xl md:animate-dialog-in md:max-w-lg md:mx-4",
           className
         )}
       >
         {/* Mobile drag handle (hidden on desktop) */}
-        <div className="flex items-center justify-center pb-2 md:hidden">
+        <div className="flex shrink-0 items-center justify-center pt-3 pb-2 md:hidden">
           <span className="block h-1 w-10 rounded-full bg-ink-quaternary/60" />
         </div>
 
@@ -126,13 +130,15 @@ export function BottomSheet({
             type="button"
             onClick={onClose}
             aria-label="close"
-            className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
+            className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
           >
             <X className="h-4 w-4" />
           </button>
         )}
 
-        <div className="px-5 pt-2 md:pt-0">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-2 pb-8 md:pt-6 md:pb-7">
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -174,11 +180,12 @@ function MobileBottomSheet({
       />
       <div
         className={cn(
-          "relative w-full max-w-md rounded-t-[2rem] border border-hairline bg-elevated pb-8 pt-3 animate-sheet-up",
+          "relative flex w-full max-w-md flex-col overflow-hidden rounded-t-[2rem] border border-hairline bg-elevated animate-sheet-up",
+          "max-h-[85svh]",
           className
         )}
       >
-        <div className="flex items-center justify-center pb-2">
+        <div className="flex shrink-0 items-center justify-center pt-3 pb-2">
           <span className="block h-1 w-10 rounded-full bg-ink-quaternary/60" />
         </div>
         {!blockDismiss && (
@@ -186,12 +193,14 @@ function MobileBottomSheet({
             type="button"
             onClick={onClose}
             aria-label="close"
-            className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
+            className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
           >
             <X className="h-4 w-4" />
           </button>
         )}
-        <div className="px-5 pt-2">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-2 pb-8">
+          {children}
+        </div>
       </div>
     </div>
   );

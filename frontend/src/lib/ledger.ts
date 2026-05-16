@@ -27,6 +27,14 @@ import {
 } from "./transactionsApi";
 import { useAppStore } from "../store";
 
+export interface PendingDeleteState {
+  id: string;
+  /** Wall-clock ms when the timer started, for rAF-driven progress UIs. */
+  scheduledAt: number;
+  /** Total grace window in ms. */
+  durationMs: number;
+}
+
 interface LedgerState {
   transactions: Transaction[];
   cards: Card[];
@@ -34,6 +42,12 @@ interface LedgerState {
   loading: boolean;
   /** True once we've fetched at least once for this signed-in session. */
   loaded: boolean;
+  /**
+   * Rows mid-deletion. Keyed by transaction id. The row stays in
+   * `transactions` until the timer commits — so the list can render it
+   * with a countdown progress bar.
+   */
+  pendingDeletes: Record<string, PendingDeleteState>;
 }
 
 let state: LedgerState = {
@@ -41,7 +55,15 @@ let state: LedgerState = {
   cards: FIXTURE_CARDS,
   loading: false,
   loaded: false,
+  pendingDeletes: {},
 };
+
+/*
+ * Timer handles live at module scope on purpose: page-local state was the
+ * source of the "navigate away during undo window → delete never fires" bug.
+ * The Map is not reactive; reactivity comes from `state.pendingDeletes`.
+ */
+const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const listeners = new Set<() => void>();
 
@@ -77,7 +99,16 @@ useAppStore.subscribe((s) => {
     void ledger.refresh();
   } else if (!s.jwt && _lastJwt) {
     _lastJwt = null;
-    setState({ transactions: [], loading: false, loaded: false });
+    // Cancel any in-flight delete timers — they'd hit a 401 with no JWT,
+    // and the row's already gone from the user's perspective anyway.
+    for (const timer of pendingTimers.values()) clearTimeout(timer);
+    pendingTimers.clear();
+    setState({
+      transactions: [],
+      loading: false,
+      loaded: false,
+      pendingDeletes: {},
+    });
   }
 });
 
@@ -94,7 +125,13 @@ export const ledger = {
   getServerSnapshot(): LedgerState {
     // SSR / first-paint — no transactions, no loading flag. The Vite SPA
     // doesn't actually SSR; this is here so useSyncExternalStore is happy.
-    return { transactions: [], cards: FIXTURE_CARDS, loading: false, loaded: false };
+    return {
+      transactions: [],
+      cards: FIXTURE_CARDS,
+      loading: false,
+      loaded: false,
+      pendingDeletes: {},
+    };
   },
 
   /**
@@ -161,6 +198,65 @@ export const ledger = {
       });
       // eslint-disable-next-line no-console
       console.warn("ledger update failed; reverted", err);
+    }
+  },
+
+  /**
+   * Schedule a delete with an undo window. The row STAYS in `transactions`
+   * for `durationMs` (so the list can render a countdown progress bar on
+   * it); when the timer fires we remove it locally and call DELETE. Calling
+   * `undoDelete` before then cancels the commit cleanly.
+   *
+   * Idempotent — a second `scheduleDelete` on an already-pending id is a
+   * no-op (we don't restart the timer). Calling on an unknown id is also
+   * a no-op.
+   */
+  scheduleDelete(id: string, durationMs: number = 5000): void {
+    if (pendingTimers.has(id)) return;
+    const row = state.transactions.find((t) => t.id === id);
+    if (!row) return;
+    const scheduledAt = Date.now();
+    setState({
+      pendingDeletes: {
+        ...state.pendingDeletes,
+        [id]: { id, scheduledAt, durationMs },
+      },
+    });
+    const timer = setTimeout(() => {
+      pendingTimers.delete(id);
+      // Snapshot original index so we can restore on server failure.
+      const idx = state.transactions.findIndex((t) => t.id === id);
+      const { [id]: _, ...restPending } = state.pendingDeletes;
+      setState({
+        transactions: state.transactions.filter((t) => t.id !== id),
+        pendingDeletes: restPending,
+      });
+      void apiDeleteTransaction(id).catch((err) => {
+        // Server-side delete failed (network, RLS race, etc.). Put the row
+        // back so the user isn't silently lying-to about state. Original
+        // index used when possible.
+        const next = [...state.transactions];
+        next.splice(Math.max(0, Math.min(idx, next.length)), 0, row);
+        setState({ transactions: next });
+        // eslint-disable-next-line no-console
+        console.warn("ledger commit-delete failed; restored", err);
+      });
+    }, durationMs);
+    pendingTimers.set(id, timer);
+  },
+
+  /**
+   * Cancel a pending delete. Safe to call on an unknown id.
+   */
+  undoDelete(id: string): void {
+    const timer = pendingTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      pendingTimers.delete(id);
+    }
+    if (state.pendingDeletes[id] !== undefined) {
+      const { [id]: _, ...rest } = state.pendingDeletes;
+      setState({ pendingDeletes: rest });
     }
   },
 

@@ -6,8 +6,12 @@ type Tone = "tinted" | "neutral";
 
 interface DeltaTileProps {
   category: string;
-  /** Signed delta amount, e.g. +47 or -22. Whole-currency units. */
-  delta: number;
+  /**
+   * Signed delta amount, e.g. +47 or -22. Whole-currency units. Pass `null`
+   * for the "still learning" state — the amount row is suppressed entirely
+   * and only the category + band render, so the tile doesn't read as $0.
+   */
+  delta: number | null;
   /** Ordinal band copy: "above usual", "below usual", "as usual" */
   band?: string;
   currency?: string;
@@ -19,7 +23,8 @@ interface DeltaTileProps {
   onClick?: () => void;
 }
 
-function inferDirection(delta: number): Direction {
+function inferDirection(delta: number | null): Direction {
+  if (delta === null) return "neutral";
   if (delta > 0) return "above";
   if (delta < 0) return "below";
   return "usual";
@@ -73,8 +78,9 @@ export function DeltaTile({
   const amountText = isSolid ? solidTextByDirection : textByDirection;
   const labelText = isSolid ? "text-ink/80" : "text-ink";
   const subText = isSolid ? "text-ink/55" : "text-ink-tertiary";
-  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "";
-  const abs = Math.abs(delta);
+  const hasDelta = delta !== null;
+  const sign = !hasDelta ? "" : delta > 0 ? "+" : delta < 0 ? "−" : "";
+  const abs = hasDelta ? Math.abs(delta) : 0;
   const resolvedBand =
     band ??
     (direction === "above"
@@ -103,16 +109,18 @@ export function DeltaTile({
           {category}
         </span>
         <div className="mt-2 flex flex-col gap-0.5">
-          <span
-            className={cn(
-              "tabular font-serif text-2xl leading-none",
-              amountText[direction]
-            )}
-          >
-            {sign}
-            {currency}
-            {abs}
-          </span>
+          {hasDelta && (
+            <span
+              className={cn(
+                "tabular font-serif text-2xl leading-none",
+                amountText[direction]
+              )}
+            >
+              {sign}
+              {currency}
+              {abs}
+            </span>
+          )}
           <span className={cn("text-[0.72rem] lowercase tracking-wide", subText)}>
             {resolvedBand}
           </span>
@@ -138,12 +146,15 @@ export function DeltaTile({
       <span
         className={cn("tabular text-sm font-medium", amountText[direction])}
       >
-        {sign}
-        {currency}
-        {abs}
-        <span className={cn("ml-2 font-normal", subText)}>
-          · {resolvedBand}
-        </span>
+        {hasDelta && (
+          <>
+            {sign}
+            {currency}
+            {abs}
+            <span className="mx-2">·</span>
+          </>
+        )}
+        <span className={cn("font-normal", subText)}>{resolvedBand}</span>
       </span>
     </Tag>
   );

@@ -137,7 +137,7 @@ function Tile({ tile }: { tile: CategoryTileWire }) {
         tone="neutral"
         direction="neutral"
         category={tile.name.toLowerCase()}
-        delta={0}
+        delta={null}
         band="still learning"
       />
     );
