@@ -2,13 +2,20 @@
  * Shared chat session store. Used by both the mobile /chat route and the
  * desktop right-side ChatDrawer so they reflect a single conversation.
  *
- * Talks to the real backend (POST /chat/turn — app/routes/chat.py) and
- * commits proposals through POST /transactions/confirm. Conversation_id is
- * minted server-side on the first turn and replayed on every subsequent
- * one so the agent loop sees the last 5 turns of history (DESIGN.md §7.2.1).
+ * Day 12: Talks to POST /chat/turn over Server-Sent Events. Tokens
+ * stream into `streamingText` as they arrive; on the terminal `done`
+ * frame we clear the streaming buffer and call _renderTurn to expand
+ * the assembled tool_calls into ParseCard / CandidateList / Chart /
+ * text bubbles (Day 10 contract — done.tool_calls is the exact Day 8
+ * shape). On a terminal `error` frame or a network drop, any
+ * accumulated text is committed as a partial bubble and `lastError`
+ * is latched so the UI shows a Retry affordance. Re-firing re-uses
+ * the original conversation_id; the backend writes nothing until
+ * `done`, so retries are idempotent (DESIGN.md §7.5).
  *
- * No streaming yet — Day 12 swaps the one-shot POST for SSE. Until then,
- * the UI shows a `busy` flag while the model runs (typically 4-6s per turn).
+ * `conversation_id` is minted server-side on the first turn and
+ * replayed on every subsequent one so the agent loop sees the last
+ * 5 turns of history (DESIGN.md §7.2.1).
  */
 
 import { useEffect, useState } from "react";
@@ -26,12 +33,11 @@ import type { Category } from "./categories";
 import type { Transaction } from "./fixtures";
 import {
   getChatMessages,
-  postChatTurn,
-  toChatTurnError,
   type ChatMessageWire,
   type ChatToolCall,
   type ChatTurnResponse,
 } from "./chatApi";
+import { streamTurn, type StreamError } from "./chat_stream";
 import {
   confirmTransaction,
   fromWire,
@@ -41,6 +47,18 @@ import {
 } from "./transactionsApi";
 
 type Listener = () => void;
+
+/**
+ * Latched after a terminal SSE error (or a network drop). Drives the
+ * "Connection lost. [Retry]" affordance on the chat page. Cleared on a
+ * successful send, on newChat(), or when retry() resolves.
+ */
+export interface ChatLastError {
+  /** Friendly copy for the banner. Already-rendered, not a code. */
+  message: string;
+  /** The exact user message to re-fire when the user taps Retry. */
+  pendingMessage: string;
+}
 
 interface ChatState {
   messages: ChatMessage[];
@@ -52,6 +70,19 @@ interface ChatState {
   conversationId: string | null;
   /** True while a turn is in flight. UI uses this to disable the input. */
   busy: boolean;
+  /**
+   * Accumulated assistant tokens during the active stream. The chat UI
+   * renders this as the trailing bubble while busy; cleared on done /
+   * error so _renderTurn / the error-recovery path own the final
+   * rendering.
+   */
+  streamingText: string;
+  /**
+   * Latched when a stream terminates with `error` (non-cap) or a
+   * network drop. UI swaps the daily-cap-or-input affordance for a
+   * "Connection lost. [Retry]" banner. Null while the stream is healthy.
+   */
+  lastError: ChatLastError | null;
   /**
    * Latched when /chat/turn returns 429 UCAP_EXCEEDED. UI swaps the input
    * row for <DailyCapCard />. Cleared on newChat() or any subsequent
@@ -92,6 +123,8 @@ let state: ChatState = {
   drawerExpanded: false,
   conversationId: readPersistedConvoId(),
   busy: false,
+  streamingText: "",
+  lastError: null,
   capEngaged: isDailyCapEngaged(),
 };
 
@@ -131,10 +164,9 @@ export const chatStore = {
   },
 
   /**
-   * Send one turn. Appends the user bubble immediately, then either appends
-   * assistant message(s) on success or a single error bubble on failure.
-   * Re-entry is guarded by `busy` — a second send before the first resolves
-   * is a no-op.
+   * Send one turn over SSE. Appends the user bubble immediately, then
+   * drives the SSE stream via `_streamOnce`. Re-entry is guarded by
+   * `busy` — a second send before the first resolves is a no-op.
    */
   async send(raw: string) {
     const text = raw.trim();
@@ -143,47 +175,27 @@ export const chatStore = {
     if (state.capEngaged) return;
 
     appendMessages({ id: newId("user"), role: "user", text });
-    setState({ busy: true });
+    await _streamOnce(text);
+  },
 
-    // Offline check is cheap and avoids a confusing 0-status error path.
-    // The PWA Service Worker doesn't proxy /chat (see vite.config.ts
-    // navigateFallbackDenylist) so the browser will surface the failure
-    // straight to fetch.
-    const online = typeof navigator === "undefined" ? true : navigator.onLine;
-    if (!online) {
-      appendAssistantText(
-        "you're offline right now. i'll send this once you're back on a connection.",
-      );
-      setState({ busy: false });
-      return;
-    }
+  /**
+   * Re-fire the last failed message. Resolves silently if there's no
+   * latched error. Does NOT re-append the user bubble — the original
+   * is still in the thread from `send()`. The conversation_id is
+   * unchanged by design: the backend wrote nothing on the failed
+   * attempt (DESIGN.md §7.5), so the next turn sees the same prior
+   * history and the retry is idempotent.
+   */
+  async retry() {
+    const err = state.lastError;
+    if (!err) return;
+    if (state.busy) return;
+    await _streamOnce(err.pendingMessage);
+  },
 
-    try {
-      const res = await postChatTurn(text, state.conversationId);
-      // A successful turn clears any latched cap state — the bucket either
-      // rolled over (midnight UTC) or the dev toggle was wrong.
-      if (state.capEngaged) setState({ capEngaged: false });
-      if (state.conversationId !== res.conversation_id) {
-        writePersistedConvoId(res.conversation_id);
-      }
-      setState({ conversationId: res.conversation_id });
-      _renderTurn(res);
-    } catch (err) {
-      const e = toChatTurnError(err);
-      if (e.code === "UCAP_EXCEEDED") {
-        setState({ capEngaged: true });
-      } else if (e.code === "PROVIDER_RATE_LIMITED") {
-        appendAssistantText(
-          "our ai is having a moment. try again in a few minutes.",
-        );
-      } else if (e.code === "LOOP_LIMIT") {
-        appendAssistantText("something went wrong on our end. try rephrasing?");
-      } else {
-        appendAssistantText("couldn't reach the chat. check your connection?");
-      }
-    } finally {
-      setState({ busy: false });
-    }
+  /** Manually clear the retry latch (user dismissed the banner). */
+  dismissError() {
+    setState({ lastError: null });
   },
 
   setMessages(messages: ChatMessage[]) {
@@ -193,10 +205,19 @@ export const chatStore = {
   /**
    * Reset the visible thread and the server-side conversation pointer.
    * Next turn starts a fresh conversation (server mints a new UUID).
+   * Also clears `lastError` so a stale "connection lost. retry?" banner
+   * (whose pendingMessage referred to the now-discarded conversation)
+   * doesn't outlive the conversation it belonged to.
    */
   newChat() {
     writePersistedConvoId(null);
-    setState({ messages: [], conversationId: null, capEngaged: false });
+    setState({
+      messages: [],
+      conversationId: null,
+      capEngaged: false,
+      lastError: null,
+      streamingText: "",
+    });
   },
 
   /**
@@ -371,6 +392,118 @@ export function useChatStore() {
     [],
   );
   return snap;
+}
+
+/**
+ * Run one streaming turn. Used by both `send()` (after appending the
+ * user bubble) and `retry()` (which re-uses the existing user bubble).
+ *
+ * Keeps a closure-local `accumulated` string for the streamed text so
+ * `onDone` can pass it to `_renderTurn` as `assistant_text` (Day 10
+ * contract) — the store-level `streamingText` mirrors it for the UI
+ * but is cleared on terminal events.
+ */
+async function _streamOnce(messageText: string): Promise<void> {
+  setState({ busy: true, streamingText: "", lastError: null });
+
+  // Offline check is cheap and avoids a confusing 0-status error path.
+  // The PWA Service Worker doesn't proxy /chat (see vite.config.ts
+  // navigateFallbackDenylist) so the browser will surface the failure
+  // straight to fetch.
+  const online = typeof navigator === "undefined" ? true : navigator.onLine;
+  if (!online) {
+    setState({
+      busy: false,
+      lastError: {
+        message: "you're offline right now. retry when you reconnect.",
+        pendingMessage: messageText,
+      },
+    });
+    return;
+  }
+
+  let accumulated = "";
+
+  await streamTurn({
+    message: messageText,
+    conversationId: state.conversationId,
+    onToken: (delta) => {
+      accumulated += delta;
+      setState({ streamingText: accumulated });
+    },
+    onToolUse: (_payload) => {
+      // No-op for v1. Per-tool pill ("looking up dining transactions…")
+      // is a planned enhancement; today the busy pill says "thinking…"
+      // and the streamingText bubble already feeds the user real-time
+      // tokens.
+    },
+    onDone: (payload) => {
+      if (state.conversationId !== payload.conversation_id) {
+        writePersistedConvoId(payload.conversation_id);
+      }
+      if (state.capEngaged) setState({ capEngaged: false });
+      setState({
+        conversationId: payload.conversation_id,
+        streamingText: "",
+        lastError: null,
+      });
+      _renderTurn({
+        conversation_id: payload.conversation_id,
+        assistant_text: accumulated,
+        tool_calls: payload.tool_calls,
+      });
+    },
+    onError: (err) => {
+      _handleStreamError(err, messageText);
+    },
+  });
+
+  setState({ busy: false });
+}
+
+/**
+ * Map a terminal SSE error into store state. Three categories:
+ *
+ *   - DAILY_CAP_EXCEEDED → latch capEngaged; the InputRow swaps to
+ *     <DailyCapCard />. No retry CTA — the user can't retry until the
+ *     UTC bucket rolls over.
+ *   - DEVICE_DISPLACED / MISSING_DEVICE_ID → chat_stream already
+ *     engaged the global displacement modal via useAppStore. Nothing
+ *     more for chat to do.
+ *   - everything else (AI_PROVIDER_RATE_LIMITED, LOOP_LIMIT,
+ *     STREAM_INCOMPLETE, NETWORK, PERSISTENCE_FAILED, …) → latch
+ *     lastError with a friendly message + the pendingMessage to
+ *     re-fire on retry. The partial streamingText is discarded so the
+ *     thread reads cleanly after retry succeeds.
+ */
+function _handleStreamError(err: StreamError, pendingMessage: string): void {
+  setState({ streamingText: "" });
+  if (err.code === "DAILY_CAP_EXCEEDED") {
+    setState({ capEngaged: true });
+    return;
+  }
+  if (err.code === "DEVICE_DISPLACED" || err.code === "MISSING_DEVICE_ID") {
+    // Global modal owns this; the chat UI just clears the busy flag.
+    return;
+  }
+  const friendly = _friendlyErrorMessage(err);
+  setState({ lastError: { message: friendly, pendingMessage } });
+}
+
+function _friendlyErrorMessage(err: StreamError): string {
+  switch (err.code) {
+    case "AI_PROVIDER_RATE_LIMITED":
+      return "our ai is having a moment. try again in a few minutes.";
+    case "LOOP_LIMIT":
+      return "something went wrong on our end. try rephrasing?";
+    case "PERSISTENCE_FAILED":
+      return "couldn't save that turn — try again.";
+    case "STREAM_INCOMPLETE":
+    case "NETWORK":
+      return "connection lost mid-reply. retry?";
+    default:
+      return "couldn't reach the chat. check your connection?";
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────

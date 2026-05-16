@@ -52,9 +52,11 @@ __all__ = [
     "AssistantTurn",
     "MAX_LOOP_ITERATIONS",
     "ProviderRateLimited",
+    "StreamEvent",
     "ToolCallRecord",
     "UsageCapExceeded",
     "run_turn",
+    "stream_turn",
 ]
 
 # Hard ceiling on loop iterations. A pathological prompt (deliberate or
@@ -280,6 +282,226 @@ def run_turn(
     )
 
 
+@dataclass(frozen=True)
+class StreamEvent:
+    """One unit of progress yielded by `stream_turn`.
+
+    The route handler maps these onto SSE frames; this dataclass is the
+    boundary between loop semantics (which know nothing about SSE) and
+    transport (which does). Four kinds, mirroring the Day 12 prompt:
+
+      * `token`     — `text` carries the delta string. Streamed during
+                      every loop iteration, not just the final one
+                      (iteration-1 narration flows into the same bubble
+                      as the final answer; Day 12 design call).
+      * `tool_use`  — `tool_use` carries `{"name", "input"}` once the
+                      model has fully assembled the call. Drives the
+                      per-tool UI pill. There is no per-tool `tool_result`
+                      event by design — results land in `done.tool_calls`.
+      * `done`      — `done` carries `{"conversation_id", "tool_calls"}`,
+                      byte-for-byte the same shape Day 8's non-streaming
+                      response returns so Day 10's ParseCard /
+                      CandidateList consume it unchanged.
+      * `error`     — `error` carries `{"code", "message"}`. The stream
+                      terminates after this; the response HTTP status is
+                      already 200 by the time errors can fire, so the
+                      route can't `raise HTTPException` — it must yield
+                      this frame and let the client dispatch on `code`.
+
+    Persistence note: callers consume the iterator to exhaustion. On
+    clean `done`, the generator's `chat_messages` + `chat_turn_trace`
+    persistence happens via a separate caller-provided closure
+    (see `app/routes/chat.py`). On error, the generator yields `error`
+    and stops — no persistence side-effect, which is what gives retry
+    its idempotency property (DESIGN.md §7.5).
+    """
+
+    kind: str  # "token" | "tool_use" | "done" | "error"
+    text: str = ""
+    tool_use: dict[str, Any] | None = None
+    done: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+
+
+def stream_turn(
+    user: AuthedUser,
+    conversation_history: list[dict[str, Any]],
+    user_message: str,
+) -> Any:
+    """Generator variant of `run_turn` for SSE — yields `StreamEvent`s.
+
+    Shares the loop shape with `run_turn` (same middleware, same retry,
+    same ai_call_log invariant — one row per `messages.stream()` call)
+    but uses `client.messages.stream()` instead of `client.messages.create()`
+    so text deltas can be surfaced as tokens during each iteration.
+
+    Yields:
+      * `StreamEvent(kind="token", text=...)` per text delta from any
+        iteration (multi-iter narration is intentional — see StreamEvent
+        docstring).
+      * `StreamEvent(kind="tool_use", tool_use={"name", "input"})` when a
+        tool_use block is fully assembled.
+      * Terminates with exactly one of:
+        - `StreamEvent(kind="done", done={"tool_calls", "assistant_text",
+          "content_blocks", "turn_messages"})` on success. The route
+          packages a subset of these into the SSE `done` frame; the rest
+          power persistence.
+        - `StreamEvent(kind="error", error={"code", "message"})` on the
+          three known-failure classes (`UCAP_EXCEEDED`,
+          `PROVIDER_RATE_LIMITED`, `LOOP_LIMIT`). Unexpected exceptions
+          are NOT caught here — they propagate so the surrounding
+          StreamingResponse closes the connection and uvicorn logs them.
+
+    Does NOT persist on its own. Caller is responsible for invoking a
+    persistence callback after consuming `done` (and only `done` — on
+    `error` the caller writes nothing, which is the property that makes
+    retry idempotent per DESIGN.md §7.5).
+    """
+    # Mirror `run_turn`'s entry checks. The cap check raises
+    # `UsageCapExceeded`; here we catch it and yield as an error frame
+    # because the HTTP response status (200) is already locked once the
+    # stream has opened in the route handler.
+    try:
+        assert_within_usage_cap(user)
+    except UsageCapExceeded as exc:
+        yield StreamEvent(kind="error", error={"code": exc.code, "message": exc.message})
+        return
+
+    client = _anthropic_client()
+    model = _model_name()
+    schemas = tool_schemas()
+    system = render_system_prompt(user_jwt=user.jwt)
+    prompt_hash = system_prompt_hash(system, schemas)
+
+    messages: list[dict[str, Any]] = list(conversation_history)
+    turn_start = len(messages)
+    messages.append({"role": "user", "content": user_message})
+
+    tool_calls: list[ToolCallRecord] = []
+    final_blocks: list[dict[str, Any]] = []
+    # Accumulate text from EVERY iteration, not just the final one. Day 12
+    # streams iter-1 narration ("let me look that up…") into the same
+    # assistant bubble as iter-2's final answer; persistence must match
+    # what the user saw live so a refresh / /chat/messages hydration
+    # doesn't silently drop the pre-tool prose. (Codex review P2.)
+    streamed_text_parts: list[str] = []
+
+    for _ in range(MAX_LOOP_ITERATIONS):
+        stream_kwargs: dict[str, Any] = dict(
+            model=model,
+            max_tokens=4096,
+            system=system,
+            tools=schemas,
+            messages=messages,
+        )
+
+        try:
+            # The inner helper handles: opening the stream, yielding text
+            # deltas as token events, yielding tool_use blocks once
+            # assembled, writing the per-iteration ai_call_log row, and
+            # returning the final accumulated message. One retry on
+            # provider 429 lives inside it.
+            iter_text_blocks: list[str] = []
+            iter_tool_uses: list[dict[str, Any]] = []
+            final_message = yield from _stream_and_log(
+                client=client,
+                user=user,
+                model=model,
+                prompt_hash=prompt_hash,
+                stream_kwargs=stream_kwargs,
+                text_collector=iter_text_blocks,
+                tool_use_collector=iter_tool_uses,
+            )
+        except ProviderRateLimited as exc:
+            yield StreamEvent(kind="error", error={"code": exc.code, "message": exc.message})
+            return
+
+        assistant_blocks = [_block_to_dict(b) for b in final_message.content]
+        final_blocks = assistant_blocks
+        for block in assistant_blocks:
+            if block.get("type") == "text":
+                text = block.get("text", "")
+                if text:
+                    streamed_text_parts.append(text)
+
+        messages.append({"role": "assistant", "content": assistant_blocks})
+
+        if final_message.stop_reason != "tool_use":
+            streamed_text = "".join(streamed_text_parts)
+            # Persist a single text block carrying the full streamed prose
+            # so chat_messages hydration matches what streamed live. The
+            # chat_turn_trace `turn_messages` slice still preserves the
+            # iteration-by-iteration block structure (text + tool_use +
+            # tool_result) so next-turn replay to the model is unchanged.
+            # Pathological fallback: if the model emitted no text at all,
+            # fall back to the final iteration's blocks so we still record
+            # something (matches Day 8 behavior).
+            persisted_content_blocks = (
+                [{"type": "text", "text": streamed_text}]
+                if streamed_text
+                else final_blocks
+            )
+            yield StreamEvent(
+                kind="done",
+                done={
+                    "tool_calls": [
+                        {"name": r.name, "input": dict(r.input), "result": r.result}
+                        for r in tool_calls
+                    ],
+                    "assistant_text": streamed_text,
+                    "content_blocks": persisted_content_blocks,
+                    "turn_messages": messages[turn_start:],
+                },
+            )
+            return
+
+        # Execute tool_use blocks. Results land in tool_calls (eventually
+        # in `done.tool_calls`) and as tool_result messages for the next
+        # iteration. Tool execution itself is silent over SSE — Day 12
+        # explicitly does not emit a `tool_result` event.
+        tool_results: list[dict[str, Any]] = []
+        for block in assistant_blocks:
+            if block.get("type") != "tool_use":
+                continue
+            name = block.get("name", "")
+            tool_use_id = block.get("id", "")
+            try:
+                tool_input = _coerce_input(block.get("input", {}))
+                result = execute_tool(name, tool_input, user)
+                is_error = False
+            except KeyError:
+                tool_input = block.get("input", {})
+                result = {"error": "unknown_tool", "name": name}
+                is_error = True
+            except Exception as exc:
+                tool_input = block.get("input", {})
+                result = {"error": "tool_failed", "detail": str(exc)}
+                is_error = True
+
+            tool_calls.append(
+                ToolCallRecord(name=name, input=dict(tool_input), result=result)
+            )
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": json.dumps(result),
+                **({"is_error": True} if is_error else {}),
+            })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    # Loop did not converge — surface as an SSE error frame, not an
+    # exception, since the response is already mid-stream by the time
+    # this fires.
+    yield StreamEvent(
+        kind="error",
+        error={
+            "code": "LOOP_LIMIT",
+            "message": f"agent loop did not converge within {MAX_LOOP_ITERATIONS} iterations",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
@@ -377,3 +599,97 @@ def _call_and_log(
             success=success,
             error_code=error_code,
         )
+
+def _stream_and_log(
+    *,
+    client: Anthropic,
+    user: AuthedUser,
+    model: str,
+    prompt_hash: str,
+    stream_kwargs: dict[str, Any],
+    text_collector: list[str],
+    tool_use_collector: list[dict[str, Any]],
+) -> Any:
+    """One `messages.stream()` attempt with retry + one ai_call_log row.
+
+    Implemented as a generator so the outer `stream_turn` loop can
+    `yield from` it and surface `token` / `tool_use` events to SSE in
+    real time. The function's *return value* (via StopIteration) is the
+    final accumulated `Message` — same shape `messages.create()` returns,
+    so the rest of the loop body is unchanged.
+
+    Retry: on `anthropic.RateLimitError` from the FIRST attempt, sleep
+    2s and reopen the stream once. Each attempt writes its own
+    ai_call_log row (Day 8 invariant — one row per Anthropic call,
+    preserved on the retry path).
+
+    The text_collector / tool_use_collector lists are not strictly
+    necessary for behavior (we re-derive blocks from the final message
+    below) but make this helper testable in isolation: a unit test can
+    pass empty lists and assert what was streamed without re-implementing
+    SSE consumption.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        start = time.perf_counter()
+        success = False
+        error_code: str | None = None
+        input_tokens = 0
+        output_tokens = 0
+        final_message: Any = None
+        try:
+            with client.messages.stream(**stream_kwargs) as stream:
+                for event in stream:
+                    etype = getattr(event, "type", None)
+                    if etype == "text":
+                        delta = getattr(event, "text", "")
+                        if delta:
+                            text_collector.append(delta)
+                            yield StreamEvent(kind="token", text=delta)
+                    elif etype == "content_block_stop":
+                        block = getattr(event, "content_block", None)
+                        if block is not None and getattr(block, "type", None) == "tool_use":
+                            tool_use_payload = {
+                                "name": getattr(block, "name", ""),
+                                "input": getattr(block, "input", {}) or {},
+                            }
+                            tool_use_collector.append(tool_use_payload)
+                            yield StreamEvent(kind="tool_use", tool_use=tool_use_payload)
+                final_message = stream.get_final_message()
+            usage = getattr(final_message, "usage", None)
+            if usage is not None:
+                input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+                output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+            success = True
+            return final_message
+        except anthropic.RateLimitError as exc:
+            error_code = type(exc).__name__
+            # Mirror run_turn's retry: one extra attempt after 2s, then
+            # surface as ProviderRateLimited which the outer loop turns
+            # into an SSE error frame.
+            if attempt == 1:
+                pass  # fall through to retry below
+            else:
+                raise ProviderRateLimited() from exc
+        except Exception as exc:
+            error_code = type(exc).__name__
+            raise
+        finally:
+            log_ai_call(
+                user.jwt,
+                user_id=user.user_id,
+                provider="anthropic",
+                model=model,
+                task_type="chat_turn",
+                prompt_version=PROMPT_VERSION,
+                prompt_hash=prompt_hash,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_ms=int((time.perf_counter() - start) * 1000),
+                success=success,
+                error_code=error_code,
+            )
+        # If we got here, we caught a RateLimitError on attempt 1 and
+        # are about to retry. Sleep then continue the while loop.
+        time.sleep(2)

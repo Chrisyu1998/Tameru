@@ -18,7 +18,14 @@ import { cn } from "@/lib/utils";
  * pane stays interactive. Closes only on X / Esc / ⌘\.
  */
 export function ChatDrawer() {
-  const { drawerOpen, drawerExpanded, messages } = useChatStore();
+  const {
+    drawerOpen,
+    drawerExpanded,
+    messages,
+    busy,
+    streamingText,
+    lastError,
+  } = useChatStore();
   const { transactions, cards } = useLedger();
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
 
@@ -112,6 +119,37 @@ export function ChatDrawer() {
               onSelectCandidate={(tx) => setEditingTx(tx)}
             />
           ))}
+
+          {/* Live SSE stream (Day 12) — mirrors the mobile /chat surface. */}
+          {busy && streamingText && (
+            <MessageBubble role="assistant" bubble={false}>
+              {streamingText}
+            </MessageBubble>
+          )}
+
+          {/* Retry affordance when the stream dropped. The desktop
+              composer floats outside this drawer, so we surface the
+              retry inline here instead of next to the input. */}
+          {lastError && !busy && (
+            <div className="mx-auto mt-2 flex w-fit items-center gap-2 rounded-full border border-hairline bg-sunken px-3 py-1.5 text-[0.78rem] text-ink-secondary">
+              <span>{lastError.message}</span>
+              <button
+                type="button"
+                onClick={() => void chatStore.retry()}
+                className="rounded-full bg-moss px-2.5 py-0.5 text-[0.7rem] text-surface hover:bg-moss-deep"
+              >
+                retry
+              </button>
+              <button
+                type="button"
+                onClick={() => chatStore.dismissError()}
+                aria-label="dismiss"
+                className="text-ink-tertiary hover:text-ink"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

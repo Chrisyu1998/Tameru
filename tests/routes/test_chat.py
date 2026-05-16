@@ -1,24 +1,31 @@
-"""Day 8 — `app/routes/chat.py` contract.
+"""Day 12 — `app/routes/chat.py` SSE contract.
 
-Covers POST /chat/turn at the HTTP layer:
+Covers POST /chat/turn at the HTTP layer after the Day 12 streaming
+upgrade:
 
-- Body validation (empty / missing message → 422).
+- Body validation (empty / missing message → 422 BEFORE the stream
+  opens — Pydantic runs first, response stays JSON).
 - Auth-gate behavior (no JWT, missing X-Device-Id → 401 with structured
-  payloads). The gate itself (`get_current_user_with_device`) has its
-  own dedicated tests in tests/test_auth.py exercised via the
-  transactions routes; this file's coverage is one assertion per branch
-  to confirm the chat route is actually wired through it.
-- Response shape: `{conversation_id, assistant_text, tool_calls: [...]}`
-  with `tool_calls` carrying the per-iteration trace Day 10's UI
-  consumes.
-- Conversation lifecycle: a turn without `conversation_id` mints one;
-  a follow-up turn with that id reuses it AND loads prior history.
-- Persistence: both user and assistant rows land under one
-  conversation_id with role-correct content_blocks.
-- Loop-cap failure mode: `LOOP_LIMIT` 500 + zero rows persisted for
-  that turn.
+  payloads, also pre-stream).
+- SSE happy-path: response is `text/event-stream`, frames arrive in the
+  expected order (`token`* → `tool_use`? → `token`* → `done`), and the
+  `done` frame's `tool_calls` array matches Day 8's exact `{name, input,
+  result}` shape (Day 10 compat contract).
+- Persistence semantics: on `done`, BOTH `chat_turn_trace` and
+  `chat_messages` rows land exactly once. On the loop-cap error path,
+  NEITHER table sees a row — that's what makes a client retry idempotent
+  (DESIGN.md §7.5).
+- Loop-cap surfaces as an SSE `error` frame with `code: "LOOP_LIMIT"`,
+  HTTP status 200 (not 500 — the response is already open by then).
+- Conversation continuity: providing `conversation_id` reuses it AND
+  replays prior history (tool_use + tool_result blocks intact) on the
+  next turn.
 
-Anthropic is mocked end-to-end. Tool execution + persistence + the
+Anthropic is mocked via `_ScriptedStreamClient` — same fixtures as the
+non-streaming Day 8 mock but the inner `messages.stream(...)` returns
+an iterable context manager that yields synthetic stream events
+(`text`, `content_block_stop`) before `get_final_message()` returns the
+scripted `_MockMessage`. Tool execution + persistence + the
 ai_call_log writer all hit the real local Supabase stack so RLS
 behavior under the route is exercised for real (CLAUDE.md invariants
 1, 14).
@@ -27,6 +34,7 @@ behavior under the route is exercised for real (CLAUDE.md invariants
 from __future__ import annotations
 
 import copy
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -41,8 +49,9 @@ from app.main import app
 
 
 # ---------------------------------------------------------------------------
-# Tiny stand-ins for anthropic.types.Message + Block (mirrors the helpers in
-# tests/test_agent_loop.py — kept local so this file is self-contained).
+# Tiny stand-ins for anthropic.types.Message + Block.
+# Kept dict-subclass-with-model_dump so the loop's _block_to_dict helper
+# round-trips them the way it round-trips real SDK pydantic blocks.
 # ---------------------------------------------------------------------------
 
 
@@ -73,8 +82,79 @@ class _MockMessage:
             self.usage = _Usage()
 
 
-class _ScriptedClient:
-    """Represent ScriptedClient."""
+# ---------------------------------------------------------------------------
+# Scripted streaming Anthropic client.
+#
+# `messages.stream(**kwargs)` returns a `_ScriptedStream` — a context
+# manager that:
+#   * yields `_TextEvent` for each text block (one chunk per block; the
+#     loop's token handler doesn't care about delta granularity).
+#   * yields `_ContentBlockStopEvent` for each tool_use block, carrying
+#     a `.content_block` with `.type == "tool_use"` + `.name` + `.input`.
+#   * exposes `get_final_message()` returning the original `_MockMessage`,
+#     which gives the loop a real `.content`, `.stop_reason`, `.usage`.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _TextEvent:
+    """Represent TextEvent."""
+    text: str
+    type: str = "text"
+
+
+@dataclass
+class _ContentBlockStopEvent:
+    """Represent ContentBlockStopEvent."""
+    content_block: Any
+    type: str = "content_block_stop"
+
+
+class _ToolUseBlock:
+    """Represent ToolUseBlock — minimal duck-type the loop reads via getattr."""
+    def __init__(self, name: str, tool_input: dict[str, Any]):
+        """Support the instance."""
+        self.type = "tool_use"
+        self.name = name
+        self.input = tool_input
+
+
+class _ScriptedStream:
+    """Represent ScriptedStream."""
+    def __init__(self, message: _MockMessage):
+        """Support the instance."""
+        self._message = message
+
+    def __enter__(self) -> "_ScriptedStream":
+        """Provide enter."""
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        """Support exit."""
+        return None
+
+    def __iter__(self):
+        """Yield streaming events that mirror the SDK's `messages.stream()`
+        event sequence for our scripted final message."""
+        for block in self._message.content:
+            btype = block.get("type")
+            if btype == "text":
+                yield _TextEvent(text=block.get("text", ""))
+            elif btype == "tool_use":
+                yield _ContentBlockStopEvent(
+                    content_block=_ToolUseBlock(
+                        name=block.get("name", ""),
+                        tool_input=block.get("input", {}) or {},
+                    )
+                )
+
+    def get_final_message(self) -> _MockMessage:
+        """Support get final message."""
+        return self._message
+
+
+class _ScriptedStreamClient:
+    """Represent ScriptedStreamClient."""
     def __init__(self, responses: list[_MockMessage]):
         """Support the instance."""
         self._responses = list(responses)
@@ -86,20 +166,18 @@ class _ScriptedClient:
 
         class _Messages:
             """Represent Messages."""
-            def create(self, **kwargs: Any) -> _MockMessage:
-                """Provide create."""
+            def stream(self, **kwargs: Any) -> _ScriptedStream:
+                """Provide stream — context manager mirroring the real SDK."""
                 outer.call_count += 1
                 # Deep-copy: the loop mutates the messages list it passed
-                # (appending the assistant response and tool_results) AFTER
-                # the call returns. Without snapshotting, recorded_calls
-                # would always reflect the post-mutation state, hiding
-                # what was actually sent on this iteration.
+                # after the call returns. Without snapshotting, recorded_calls
+                # would reflect the post-mutation state.
                 outer.recorded_calls.append(copy.deepcopy(kwargs))
                 if not outer._responses:
                     raise AssertionError(
                         "agent loop made more model calls than the script provided"
                     )
-                return outer._responses.pop(0)
+                return _ScriptedStream(outer._responses.pop(0))
 
         self.messages = _Messages()
 
@@ -116,7 +194,7 @@ def client() -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# Body validation
+# Body validation — runs BEFORE the stream opens, so still HTTP JSON 422.
 # ---------------------------------------------------------------------------
 
 
@@ -151,9 +229,7 @@ def test_extra_fields_are_rejected(client, user_a, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Auth gate — chat route is wired through get_current_user_with_device.
-# Keep these to one assertion per branch; the full auth matrix lives in
-# tests/test_auth.py and tests/routes/test_auth.py.
+# Auth gate — runs BEFORE the stream opens.
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +257,7 @@ def test_missing_device_id_returns_structured_401(client, user_a, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Response shape + persistence — happy path, no tools.
+# SSE happy path — single-iteration turn (no tools).
 # ---------------------------------------------------------------------------
 
 
@@ -194,13 +270,26 @@ def test_turn_mints_conversation_id_and_persists_both_tables(client, user_a, mon
 
     resp = client.post("/chat/turn", headers=_auth(user_a), json={"message": "hi"})
     assert resp.status_code == 200, resp.text
-    body = resp.json()
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    # Day 12 buffering headers.
+    assert "no-cache" in resp.headers["cache-control"]
+    assert resp.headers["x-accel-buffering"] == "no"
 
-    assert body["assistant_text"] == "Sure thing."
-    assert body["tool_calls"] == []
-    conversation_id = body["conversation_id"]
-    # Validates as a UUID — the route mints one when the body omits it.
-    uuid.UUID(conversation_id)
+    frames = _parse_sse(resp.content)
+    events = [f[0] for f in frames]
+    assert events[0] == "token", f"expected first frame to be a token, got {events}"
+    assert events[-1] == "done", f"expected last frame to be `done`, got {events}"
+    assert "error" not in events
+
+    # Token frames concatenate to the assistant text.
+    tokens = "".join(f[1] for f in frames if f[0] == "token")
+    assert tokens == "Sure thing."
+
+    # done frame carries the Day 8 shape.
+    done_payload = json.loads(frames[-1][1])
+    conversation_id = done_payload["conversation_id"]
+    uuid.UUID(conversation_id)  # validates
+    assert done_payload["tool_calls"] == []
 
     # chat_messages: human-visible log, alternating user/assistant.
     rows = _chat_rows(user_a, conversation_id)
@@ -218,7 +307,8 @@ def test_turn_mints_conversation_id_and_persists_both_tables(client, user_a, mon
 
 
 # ---------------------------------------------------------------------------
-# Two-hop turn surfaces tool_calls in the response (Day 10 contract).
+# Two-hop turn surfaces tool_calls in the done frame AND a tool_use frame
+# fires mid-stream (Day 12 + Day 10 contract).
 # ---------------------------------------------------------------------------
 
 
@@ -247,11 +337,24 @@ def test_two_hop_turn_returns_tool_calls(client, user_a, card_a, monkeypatch):
         json={"message": "how much on dining?"},
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
 
-    assert body["assistant_text"] == "You spent $42.50 on Dining."
-    assert len(body["tool_calls"]) == 1
-    call = body["tool_calls"][0]
+    frames = _parse_sse(resp.content)
+    # One tool_use frame fires when the model assembles the call.
+    tool_use_frames = [f for f in frames if f[0] == "tool_use"]
+    assert len(tool_use_frames) == 1
+    tool_use_payload = json.loads(tool_use_frames[0][1])
+    assert tool_use_payload["name"] == "calculate_total"
+    assert tool_use_payload["input"] == {"category": "Dining"}
+
+    # Final iteration's text streams as tokens.
+    tokens = "".join(f[1] for f in frames if f[0] == "token")
+    assert tokens == "You spent $42.50 on Dining."
+
+    # done.tool_calls is the Day 8 shape — name/input/result.
+    done_payload = json.loads(frames[-1][1])
+    assert frames[-1][0] == "done"
+    assert len(done_payload["tool_calls"]) == 1
+    call = done_payload["tool_calls"][0]
     assert call["name"] == "calculate_total"
     assert call["input"] == {"category": "Dining"}
     assert "total" in call["result"] and "count" in call["result"]
@@ -272,7 +375,7 @@ def test_conversation_id_reuse_loads_prior_history(client, user_a, monkeypatch):
     )
     first = client.post("/chat/turn", headers=_auth(user_a), json={"message": "remember X"})
     assert first.status_code == 200
-    conversation_id = first.json()["conversation_id"]
+    conversation_id = json.loads(_parse_sse(first.content)[-1][1])["conversation_id"]
 
     # Turn 2 — reuse conversation_id; assert the model sees prior turns.
     scripted = _install_scripted_anthropic(
@@ -285,7 +388,9 @@ def test_conversation_id_reuse_loads_prior_history(client, user_a, monkeypatch):
         json={"conversation_id": conversation_id, "message": "what was X?"},
     )
     assert second.status_code == 200
-    assert second.json()["conversation_id"] == conversation_id
+    second_frames = _parse_sse(second.content)
+    second_done = json.loads(second_frames[-1][1])
+    assert second_done["conversation_id"] == conversation_id
 
     # Single recorded call: turn-1 user + turn-1 assistant final + turn-2 user.
     sent_messages = scripted.recorded_calls[0]["messages"]
@@ -304,9 +409,8 @@ def test_conversation_id_reuse_loads_prior_history(client, user_a, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Two-table semantic — multi-hop turn replays tool_use / tool_result on the
-# next turn (the bug Codex flagged). chat_messages stays clean across the
-# multi-hop turn; chat_turn_trace carries the full block sequence forward.
+# Multi-hop turn replays tool_use / tool_result on the next turn.
+# chat_messages stays clean; chat_turn_trace carries the full block sequence.
 # ---------------------------------------------------------------------------
 
 
@@ -339,7 +443,7 @@ def test_multi_hop_turn_replays_tool_context_on_followup(
         json={"message": "how much on dining?"},
     )
     assert first.status_code == 200
-    conversation_id = first.json()["conversation_id"]
+    conversation_id = json.loads(_parse_sse(first.content)[-1][1])["conversation_id"]
 
     # chat_messages stays clean: still exactly 2 rows for this turn (user
     # + assistant-final), no synthetic tool_result rows polluting the
@@ -371,10 +475,7 @@ def test_multi_hop_turn_replays_tool_context_on_followup(
     )
     assert types_per_message[3][0] == "assistant"
 
-    # Turn 2: a follow-up that depends on prior tool context. The
-    # critical assertion is what reaches Claude on the second call —
-    # the prior tool_use + tool_result blocks must be present, not just
-    # the prose.
+    # Turn 2: a follow-up that depends on prior tool context.
     scripted = _install_scripted_anthropic(
         monkeypatch,
         [_MockMessage(content=[_text("$0 on coffee.")], stop_reason="end_turn")],
@@ -387,15 +488,11 @@ def test_multi_hop_turn_replays_tool_context_on_followup(
     assert second.status_code == 200
 
     sent = scripted.recorded_calls[0]["messages"]
-    # Turn-1 contributed 4 messages (user, assistant-tool_use,
-    # user-tool_result, assistant-final); turn-2 adds the new user
-    # message. Five total.
+    # Turn-1 contributed 4 messages; turn-2 adds the new user message.
     assert len(sent) == 5, (
         f"expected 5 messages (4 from turn-1 trace + 1 new user); got "
         f"{len(sent)}: {[m['role'] for m in sent]}"
     )
-    # Verify the tool_use / tool_result blocks specifically made it
-    # through replay — not just the count.
     second_msg_blocks = sent[1]["content"]
     third_msg_blocks = sent[2]["content"]
     assert any(b.get("type") == "tool_use" for b in second_msg_blocks), (
@@ -408,14 +505,16 @@ def test_multi_hop_turn_replays_tool_context_on_followup(
 
 
 # ---------------------------------------------------------------------------
-# Loop-cap failure mode — 500 with structured code AND no rows persisted.
+# Loop-cap surfaces as an SSE error frame (HTTP 200), and persists nothing.
+# Day 12 swap: was HTTP 500 in Day 8; now an in-stream error frame because
+# the response status is already 200 by the time the cap fires.
 # ---------------------------------------------------------------------------
 
 
-def test_loop_cap_returns_500_and_persists_nothing(client, user_a, monkeypatch):
-    # Script MAX_LOOP_ITERATIONS + 1 so the assertion in _ScriptedClient
+def test_loop_cap_returns_error_frame_and_persists_nothing(client, user_a, monkeypatch):
+    # Script MAX_LOOP_ITERATIONS + 1 so the assertion in _ScriptedStreamClient
     # never fires — we want the loop's own cap to be the failure mode.
-    """Verify that loop cap returns 500 and persists nothing."""
+    """Verify that loop cap returns an SSE error frame with no row written."""
     _install_scripted_anthropic(
         monkeypatch,
         [
@@ -432,11 +531,19 @@ def test_loop_cap_returns_500_and_persists_nothing(client, user_a, monkeypatch):
         headers=_auth(user_a),
         json={"message": "loop forever please"},
     )
-    assert resp.status_code == 500
-    assert resp.json()["detail"]["code"] == "LOOP_LIMIT"
+    # The stream opened, so the HTTP status is 200. The failure shows up
+    # as an in-stream error frame with the structured code.
+    assert resp.status_code == 200
+    frames = _parse_sse(resp.content)
+    error_frames = [f for f in frames if f[0] == "error"]
+    assert len(error_frames) == 1, frames
+    payload = json.loads(error_frames[0][1])
+    assert payload["code"] == "LOOP_LIMIT"
+    # No `done` frame on the failure path.
+    assert all(f[0] != "done" for f in frames)
 
     # Critical: nothing persisted in either table for this attempt —
-    # the prompt's "Done when" rule for the 8-hop cap.
+    # the Day 12 retry-idempotency contract.
     sb = supabase_for_user(user_a.jwt)
     matching = (
         sb.table("chat_messages")
@@ -458,8 +565,6 @@ def test_loop_cap_returns_500_and_persists_nothing(client, user_a, monkeypatch):
         "LOOP_LIMIT path persisted a chat_messages row; it should drop the turn"
     )
 
-    # And no trace row either — the route writes trace first then
-    # chat_messages, but the loop raises BEFORE either write happens.
     traces = sb.table("chat_turn_trace").select("messages").execute().data or []
     contaminated = [
         t
@@ -492,6 +597,32 @@ def _tool_use(name: str, tool_input: dict[str, Any], use_id: str | None = None) 
         input=tool_input,
     )
 
+def _parse_sse(body: bytes) -> list[tuple[str, str]]:
+    """Parse an SSE response body into `[(event, data), ...]` tuples.
+
+    Multi-line `data:` fields are re-joined with `\\n`. Frames without an
+    explicit `event:` are tagged as `"message"` (the SSE default), though
+    the route always sets one.
+    """
+    frames: list[tuple[str, str]] = []
+    current_event: str | None = None
+    current_data: list[str] = []
+    for raw_line in body.decode("utf-8").split("\n"):
+        line = raw_line.rstrip("\r")
+        if line == "":
+            if current_event is not None or current_data:
+                frames.append((current_event or "message", "\n".join(current_data)))
+            current_event = None
+            current_data = []
+        elif line.startswith("event:"):
+            current_event = line[len("event:"):].lstrip(" ")
+        elif line.startswith("data:"):
+            current_data.append(line[len("data:"):].lstrip(" "))
+    if current_event is not None or current_data:
+        frames.append((current_event or "message", "\n".join(current_data)))
+    return frames
+
+
 @pytest.fixture(autouse=True)
 def _set_anthropic_api_key(monkeypatch):
     """Loop's lazy client init checks ANTHROPIC_API_KEY even though we
@@ -500,9 +631,9 @@ def _set_anthropic_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-only-not-real")
     monkeypatch.setattr(loop_module, "_client", None)
 
-def _install_scripted_anthropic(monkeypatch, responses: list[_MockMessage]) -> _ScriptedClient:
-    """Support install scripted anthropic."""
-    scripted = _ScriptedClient(responses)
+def _install_scripted_anthropic(monkeypatch, responses: list[_MockMessage]) -> _ScriptedStreamClient:
+    """Support install scripted anthropic — installs the streaming mock."""
+    scripted = _ScriptedStreamClient(responses)
     monkeypatch.setattr(loop_module, "_anthropic_client", lambda: scripted)
     return scripted
 

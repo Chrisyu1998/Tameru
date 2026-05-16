@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronLeft, Mic, Send, SquarePen, WifiOff } from "lucide-react";
+import { ChevronLeft, Mic, RefreshCw, Send, SquarePen, WifiOff, X } from "lucide-react";
 import { CandidateCards } from "@/components/chat/CandidateCards";
 import { Chart } from "@/components/chat/Chart";
 import { DailyCapCard } from "@/components/chat/DailyCapCard";
@@ -25,7 +25,7 @@ const SILENCE_WINDOW_MS = 1500;
 export default function ChatPage() {
   const navigate = useNavigate();
   const { transactions, cards } = useLedger();
-  const { messages, busy, capEngaged } = useChatStore();
+  const { messages, busy, capEngaged, streamingText, lastError } = useChatStore();
 
   const [input, setInput] = useState("");
   const [voiceMode, setVoiceMode] = useState(false);
@@ -235,10 +235,24 @@ export default function ChatPage() {
               onSelectCandidate={handleSelectCandidate}
             />
           ))}
+
+          {/* Live SSE stream — Day 12. Tokens flow into this bubble until
+              `done` (at which point _renderTurn replaces it with the
+              final ParseCard / CandidateList / text bubble) or `error`
+              (at which point streamingText clears and the retry banner
+              below the messages appears). */}
+          {busy && streamingText && (
+            <MessageBubble role="assistant" bubble={false}>
+              {streamingText}
+            </MessageBubble>
+          )}
         </div>
       </div>
 
-      {/* Bottom: voice overlay, daily cap, or input row */}
+      {/* Bottom: voice overlay, daily cap, or input row.
+          The retry banner overlays the InputRow rather than replacing
+          it so the user can either tap Retry on the failed turn OR
+          start a fresh message. */}
       {capEngaged ? (
         <DailyCapCard />
       ) : voiceMode ? (
@@ -250,14 +264,24 @@ export default function ChatPage() {
           onStop={stopVoice}
         />
       ) : (
-        <InputRow
-          value={input}
-          onChange={setInput}
-          onSend={() => handleSend(input)}
-          onMic={startVoice}
-          offline={!online}
-          busy={busy}
-        />
+        <>
+          {lastError && (
+            <RetryBanner
+              message={lastError.message}
+              busy={busy}
+              onRetry={() => void chatStore.retry()}
+              onDismiss={() => chatStore.dismissError()}
+            />
+          )}
+          <InputRow
+            value={input}
+            onChange={setInput}
+            onSend={() => handleSend(input)}
+            onMic={startVoice}
+            offline={!online}
+            busy={busy}
+          />
+        </>
       )}
 
       {/* Edit sheet (used by both candidate selection AND "let me fix it") */}
@@ -407,6 +431,47 @@ function EmptyChat({
       >
         dev · simulate ai outage banner
       </button>
+    </div>
+  );
+}
+
+/* ─── Retry banner — Day 12 SSE failure surface ─────────────── */
+
+function RetryBanner({
+  message,
+  busy,
+  onRetry,
+  onDismiss,
+}: {
+  message: string;
+  busy: boolean;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="border-t border-hairline bg-canvas/95 px-3 pt-3 backdrop-blur">
+      <div className="mx-auto flex max-w-md items-center justify-between gap-2 rounded-lg border border-hairline bg-sunken px-3 py-2 text-[0.8rem] text-ink-secondary">
+        <span className="flex-1">{message}</span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={busy}
+            className="flex items-center gap-1 rounded-full bg-moss px-3 py-1 text-[0.75rem] text-surface hover:bg-moss-deep disabled:opacity-50"
+          >
+            <RefreshCw className="h-3 w-3" />
+            retry
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label="dismiss"
+            className="flex h-6 w-6 items-center justify-center rounded-full text-ink-tertiary hover:bg-elevated hover:text-ink"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
