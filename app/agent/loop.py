@@ -524,16 +524,54 @@ def _model_name() -> str:
     """Support model name."""
     return os.environ.get("ANTHROPIC_MODEL") or _DEFAULT_CHAT_MODEL
 
+# Anthropic's Messages API rejects unknown fields on inbound content
+# blocks with `Extra inputs are not permitted` (strict-mode parsing).
+# `messages.stream().get_final_message()` returns blocks whose
+# `model_dump()` includes streaming-only fields like `parsed_output` on
+# text blocks — fine to keep locally, fatal when replayed back on the
+# next turn. Whitelist the API-valid fields per type so persisted blocks
+# round-trip cleanly. Forward-compat: unknown block types pass through
+# unchanged so a new SDK type doesn't break the loop silently.
+_API_BLOCK_FIELDS: dict[str, frozenset[str]] = {
+    "text": frozenset({"type", "text", "citations", "cache_control"}),
+    "tool_use": frozenset({"type", "id", "name", "input", "cache_control"}),
+    "tool_result": frozenset({"type", "tool_use_id", "content", "is_error", "cache_control"}),
+    "thinking": frozenset({"type", "thinking", "signature"}),
+    "redacted_thinking": frozenset({"type", "data"}),
+}
+
+
 def _block_to_dict(block: Any) -> dict[str, Any]:
     """Anthropic SDK content blocks are pydantic models; chat_messages
     persistence and tool_result construction both want plain dicts. Use
-    the SDK's serializer where possible, fall back to a manual shape so
-    SDK version drift doesn't bite."""
+    the SDK's serializer where possible, then strip any non-API fields
+    via `_clean_block_dict` so the result is safe to replay to Anthropic
+    on the next turn."""
     dump = getattr(block, "model_dump", None)
     if callable(dump):
-        return dump()
-    # Best-effort fallback for mocks/stubs in tests.
-    return dict(block) if hasattr(block, "keys") else {"type": "unknown"}
+        raw = dump()
+    else:
+        # Best-effort fallback for mocks/stubs in tests.
+        raw = dict(block) if hasattr(block, "keys") else {"type": "unknown"}
+    return _clean_block_dict(raw)
+
+
+def _clean_block_dict(block: dict[str, Any]) -> dict[str, Any]:
+    """Strip fields Anthropic's Messages API doesn't permit on inbound.
+
+    Used at both ends of the trace pipe — `_block_to_dict` calls this
+    when serializing fresh SDK blocks, and `_load_history` calls it on
+    blocks read back from `chat_turn_trace` so stale rows persisted
+    before this fix still replay cleanly. None-valued fields are
+    dropped: the API accepts omitted optional fields, and dropping
+    nulls avoids questions like `citations: null` vs not-set.
+    """
+    btype = block.get("type")
+    allowed = _API_BLOCK_FIELDS.get(btype) if isinstance(btype, str) else None
+    if allowed is None:
+        # Unknown / future block type — leave untouched.
+        return block
+    return {k: v for k, v in block.items() if k in allowed and v is not None}
 
 def _coerce_input(raw: Any) -> dict[str, Any]:
     """tool_use.input is typed as dict in the SDK but mocks may pass a

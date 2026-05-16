@@ -45,7 +45,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.agent.loop import stream_turn
+from app.agent.loop import _clean_block_dict, stream_turn
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
 
@@ -268,7 +268,18 @@ def _load_history(user: AuthedUser, conversation_id: UUID) -> list[dict[str, Any
     rows = list(reversed(resp.data or []))
     history: list[dict[str, Any]] = []
     for row in rows:
-        history.extend(row["messages"])
+        for msg in row["messages"]:
+            # Stale rows persisted before the Day 12 `parsed_output` scrub
+            # may carry streaming-only fields on text blocks that Anthropic
+            # 400s on inbound. Clean every block as we hydrate so existing
+            # conversations don't stay wedged forever after the fix lands.
+            content = msg.get("content")
+            if isinstance(content, list):
+                msg["content"] = [
+                    _clean_block_dict(b) if isinstance(b, dict) else b
+                    for b in content
+                ]
+            history.append(msg)
     return history
 
 def _persist_turn(

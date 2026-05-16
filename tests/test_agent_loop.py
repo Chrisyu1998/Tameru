@@ -248,6 +248,76 @@ def test_unknown_tool_recovers_via_error_result(authed_user, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Block sanitization — Anthropic streaming SDK leaks fields like
+# `parsed_output` onto text-block model_dump() output. The Messages API
+# rejects them on inbound with `Extra inputs are not permitted`, which
+# 400s turn 2 when the loop replays turn 1's history. Both the serialize
+# path (_block_to_dict, called every iteration) and the hydrate path
+# (_clean_block_dict, called by chat.py:_load_history) must strip them.
+# ---------------------------------------------------------------------------
+
+
+def test_block_to_dict_strips_streaming_only_fields():
+    """A streaming text block with `parsed_output` round-trips to API-clean.
+
+    The block dict subclass mirrors how the Anthropic SDK's streaming
+    helper exposes blocks: model_dump() emits all attributes including
+    streaming-only ones. After serialization only the API-valid subset
+    must remain, or the next turn's request body 400s the moment
+    Anthropic parses it.
+    """
+    block = _Block(
+        type="text",
+        text="hello there",
+        parsed_output={"any": "thing"},
+        citations=None,
+    )
+    cleaned = loop_module._block_to_dict(block)
+    assert cleaned == {"type": "text", "text": "hello there"}
+
+
+def test_clean_block_dict_strips_extras_from_plain_dicts():
+    """The hydrate path reads raw dicts from chat_turn_trace JSONB — no
+    pydantic model in scope. _clean_block_dict must scrub them anyway so
+    stale rows persisted before this fix don't keep failing turn 2."""
+    stale = {
+        "type": "text",
+        "text": "from a stale trace row",
+        "parsed_output": {"leftover": True},
+    }
+    cleaned = loop_module._clean_block_dict(stale)
+    assert cleaned == {"type": "text", "text": "from a stale trace row"}
+
+
+def test_clean_block_dict_preserves_tool_use_shape():
+    """Defensive: a tool_use block's required fields survive the scrub
+    even if the SDK pads it with future extras."""
+    block = {
+        "type": "tool_use",
+        "id": "toolu_abc",
+        "name": "calculate_total",
+        "input": {"category": "Dining"},
+        "future_field": "ignored",
+    }
+    cleaned = loop_module._clean_block_dict(block)
+    assert cleaned == {
+        "type": "tool_use",
+        "id": "toolu_abc",
+        "name": "calculate_total",
+        "input": {"category": "Dining"},
+    }
+
+
+def test_clean_block_dict_passes_through_unknown_types():
+    """Forward-compat: an unfamiliar block type goes through unchanged so
+    a new Anthropic block kind doesn't get silently dropped to {} by an
+    overly aggressive allowlist."""
+    block = {"type": "future_block", "novel_field": 42}
+    cleaned = loop_module._clean_block_dict(block)
+    assert cleaned == block
+
+
+# ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
 
