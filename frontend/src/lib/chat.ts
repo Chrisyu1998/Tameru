@@ -88,13 +88,28 @@ export interface AssistantRichChartMessage {
   via?: ToolName;
 }
 
+/**
+ * Entry-moment insight bubble — Day 13. Rendered below a committed
+ * parse card when the `insight` field on `POST /transactions/confirm`'s
+ * response is non-null. Distinct kind (not reusing `text`) so the
+ * renderer can give it a quieter visual treatment without bleeding
+ * styles into ordinary assistant text.
+ */
+export interface AssistantInsightMessage {
+  id: string;
+  role: "assistant";
+  kind: "insight";
+  text: string;
+}
+
 export type ChatMessage =
   | UserMessage
   | AssistantTextMessage
   | AssistantParseMessage
   | AssistantCandidatesMessage
   | AssistantChartMessage
-  | AssistantRichChartMessage;
+  | AssistantRichChartMessage
+  | AssistantInsightMessage;
 
 /* ─── Parse draft (the commit surface) ───────────────────────────── */
 

@@ -110,9 +110,17 @@ export interface ConfirmTransactionBody {
   client_request_id: string;
 }
 
+export interface ConfirmTransactionResult {
+  transaction: Transaction;
+  // One-sentence deterministic insight string when a rule fires; null on
+  // first-in-category, within-noise deltas, saturated rate limits, and on
+  // idempotent replay (Day 13).
+  insight: string | null;
+}
+
 export async function confirmTransaction(
   body: ConfirmTransactionBody,
-): Promise<Transaction> {
+): Promise<ConfirmTransactionResult> {
   // The server strips fields it doesn't accept; we only send the documented
   // ones so extra=forbid in TransactionConfirmRequest stays happy.
   const wire = await apiJson<TransactionConfirmResponseWire>(
@@ -122,7 +130,7 @@ export async function confirmTransaction(
       body,
     },
   );
-  return fromWire(wire.transaction);
+  return { transaction: fromWire(wire.transaction), insight: wire.insight };
 }
 
 export interface PatchTransactionBody {

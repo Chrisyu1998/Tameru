@@ -292,18 +292,35 @@ export const chatStore = {
     };
 
     try {
-      const tx = await confirmTransaction(body);
+      const result = await confirmTransaction(body);
+      const tx = result.transaction;
       // Optimistic local injection. lib/ledger.ts also refetches on demand
       // via ledger.refresh(); calling it here would re-trip a network round
       // trip that we don't need since `tx` already has the row.
       ledger.addTransaction(tx);
-      setState({
-        messages: state.messages.map((m) =>
-          m.id === msgId && m.role === "assistant" && m.kind === "parse"
-            ? { ...m, draft, committedTxId: tx.id }
-            : m,
-        ),
-      });
+      // Flip the parse card to committed first; append the entry-moment
+      // insight bubble after so it visually lands beneath the card.
+      const committedMessages = state.messages.map((m) =>
+        m.id === msgId && m.role === "assistant" && m.kind === "parse"
+          ? { ...m, draft, committedTxId: tx.id }
+          : m,
+      );
+      const insight = result.insight;
+      if (insight) {
+        setState({
+          messages: [
+            ...committedMessages,
+            {
+              id: newId("ai"),
+              role: "assistant",
+              kind: "insight",
+              text: insight,
+            },
+          ],
+        });
+      } else {
+        setState({ messages: committedMessages });
+      }
     } catch (err) {
       // Surface the actual reason in the console — the inline chat bubble
       // is intentionally vague, but a 422/500/network failure should be

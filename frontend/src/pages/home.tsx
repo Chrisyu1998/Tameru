@@ -3,17 +3,14 @@ import { ArrowUpRight, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { DeltaTile } from "@/components/DeltaTile";
 import {
-  currentMonthTransactions,
   dismissFirstHint,
   isFirstHintDismissed,
-  totalCents,
-  useLedger,
 } from "@/lib/ledger";
 import {
-  CATEGORY_BASELINES,
-  TOTAL_BASELINE,
-} from "@/lib/fixtures";
-import { CATEGORIES, type Category } from "@/lib/categories";
+  useDashboardSummary,
+  type CategoryTileWire,
+  type DashboardSummaryWire,
+} from "@/lib/dashboardApi";
 import { formatMoney, formatMonth, formatPercent } from "@/lib/format";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -24,7 +21,7 @@ export default function HomePage() {
   const navigate = useNavigate();
   const jwt = useAppStore((s) => s.jwt);
   const homeCurrency = useAppStore((s) => s.homeCurrency);
-  const { transactions } = useLedger();
+  const { summary, loading } = useDashboardSummary();
   const [hintDismissed, setHintDismissed] = useState(true);
 
   // Gate: redirect anyone who isn't fully onboarded to the wizard. We check
@@ -44,8 +41,24 @@ export default function HomePage() {
 
   if (!onboarded) return null;
 
-  const monthTx = currentMonthTransactions(transactions);
-  const isEmpty = monthTx.length === 0;
+  // Hold the populated/empty branch until the first /dashboard/summary
+  // round trip lands — otherwise we'd flash the empty state on every page
+  // load before the response arrives.
+  if (!summary) {
+    return (
+      <div className="mx-auto w-full max-w-md px-5 pt-10 pb-12">
+        <header>
+          <h1 className="font-serif text-3xl text-ink lowercase-title">home</h1>
+        </header>
+        {loading && (
+          <p className="mt-12 text-sm text-ink-tertiary">loading…</p>
+        )}
+      </div>
+    );
+  }
+
+  const isEmpty =
+    !summary.baseline_ready && summary.categories.length === 0;
 
   return (
     <div className="mx-auto w-full max-w-md px-5 pt-10 pb-12 animate-fade-up">
@@ -58,7 +71,7 @@ export default function HomePage() {
           }}
         />
       ) : (
-        <PopulatedHome monthTx={monthTx} />
+        <PopulatedHome summary={summary} />
       )}
     </div>
   );
@@ -66,25 +79,10 @@ export default function HomePage() {
 
 /* ─── Populated ──────────────────────────────────────────────── */
 
-function PopulatedHome({ monthTx }: { monthTx: ReturnType<typeof currentMonthTransactions> }) {
-  const monthTotal = totalCents(monthTx);
-  const deltaPct = ((monthTotal - TOTAL_BASELINE) / TOTAL_BASELINE) * 100;
-
-  // Pick the four most movement-y categories: largest absolute delta from baseline,
-  // among categories that have any spend this month.
-  const tilesData = CATEGORIES.map((cat) => {
-    const catSpend = monthTx
-      .filter((t) => t.category === cat)
-      .reduce((s, t) => s + t.amountCents, 0);
-    const baseline = CATEGORY_BASELINES[cat] ?? 0;
-    const deltaCents = catSpend - baseline;
-    return { category: cat as Category, catSpend, baseline, deltaCents };
-  })
-    .filter((d) => d.catSpend > 0)
-    .sort((a, b) => Math.abs(b.deltaCents) - Math.abs(a.deltaCents))
-    .slice(0, 4);
-
-  const observation = buildObservation(monthTotal, tilesData);
+function PopulatedHome({ summary }: { summary: DashboardSummaryWire }) {
+  const monthCents = Math.round(Number(summary.this_month) * 100);
+  const deltaPct = summary.delta_pct ?? 0;
+  const tiles = summary.categories.slice(0, 4);
 
   return (
     <>
@@ -104,64 +102,55 @@ function PopulatedHome({ monthTx }: { monthTx: ReturnType<typeof currentMonthTra
           {formatMonth().toLowerCase()}
         </p>
         <p className="mt-3 font-serif text-[4rem] leading-none text-ink tabular">
-          {formatMoney(monthTotal)}
+          {formatMoney(monthCents)}
         </p>
 
-        <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-warn-wash px-3 py-1 text-xs text-warn">
-          <span className="tabular font-medium">
-            {formatPercent(deltaPct)} vs your avg
-          </span>
-        </div>
+        {summary.baseline_ready && summary.delta_pct !== null && (
+          <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-warn-wash px-3 py-1 text-xs text-warn">
+            <span className="tabular font-medium">
+              {formatPercent(deltaPct)} vs your avg
+            </span>
+          </div>
+        )}
 
-        <p className="mt-6 max-w-[28ch] font-serif italic text-[0.95rem] leading-relaxed text-ink-secondary">
-          {observation}
-        </p>
+        {summary.observation && (
+          <p className="mt-6 max-w-[28ch] font-serif italic text-[0.95rem] leading-relaxed text-ink-secondary">
+            {summary.observation}
+          </p>
+        )}
       </section>
 
       <section className="mt-12 grid grid-cols-2 gap-3">
-        {tilesData.map((d) => (
-          <DeltaTile
-            key={d.category}
-            layout="stacked"
-            tone="neutral"
-            category={d.category.toLowerCase()}
-            delta={Math.round(d.deltaCents / 100)}
-          />
+        {tiles.map((tile) => (
+          <Tile key={tile.name} tile={tile} />
         ))}
-        {/* Catch-all subscriptions tile only appears when no subscription spend
-            this month would have surfaced it in tilesData — otherwise we'd
-            render the category twice. */}
-        {!tilesData.some((d) => d.category === "Subscriptions") && (
-          <DeltaTile
-            layout="stacked"
-            tone="neutral"
-            direction="neutral"
-            category="subscriptions"
-            delta={0}
-            band="steady"
-          />
-        )}
       </section>
     </>
   );
 }
 
-function buildObservation(
-  monthTotal: number,
-  tiles: { category: Category; deltaCents: number }[]
-): string {
-  if (tiles.length === 0) return "a quiet start to the month.";
-  const above = tiles.filter((t) => t.deltaCents > 0);
-  const below = tiles.filter((t) => t.deltaCents < 0);
-
-  if (above.length > 0 && monthTotal > TOTAL_BASELINE) {
-    const top = above[0];
-    return `${top.category.toLowerCase()} is doing most of the lifting this month.`;
+function Tile({ tile }: { tile: CategoryTileWire }) {
+  if (!tile.baseline_ready || tile.delta_abs === null) {
+    return (
+      <DeltaTile
+        layout="stacked"
+        tone="neutral"
+        direction="neutral"
+        category={tile.name.toLowerCase()}
+        delta={0}
+        band="still learning"
+      />
+    );
   }
-  if (below.length > above.length) {
-    return "you're spending more deliberately than usual.";
-  }
-  return "things are roughly where they always sit.";
+  const deltaDollars = Math.round(Number(tile.delta_abs));
+  return (
+    <DeltaTile
+      layout="stacked"
+      tone="neutral"
+      category={tile.name.toLowerCase()}
+      delta={deltaDollars}
+    />
+  );
 }
 
 /* ─── Empty ──────────────────────────────────────────────────── */

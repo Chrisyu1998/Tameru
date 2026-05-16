@@ -129,29 +129,3 @@ export const FIXTURE_TRANSACTIONS: Transaction[] = [
   t("Etsy", 32.0, 7, "card-amex", "Other", "tx-32"),
 ];
 
-/**
- * "Usual" monthly baseline by category, in cents. Used to derive the
- * delta + ordinal band for DeltaTile and the hero observation.
- *
- * In a real app this would come from a rolling N-month average.
- */
-export const CATEGORY_BASELINES: Record<Category, number> = {
-  Dining: 50000,            // $500
-  Groceries: 25000,         // $250
-  "Coffee Shops": 4500,     // $45
-  Gas: 8000,                // $80
-  Transit: 6000,            // $60
-  Travel: 20000,            // $200
-  Streaming: 4500,          // $45
-  Subscriptions: 3500,      // $35
-  Entertainment: 9000,      // $90
-  Shopping: 12000,          // $120
-  Drugstores: 3500,         // $35
-  Home: 6000,               // $60
-  Utilities: 9000,          // $90
-  Health: 5000,             // $50
-  Other: 5000,              // $50
-};
-
-/** "Usual" monthly total, cents. Drives the hero "+14% vs your avg" pill. */
-export const TOTAL_BASELINE = 144500; // $1,445

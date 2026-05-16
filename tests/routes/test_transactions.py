@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -63,7 +64,11 @@ def test_confirm_creates_row_with_server_hardcoded_source(client, user_a, card_a
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["insight"] is None
+    # `insight` is governed by Day 13's rule engine — this test only
+    # cares that the row commits with the server-hardcoded source. The
+    # field shape (str | null) is verified separately in the Day 13
+    # insight tests below.
+    assert "insight" in body
 
     tx = body["transaction"]
     assert tx["merchant"] == merchant
@@ -730,6 +735,107 @@ def test_user_b_list_does_not_include_user_a_rows(
 
 
 # ---------------------------------------------------------------------------
+# POST /transactions/confirm — entry-moment insight (Day 13)
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_first_in_category_returns_null_insight(client, user_a, card_a):
+    """First transaction in a category cannot trip any rule — insight stays null."""
+    _wipe_entry_moment_fires(user_a)
+    resp = client.post(
+        "/transactions/confirm",
+        headers=_auth(user_a),
+        json=_proposal(
+            merchant=f"FirstShop-{_tag()}",
+            card_id=card_a,
+            # Use a category we don't seed anywhere else in this suite so
+            # the "first in category" guard truly fires.
+            category="Health",
+            gemini_suggestion="Health",
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["insight"] is None
+
+
+def test_confirm_fires_single_tx_notable_when_new_monthly_max(
+    client, user_a, card_a
+):
+    """Rule 1 fires when this txn is the new monthly high in its category."""
+    _wipe_entry_moment_fires(user_a)
+    category = "Entertainment"
+    # Seed 3 prior in-month rows below the new max so rule 1's
+    # min-month-count guard clears and the new amount is a strict max.
+    today = date.today()
+    for _ in range(3):
+        _seed_manual_transaction(
+            user_a, card_a,
+            merchant=f"Concert-{_tag()}",
+            amount=Decimal("20"),
+            category=category,
+            txn_date=today,
+        )
+
+    resp = client.post(
+        "/transactions/confirm",
+        headers=_auth(user_a),
+        json=_proposal(
+            merchant=f"NewMax-{_tag()}",
+            amount="250",
+            card_id=card_a,
+            category=category,
+            gemini_suggestion=category,
+        ),
+    )
+    assert resp.status_code == 200, resp.text
+    insight = resp.json()["insight"]
+    assert insight is not None
+    assert "highest single" in insight.lower()
+    assert category.lower() in insight.lower()
+
+    # Rate-limit row recorded.
+    fires = _read_fires(user_a, category=category, rule_id="single_tx_notable")
+    assert len(fires) == 1
+
+
+def test_confirm_replay_does_not_write_entry_moment_fire(client, user_a, card_a):
+    """Idempotent replay returns insight=null AND skips the rate-limit write."""
+    _wipe_entry_moment_fires(user_a)
+    category = "Drugstores"
+    today = date.today()
+    for _ in range(3):
+        _seed_manual_transaction(
+            user_a, card_a,
+            merchant=f"Pharmacy-{_tag()}",
+            amount=Decimal("8"),
+            category=category,
+            txn_date=today,
+        )
+
+    crid = str(uuid.uuid4())
+    payload = _proposal(
+        merchant=f"BigRx-{_tag()}",
+        amount="120",
+        card_id=card_a,
+        category=category,
+        gemini_suggestion=category,
+        client_request_id=crid,
+    )
+
+    first = client.post("/transactions/confirm", headers=_auth(user_a), json=payload)
+    assert first.status_code == 200
+    assert first.json()["insight"] is not None
+    fires_after_first = _read_fires(user_a, category=category, rule_id="single_tx_notable")
+
+    second = client.post("/transactions/confirm", headers=_auth(user_a), json=payload)
+    assert second.status_code == 200
+    assert second.json()["insight"] is None
+    # Replay must not write an additional fire row.
+    fires_after_replay = _read_fires(user_a, category=category, rule_id="single_tx_notable")
+    assert len(fires_after_replay) == len(fires_after_first)
+
+
+# ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
 
@@ -800,3 +906,57 @@ def _confirm_and_return_id(client, user_a, card_a, *, merchant, **kwargs) -> str
     )
     assert resp.status_code == 200
     return resp.json()["transaction"]["id"]
+
+
+def _seed_manual_transaction(
+    user, card_id: str, *, merchant: str, amount: Decimal, category: str, txn_date: date
+) -> None:
+    """Insert a row directly via the user's JWT so the entry-moment RPC sees prior history.
+
+    Bypasses the API layer because the API layer is what we're testing —
+    seeding via /transactions/confirm would itself fire insights and
+    record rate-limit rows, polluting the very table the tests are
+    asserting on.
+    """
+    client = supabase_for_user(user.jwt)
+    client.table("transactions").insert(
+        {
+            "user_id": user.id,
+            "card_id": card_id,
+            "merchant": merchant,
+            "amount": str(amount),
+            "date": txn_date.isoformat(),
+            "category": category,
+            "source": "manual",
+        }
+    ).execute()
+
+
+def _wipe_entry_moment_fires(user) -> None:
+    """Clear the user's rate-limit fires so insight tests start from a clean slate.
+
+    The table is audit-immutable in production (no DELETE policy for the
+    user), so we use a service-role admin client. This is the only safe
+    place to bypass that policy — production callers never touch it.
+    """
+    import os
+    from supabase import create_client
+
+    url = os.environ["SUPABASE_URL"]
+    service_role_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    admin = create_client(url, service_role_key)
+    admin.table("entry_moment_fires").delete().eq("user_id", user.id).execute()
+
+
+def _read_fires(user, *, category: str, rule_id: str) -> list[dict]:
+    """Return entry_moment_fires rows matching (user, category, rule_id) — RLS-scoped."""
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("entry_moment_fires")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("category", category)
+        .eq("rule_id", rule_id)
+        .execute()
+    )
+    return resp.data or []

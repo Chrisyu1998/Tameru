@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronsLeft, ChevronsRight, SquarePen, X } from "lucide-react";
 import { CandidateCards } from "@/components/chat/CandidateCards";
 import { Chart } from "@/components/chat/Chart";
+import { EntryInsightBubble } from "@/components/chat/EntryInsightBubble";
 import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble";
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
 import { ParseCard } from "@/components/chat/ParseCard";
@@ -193,6 +194,9 @@ function MessageRow({
         {msg.via && <ToolAttribution name={msg.via} />}
       </div>
     );
+  }
+  if (msg.kind === "insight") {
+    return <EntryInsightBubble text={msg.text} />;
   }
   if (msg.kind === "chart") {
     return (
