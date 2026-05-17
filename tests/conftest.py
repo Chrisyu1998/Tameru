@@ -116,6 +116,8 @@ def card_a(user_a) -> str:
                 "name": "A card",
                 "issuer": "Chase",
                 "program": "UR",
+                "network": "visa",
+                "last_four": "1111",
             }
         )
         .execute()
@@ -137,6 +139,8 @@ def card_b(user_b) -> str:
                 "name": "B card",
                 "issuer": "Amex",
                 "program": "MR",
+                "network": "amex",
+                "last_four": "2222",
             }
         )
         .execute()

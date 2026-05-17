@@ -172,6 +172,12 @@ def _minimal_args(tool_name: str) -> dict[str, Any]:
             "amount": 10,
             "date": "2026-05-13",
         }
+    if tool_name == "propose_card":
+        return {
+            "network": "visa",
+            "last_four": "1234",
+            "program": "Test Card",
+        }
     if tool_name == "set_goal":
         return {"amount": 100, "period": "month"}
     return {}

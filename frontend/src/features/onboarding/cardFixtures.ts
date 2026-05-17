@@ -62,7 +62,7 @@ const DEFAULT_FIXTURE: Omit<CardPreview, "name"> = {
     { category: "Gas", value: "1x", confidence: "moss" },
     { category: "Everything else", value: "1x", confidence: "terracotta" },
   ],
-  sources: ["issuer website", "perplexity.ai"],
+  sources: ["issuer website", "nerdwallet.com"],
 };
 
 export async function fetchCardPreview(name: string): Promise<CardPreview> {

@@ -291,11 +291,20 @@ def _tag() -> str:
 
 def _row_cards(user_id: str, **_):
     """Support row cards."""
+    tag = _tag()
+    # The `network` + `last_four` Day-14 columns are NOT NULL on `cards`;
+    # `_tag()` is hex so we keep only digits and pad to 4 to satisfy the
+    # 4-digit shape. Per-row unique so the partial unique identity index
+    # (DESIGN.md §8.1) doesn't collide across this test's repeats.
+    digits = "".join(c for c in tag if c.isdigit())
+    last_four = (digits + "0000")[:4]
     return {
         "user_id": user_id,
-        "name": f"Card-{_tag()}",
+        "name": f"Card-{tag}",
         "issuer": "Chase",
         "program": "UR",
+        "network": "visa",
+        "last_four": last_four,
     }
 
 def _row_transactions(user_id: str, **_):

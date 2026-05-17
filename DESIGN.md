@@ -8,7 +8,7 @@
 | Date | April 2026 |
 | Version | 3.1 (adds forward plan for scaling) |
 | Status | Approved — implementation |
-| Stack | React PWA · FastAPI · Supabase · Anthropic API · Gemini API · Perplexity API · PostHog |
+| Stack | React PWA · FastAPI · Supabase · Anthropic API (Messages + `tool_use` + `web_search`) · Gemini API · PostHog |
 | Domain | tameru.app (candidate) |
 
 This document supersedes PRD v2.1. Material changes from v2.1 are summarized in §0. v3.1 is a planning-only revision: **current scope is unchanged** — still ~10-user invite-only, free for everyone, no Stripe, no paid tier. v3.1 adds a **forward plan** describing what would need to happen *if* v1 is successful and scaling to ~100 users becomes the next step, plus a reconsidered mobile-strategy stance admitting Swift as a possible future migration. See §0.1 summary and §17 detail.
@@ -21,7 +21,7 @@ This document supersedes PRD v2.1. Material changes from v2.1 are summarized in 
 |---|---|
 | Drop Expo entirely; PWA only across all phases | Scope reduction. iOS web push limitations are accepted and disclosed. |
 | Replace "Claude Managed Agents" framing with **Messages API + `tool_use`** via the `anthropic` Python SDK | Managed Agents runs in Anthropic's cloud and is designed for long-running autonomous tasks. Tameru chat turns are 4–6 seconds with typed DB-backed tools — wrong fit. The agent loop runs in FastAPI so the user's JWT is in scope when tools execute (RLS fires correctly). |
-| Card multiplier lookup uses **Perplexity Sonar** | One API call replaces "search + Gemini-parse-results" pipeline. Citations included. Called once per card add — vendor cost is negligible. |
+| Card multiplier lookup uses **Claude Haiku 4.5 + the `web_search` server tool** with an `allowed_domains` allowlist (NerdWallet, The Points Guy, US Credit Card Guide, Doctor of Credit, issuer domain) | Replaces the Perplexity Sonar path. Enforced source allowlist (Perplexity's was Pro-tier only), citations are first-class on the Anthropic Messages API, no new vendor/SDK/sub-processor. Cost is ~$0.01/lookup at $10/1k searches — negligible at ≤10 lookups per user lifetime. The DESIGN.md §16 "Perplexity JSON-mode reliability" open item is resolved by removing the vendor. |
 | All Gemini calls use **`gemini-3.1-flash-lite-preview`** | Author decision to move off 2.5. Flash-Lite (not Pro) is the right variant — it's the direct successor to 2.5 Flash for "high-volume, cost-sensitive LLM traffic" per Google's own positioning, supports vision and grounding, and avoids paying for Pro's reasoning capacity on simple extraction tasks. Note: still in **preview** as of March 2026; see §16 Open Items for the stability risk. Model string is configurable via env var. |
 | Replace live "demo mode" with a **4-screen guided tour** | Static screens with hardcoded fixture data. Eliminates the question "how does AI chat work on fake data," removes the risk of demo data leaking into Supabase, and is buildable in a day. |
 | RLS is enforced by passing the user's JWT to a per-request Supabase client | Service role bypasses RLS. Per-request clients with the user JWT cause Postgres to enforce `auth.uid() = user_id` on every query. The service role is reserved for migrations and the daily auto-logger. |
@@ -180,11 +180,11 @@ V1 begins with one user (Chris). The data model and auth are designed for multi-
 | Styling | Tailwind CSS | Mobile-first utility classes, minimal bundle |
 | State | Zustand | Lightweight global state, no Redux boilerplate |
 | Offline | Service Worker + IndexedDB | Queue transactions offline, sync on reconnect |
-| Backend | FastAPI (Python) | Async, type-safe, Python for Gemini/Anthropic/Perplexity SDKs |
+| Backend | FastAPI (Python) | Async, type-safe, Python for Gemini/Anthropic SDKs |
 | Database | Supabase (Postgres) | Hosted Postgres + Auth + RLS + dashboard |
 | Auth | Supabase Auth | Google OAuth + magic link; RLS enforced at DB |
 | AI — high frequency | Gemini 3.1 Flash-Lite (preview) — `gemini-3.1-flash-lite-preview` | Categorization, NL parse, receipt extraction, CSV parse. Cost-optimized variant; matches 2.5 Flash quality per Google. |
-| AI — card lookup | Perplexity Sonar | Web-grounded card multiplier lookup with citations |
+| AI — card lookup | Claude Haiku 4.5 + `web_search_20250305` server tool | Web-grounded card multiplier lookup with citations and a domain allowlist (NerdWallet, TPG, US Credit Card Guide, Doctor of Credit, issuer domain). Replaces Perplexity Sonar; rationale in §6.1 and §0. |
 | AI — agent | Claude Haiku 4.5 / Sonnet 4.6 | Tool use, multi-step reasoning, narrative |
 | Agent runtime | `anthropic` Python SDK — Messages API with `tool_use` blocks. Loop runs in FastAPI. | Custom typed tools, JWT in scope for RLS, full control over middleware (logging, rate limit backoff, cost gating) |
 | MCP | `mcp` Python SDK (HTTP+SSE transport) | Exposes spending data to Claude.ai / Claude Code |
@@ -267,7 +267,7 @@ Edge cases: duplicate detection (date + merchant + amount); unknown column schem
 |---|---|---|
 | Philosophy screen + guided tour | 1 | P0 |
 | CSV bank import (Gemini batch categorization) | 1 | P0 |
-| Card management (Perplexity multiplier lookup) | 1 | P0 |
+| Card management (Claude `web_search` multiplier lookup) | 1 | P0 |
 | Natural language transaction entry | 1 | P0 |
 | Gemini categorization with one-tap confirm | 1 | P0 |
 | Merchant memory (per-user category overrides) | 1 | P0 |
@@ -294,20 +294,31 @@ Edge cases: duplicate detection (date + merchant + amount); unknown column schem
 | Spending limits with AI nudges | 2 | P2 |
 | Plaid / Teller.io auto-sync | — | excluded (§3.3) |
 
-### 6.1 Card Management — Perplexity Lookup
+### 6.1 Card Management — Claude `web_search` Lookup
 
-Users add cards by name. Perplexity Sonar fetches category multipliers and rewards program in one API call with citations.
+Users add cards by name + network + last 4. Claude Haiku 4.5, invoked with the `web_search_20250305` server tool and an `allowed_domains` allowlist, fetches category multipliers and rewards program in one API call with citations.
 
 **Add card flow:**
 
-1. User types a card name (e.g., "Chase Sapphire Reserve").
-2. Backend calls Perplexity Sonar: "What are the current category multipliers, rewards program, and annual fee for the Chase Sapphire Reserve credit card? Return as structured JSON."
-3. Perplexity returns answer with citations.
-4. Backend parses the JSON. User reviews, edits any incorrect values, confirms. Card saved to wallet with citation URLs preserved as `card.source_urls`.
+1. User enters card name (e.g., "Chase Sapphire Reserve") + network (Visa) + last 4 digits (e.g., 1234). The last 4 is what disambiguates two cards of the same product (a user can have two Amex Platinums on the same account).
+2. Backend calls Claude Haiku with `web_search_20250305` enabled, `allowed_domains = ["nerdwallet.com", "thepointsguy.com", "uscreditcardguide.com", "doctorofcredit.com", <inferred issuer domain>]`, and `max_uses = 3`. System prompt: "Extract `program`, `multipliers`, `annual_fee`, `issuer` for the named credit card. Return strict JSON. If sources disagree or data isn't found, set the missing field to null."
+3. Claude executes 1–2 web searches against the allowlisted sources, returns structured JSON plus `web_search_result_location` citation blocks (url, title, cited_text).
+4. Backend parses the JSON, collects citation URLs, and returns a proposal payload. User reviews, edits any incorrect values, confirms. Card saved to `cards` with citation URLs preserved as `cards.source_urls`.
 
-Why Perplexity: search + extraction in one API call. Citations included. Cost is negligible (≤10 calls per user lifetime). Eliminates separate search-API integration.
+**Why Claude `web_search` instead of Perplexity Sonar:**
 
-If Perplexity returns ambiguous or low-confidence results, fall back to manual entry — the user types multipliers themselves with a category picker.
+- **Enforced domain allowlist.** Claude's `allowed_domains` parameter strictly restricts citation sources at the API layer. Perplexity Sonar's `search_domain_filter` is Pro-tier only and historically had reliability gaps (citations slipping outside the allowlist).
+- **No new vendor.** Tameru already depends on the Anthropic SDK and key for the chat agent. The web_search server tool is an Anthropic-side feature on the same Messages API — one fewer key, SDK, sub-processor, and Privacy Policy entry.
+- **Citations are first-class.** Each `web_search_result_location` carries `url`, `title`, and up to 150 chars of `cited_text` — richer than Perplexity's `{url, title}` and drops directly into `cards.source_urls text[]`.
+- **Cost is negligible.** ~$0.01/lookup ($10 per 1,000 searches + ~$0.003 in Haiku tokens). At ≤10 lookups per user lifetime, this is rounding error against any other line item.
+- **Closes the §16 open item.** "Perplexity Sonar JSON-mode reliability for card lookup" is resolved by no longer using Perplexity.
+
+**Cost-of-decision tradeoffs:**
+
+- The web_search call runs on the same Anthropic key as chat; outages in Anthropic affect both. Mitigation: the existing chat-down fallback messaging applies (§17.9), and the manual-entry path below covers the card-add user surface.
+- The web_search tool requires the org admin to enable it in the Claude Console (Privacy settings). One-time setup; documented in §16 and the runbook.
+
+**Fallback path:** if web_search returns `web_search_tool_result_error` (`max_uses_exceeded`, `too_many_requests`, `unavailable`) or extraction confidence is low (key fields null), the proposal payload sets `needs_manual: true`. The UI renders an editable blank form pre-populated with name + network + last_4 so the user types multipliers themselves with a category picker.
 
 ### 6.2 Spending Tracker
 
@@ -582,7 +593,7 @@ All API calls go through one Anthropic key, but this is not a bottleneck — the
 | Per-user cost control | Tameru middleware | `AICallLog` token sums per `user_id` |
 | 429 handling | Tameru middleware | Retry once after 2s; graceful failure after 2 attempts |
 
-### 7.4 Why Claude for Agent, Gemini for Categorization, Perplexity for Card Lookup
+### 7.4 Why Claude for Agent + Card Lookup, Gemini for Categorization
 
 | Task | Model | Reason |
 |---|---|---|
@@ -590,7 +601,7 @@ All API calls go through one Anthropic key, but this is not a bottleneck — the
 | Receipt photo parsing | Gemini (env-resolved, multimodal) | Image input supported up to 3,000/prompt. Bulk/async path, not chat. |
 | CSV header + batch parse | Gemini (env-resolved) | Unstructured → structured, batched. Bulk/async path, not chat. |
 | Chat-based transaction extraction | Claude Haiku 4.5 | In v1, chat is the only user-initiated write surface (CLAUDE.md invariant 8). Claude reads the user's message and fills `propose_transaction(...)` args directly via `tool_use`. There is no separate Gemini NL-parse call in the chat path. Gemini remains the parser for CSV and receipt paths above, because those are bulk/async where per-call cost dominates and no agent loop is involved. |
-| Card multiplier lookup | Perplexity Sonar | Web-grounded, citations, single API call |
+| Card multiplier lookup | Claude Haiku 4.5 + `web_search_20250305` | Web-grounded with enforced `allowed_domains` allowlist (NerdWallet, TPG, US Credit Card Guide, Doctor of Credit, issuer domain). Replaces the earlier Perplexity Sonar plan — see §6.1 for rationale (vendor reduction, native domain allowlist, citations as first-class on the Messages API). |
 | Chat agent | Claude Haiku 4.5 | Multi-step typed-tool reasoning. Public agentic data point: AIME 2025 with tools 96.3% (+16 vs no-tools). Gemini Flash-Lite considered and rejected — see §11.4 for full rationale. |
 
 **Gemini model resolution:** the exact Gemini model for every Gemini task above is resolved at call time from env vars (`GEMINI_MODEL` override, then `GEMINI_MODEL_DEFAULT`). **No model string is hardcoded in the code.** v1 production default is `GEMINI_MODEL_DEFAULT=gemini-2.5-flash` (GA, stable); `gemini-3.1-flash-lite-preview` is available via `GEMINI_MODEL` for eval experiments but is not the default because observed preview instability (503 UNAVAILABLE spikes during Day 4 smoke). Operators rotate the env var when Google deprecates or unstabilizes the current pick; no code ships. Same env-resolution pattern applies to receipt and CSV paths.
@@ -723,14 +734,41 @@ Enum-like text fields carry `CHECK` constraints enforcing the allowed values lis
 | user_id | UUID | FK → auth.users |
 | name | text | "Chase Sapphire Reserve" |
 | issuer | text | Chase, Amex, Citi, Bilt |
+| network | text | `visa` \| `mastercard` \| `amex` \| `discover` \| `other` (CHECK constraint). Required. Combined with `last_four` to disambiguate two cards of the same product. |
 | program | text | UR / MR / TYP / Bilt / Other |
 | multipliers | JSONB | `{"Dining": 4, "Groceries": 4}` |
 | annual_fee | numeric | USD; informational |
-| last_four | text | UI identification |
+| last_four | text | UI identification + active-uniqueness key. Required on the chat / onboarding propose-confirm paths. |
 | color | text | Hex for UI card display |
-| source_urls | text[] | Perplexity citations |
+| source_urls | text[] | Web-search citations (Claude `web_search_result_location.url`) |
 | active | boolean | Soft delete |
+| deactivated_at | timestamptz | Set by `DELETE /cards/{id}` when `active` flips to `false`. Powers the "closed {MMM YYYY}" label on inactive rows in the spending-breakdown filter (§6.1, Day 14 frontend filter semantics). `NULL` for active rows. |
 | created_at | timestamptz | |
+
+**Constraints:**
+- `CREATE UNIQUE INDEX cards_active_identity_uniq ON cards (user_id, network, last_four) WHERE active = true;` — **partial** unique index. Prevents two active cards with the same `(network, last_four)` for one user. Inactive (soft-deleted) rows are deliberately exempt so users can re-add a card after deleting it.
+
+**Soft-delete / re-add semantics:**
+
+When a user deletes a card and later re-adds the same `(network, last_four)`, **insert a new row; do not revive the soft-deleted row.** Rationale:
+
+- Multipliers and annual fees drift over time. A card closed in 2024 and re-added in 2026 should get a fresh lookup, not stale data.
+- Historical transactions stay linked to the original soft-deleted `card_id`. That preserves the historical card snapshot (annual fee at the time, multipliers at the time). Reviving the row would commingle pre-deletion and post-deletion transactions under a single ambiguous identity.
+- Soft-delete already means "I closed this card." Reviving negates that.
+- One rule ("once inactive, always inactive") is simpler than conditional revival logic.
+
+The cost: two rows can exist in `cards` with the same `(user_id, network, last_four)` — one active, one inactive. The partial unique index permits this. The spending-breakdown filter (Day 14, §6.1 frontend filter semantics) distinguishes them with a "closed {MMM YYYY}" suffix derived from `deactivated_at`, rendered in a muted color.
+
+**Frontend filter rules (referenced by Day 14):**
+
+1. **Totals always include inactive cards.** Sum-by-category, sum-by-month, weekly delta, year-to-date math sum across `active = true` AND `active = false`. Transaction reads do not filter by `cards.active`. Otherwise "total spend" silently stops matching "sum of per-card spend" the moment a card is deleted.
+2. **Filter dropdown is dynamic.** Shows all active cards plus inactive cards with ≥1 transaction in the current view's date range. Inactive cards with no transactions in scope are hidden.
+3. **Collision labels.** Inactive rows render as `{name} · {last_four} · closed {MMM YYYY}` in muted color; active rows render as `{name} · {last_four}`.
+
+**409 collision flow on `POST /cards/confirm`:**
+
+- If only active rows match the constraint, the insert fails with a unique violation → return HTTP 409 `{code: "active_card_exists", existing_card: {...}}`. The frontend surfaces an inline "you already have *{name}* ending {last_four} — edit it instead?" affordance linking to PATCH.
+- If only an inactive row matches, the partial index does not fire and the insert succeeds — a new `card_id` is created.
 
 ### 8.2 `transactions`
 
@@ -846,15 +884,15 @@ Both sites upsert as `(user_id, normalize_merchant(merchant), category, updated_
 
 ### 8.8 `ai_call_log`
 
-Append-only audit log of every Gemini, Claude, and Perplexity API call.
+Append-only audit log of every Gemini and Claude API call. (Perplexity is no longer a provider as of §0 — `card_lookup` now goes through Claude `web_search`.)
 
 | Field | Type | Description |
 |---|---|---|
 | id | UUID | Primary key |
 | user_id | UUID | Nullable for system-level calls; `REFERENCES auth.users(id) ON DELETE SET NULL` to preserve audit history after account deletion |
 | timestamp | timestamptz | |
-| provider | text | `anthropic` \| `google` \| `perplexity` |
-| model | text | `claude-haiku-4-5` \| `gemini-3.1-flash-lite-preview` \| `sonar` \| ... |
+| provider | text | `anthropic` \| `google` |
+| model | text | `claude-haiku-4-5` \| `claude-sonnet-4-6` \| `gemini-3.1-flash-lite-preview` \| `gemini-2.5-flash` \| ... |
 | task_type | text | `categorization` \| `nl_parse` \| `chat_turn` \| `memory_distill` \| `card_lookup` \| `receipt_parse` \| `csv_import` \| `digest` |
 | prompt_version | text | e.g. `categorize_v3` |
 | prompt_hash | text | SHA-256 of rendered system prompt |
@@ -1003,7 +1041,7 @@ Application-handler code never uses the service role. This is enforced by code r
 
 ### 9.2 API Key Management
 
-- `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `PERPLEXITY_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `SENTRY_DSN` — Railway environment variables only.
+- `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `SENTRY_DSN` — Railway environment variables only. (Perplexity is no longer used as of §0 — card lookup is on the Anthropic key.)
 - `.env` in `.gitignore` from day one.
 - Pre-publish git history audit (gitleaks) before making the repo public; rotate any leaked keys.
 - All keys server-side. Never returned in API responses or exposed to the frontend.
@@ -1020,13 +1058,12 @@ Financial data lives in your Supabase project under RLS. The only third-party eg
 
 **Retention configuration:**
 
-- **Anthropic:** Zero Data Retention (ZDR) requested for the Tameru organization. Default retention is 30 days for trust & safety; ZDR brings this to zero. Not used for training under any tier.
+- **Anthropic:** Zero Data Retention (ZDR) requested for the Tameru organization. Default retention is 30 days for trust & safety; ZDR brings this to zero. Not used for training under any tier. Card-multiplier lookups also go through Anthropic via the `web_search` server tool — the public card name + last 4 are sent; no transaction data.
 - **Google Gemini:** paid tier only. Paid tier does not use API data for training. Free tier does — never used.
-- **Perplexity:** API calls do not include user financial data; only the public card name. No PII egress.
 
 **User disclosure copy:**
 
-> Tameru sends the merchant name and amount of each transaction to Anthropic and Google in order to categorize it and answer your questions. Both providers are configured for no data retention beyond the API call itself, and neither uses your data for training. Card multiplier lookups go to Perplexity but include only the public card name — no transaction data.
+> Tameru sends the merchant name and amount of each transaction to Anthropic and Google in order to categorize it and answer your questions. Both providers are configured for no data retention beyond the API call itself, and neither uses your data for training. Card multiplier lookups go to Anthropic too (via the same configured no-retention setup) and include only the public card name and last 4 digits — no transaction data.
 
 ### 9.5 PostHog — Structural Events Only
 
@@ -1101,7 +1138,7 @@ All costs monthly. AI pricing assumes:
 - Gemini 3.1 Flash-Lite: pricing not yet published (preview). Estimates below use 2.5 Flash rates as a placeholder: ~$0.075/M input + $0.30/M output. Expected to be lower per Google's positioning.
 - Claude Haiku 4.5: **$1.00/M input + $5.00/M output** (confirmed against Anthropic docs April 2026)
 - Claude Sonnet 4.6: $3.00/M input + $15.00/M output
-- Perplexity Sonar: ~$3/M input + per-search fee (negligible at our volume)
+- Claude `web_search` server tool: **$10 per 1,000 searches** + standard Haiku token costs for the call
 
 Per-user assumptions: 3 transactions/day, 5 chat turns/day, 1 session/day, 1 CSV import amortized over 6 months, 5 card adds amortized over user lifetime.
 
@@ -1132,7 +1169,7 @@ At Haiku 4.5 prices ($1/M input, $5/M output): **18,640 × $1/M + 600 × $5/M = 
 
 Chat is the only cost that can run away. To bound it, FastAPI middleware enforces a **per-user daily Claude token cap** (default 200,000 tokens/day, env var `CHAT_USAGE_CAP_TOKENS_PER_DAY`). At ~19K tokens per agent turn that's roughly 10 chat turns per user per day. A user hitting the cap sees: *"You've used your daily AI quota — resets at midnight UTC."*
 
-Worst-case per-user chat spend is therefore **~$6/month** (200K tokens × $1/M input and $5/M output blend), even if the user spams the chat until they hit the cap every day. Gemini and Perplexity aren't capped — they're too cheap per call to matter.
+Worst-case per-user chat spend is therefore **~$6/month** (200K tokens × $1/M input and $5/M output blend), even if the user spams the chat until they hit the cap every day. Gemini and the Claude `web_search` card-lookup path aren't capped — they're too cheap per call to matter.
 
 ### 11.3 Cost table — invite-only (~10 users)
 
@@ -1150,7 +1187,7 @@ Tameru is planned as invite-only. No Pro tier, no Stripe, no scaling beyond clos
 | Gemini 3.1 Flash-Lite — categorization | $0.05 | 900 calls/month, 200 in + 5 out each. Called from inside `propose_transaction` tool impl. |
 | Gemini 3.1 Flash-Lite — CSV (amortized) | $0.01 | 1 import/user/6 months, 150 tx × 500 in. Bulk/async path. |
 | Gemini 3.1 Flash-Lite — chat NL parse | $0.00 | **Removed in chat-unified UX** — chat-based NL parse folds into Claude `tool_use` arg extraction (§7.4, §7.7, invariant 8). Gemini is no longer in the chat path. |
-| Perplexity — card lookup | $0.05 | ≤10 lookups per user lifetime, amortized |
+| Claude `web_search` — card lookup | $0.05 | ≤10 lookups per user lifetime, amortized. ~$0.01/lookup ($10/1k searches + ~$0.003 Haiku tokens). Replaces the earlier Perplexity Sonar line. |
 | Claude Haiku — agent chat | $27.00 | Estimate carried over from pre-unified-chat model (150 Q&A turns/user × 10 users, ~$0.018/turn with caching). **Revisit before scaling (§11.6):** unified chat now also carries transaction-entry turns (previously free on the Gemini path). Transaction turns are short 1-tool-call turns, not multi-hop reasoning, so per-turn cost is below the $0.018 blend. Rough upper bound if ~200 tx turns/user/month land in this bucket: +$10–$15/month. Within the daily cap (§11.2) either way; not a v1 blocker. |
 | Claude Haiku — memory distill | $0.20 | 1 distillation per session per user |
 | Claude Sonnet — weekly digest | $0.07 | 4 calls/user/month |
@@ -1158,7 +1195,7 @@ Tameru is planned as invite-only. No Pro tier, no Stripe, no scaling beyond clos
 
 ### 11.4 Why Claude dominates the bill
 
-Claude chat is ~65% of the monthly total; everything else combined (Gemini + Perplexity + hosting) is ~35%. Two compounding reasons:
+Claude chat is ~65% of the monthly total; everything else combined (Gemini + Claude web_search + hosting) is ~35%. Two compounding reasons:
 
 - **Per-token rate:** Haiku is ~13× more expensive per input token than Gemini Flash-Lite ($1.00/M vs ~$0.075/M), ~17× more per output token ($5/M vs $0.30/M).
 - **Tokens per call:** a Gemini categorization is ~205 tokens (single shot). A Claude agent turn is ~19,000 tokens because the loop replays the full context (system prompt + 60 memory facts + 7 tool schemas + conversation history + tool_use/tool_result blocks) on every hop, and a typical turn has 3–4 hops. ~90× more tokens per call.
@@ -1204,7 +1241,7 @@ Linear-scale projection from §11.3, assuming the same per-user usage profile an
 | Gemini 3.1 Flash-Lite — categorization | $0.50 | 9,000 calls/month. |
 | Gemini 3.1 Flash-Lite — CSV (amortized) | $0.10 | |
 | Gemini 3.1 Flash-Lite — NL parse | $0.20 | |
-| Perplexity — card lookup | $0.50 | One-time per card add, amortized. |
+| Claude `web_search` — card lookup | $0.50 | One-time per card add, amortized. ~$0.01/lookup; ~50 lookups/month at 100 users. Replaces the earlier Perplexity Sonar line. |
 | Claude Haiku — agent chat | **$270.00** | 15,000 turns/month. Dominant line item; freemium gating is the lever. |
 | Claude Haiku — memory distill | $2.00 | 1 per session per user per day. |
 | Claude Sonnet — weekly digest | $0.70 | 4 calls/user/month. |
@@ -1332,7 +1369,7 @@ These are explicitly acknowledged unknowns that the v1 build will resolve in cod
 - **Gemini 3.1 Flash-Lite is in preview** as of March 3, 2026 (`gemini-3.1-flash-lite-preview`). Preview models can change pricing, behavior, or be deprecated on short notice. Risk mitigation: model string is held in a single env var (`GEMINI_MODEL`) so we can fall back to `gemini-2.5-flash` (GA) instantly if Flash-Lite preview becomes unstable.
 - **Flash-Lite A/B test for chat agent.** After Phase 1 launch, run the multi-hop eval suite (§7.10) against `gemini-3.1-flash-lite-preview` as an alternate chat model. If accuracy holds within 10% of Haiku, switch to save ~$18/month at the ~10-user v1 scale. The savings grow to ~$180/month *if* the conditional scaling-to-100 phase activates — so this A/B becomes a higher priority at that point.
 - **Anthropic ZDR enrollment** — submit request before v1 launch (currently using default 30-day T&S retention).
-- **Perplexity Sonar JSON-mode reliability** for card lookup — fall back to manual entry if extraction confidence is low.
+- **Claude `web_search` org-enablement.** The web search tool must be turned on by the org admin in the Claude Console (Privacy settings) before `lookup_card` will function. One-time setup before Day 14 lands; verified via a smoke test in the Day 14 test suite. Fall back to manual entry if extraction confidence is low.
 - **iOS PWA push opt-in rates in practice** — measure via PostHog `weekly_digest_opened` after Phase 1 launch. Email is the primary digest channel regardless. This measurement also feeds the §10.4 Swift-migration decision.
 
 **Conditional open items — decide before activating the §17 scaling plan, not before v1 launch:**
@@ -1400,7 +1437,7 @@ See §8.7 for `users_meta` additions and §8.10 for the `stripe_events` idempote
 - [ ] **Server-side CSV upload limits.** Reject files above a size or row-count threshold *before* parsing. Prevents a malicious 100MB upload from pinning a FastAPI worker.
 - [ ] **Pydantic validation on every NL-entry / merchant field.** No bare `str` inputs reaching the DB. Closes SQL injection surface even with RLS.
 - [ ] **SSE concurrency budget.** 100 users holding 100 open streams on one Railway instance: measure memory. If it doesn't hold, add a connection cap and reject overflow with a retry-after message.
-- [ ] **Request timeout on every AI provider call.** Anthropic, Gemini, Perplexity — all. A hung upstream must not block a FastAPI worker indefinitely.
+- [ ] **Request timeout on every AI provider call.** Anthropic (chat + web_search card-lookup path), Gemini — all. A hung upstream must not block a FastAPI worker indefinitely.
 - [ ] **Stripe webhook handler** with signature verification, idempotent against `stripe_events.event_id`. Test end-to-end: create a Stripe test subscription, observe `users_meta.plan` flip to `paid`; trigger a test `invoice.payment_failed`, observe graceful degradation.
 
 ### 17.6 AI cost controls
@@ -1414,7 +1451,7 @@ The shape of the problem: §11.6 shows Claude chat is ~$270/mo at 100 users with
 
 ### 17.7 Security & Auth
 
-- [ ] **API key rotation plan.** One-page doc: which keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `PERPLEXITY_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SENTRY_DSN`), how to rotate each without full redeploy (Railway env-var hot-update where supported), rotation cadence (quarterly baseline; immediately on any suspected leak).
+- [ ] **API key rotation plan.** One-page doc: which keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SENTRY_DSN`), how to rotate each without full redeploy (Railway env-var hot-update where supported), rotation cadence (quarterly baseline; immediately on any suspected leak).
 - [ ] **RLS contract tests (§13.1) passing in CI.** Blocker. A red RLS test cannot ship.
 - [ ] **Supabase brute-force protection enabled** on auth endpoints. Enabled in Supabase dashboard; verify it's on.
 - [ ] **Service-role key audit.** Grep the codebase. Confirm no request handler imports `SUPABASE_SERVICE_ROLE_KEY`. The CI lint from §9.1 enforces this; confirm it's configured and fails the build on violation. The Stripe webhook handler is now a sanctioned third caller (§17.2) — update the lint's allowlist accordingly.
@@ -1425,7 +1462,7 @@ The shape of the problem: §11.6 shows Claude chat is ~$270/mo at 100 users with
 
 At ~100 users across US multi-state, Taiwan, and Japan, most statutory thresholds (CCPA's 100K-resident floor, GDPR territorial scope, etc.) are not crossed. But the baseline below is non-negotiable because (a) paid billing changes the legal posture, (b) international users expect transparent privacy practices, and (c) any future App Store submission requires most of this up front.
 
-- [ ] **Privacy Policy publicly hosted.** Lists every sub-processor (Anthropic, Google, Supabase, PostHog, Sentry, Resend, Perplexity, Stripe). Discloses cross-border transfer to US servers. Names the data categories (transaction data, auth data, product usage events).
+- [ ] **Privacy Policy publicly hosted.** Lists every sub-processor (Anthropic, Google, Supabase, PostHog, Sentry, Resend, Stripe). Discloses cross-border transfer to US servers. Names the data categories (transaction data, auth data, product usage events).
 - [ ] **Terms of Service publicly posted.** Includes liability language appropriate to the business entity once registered; includes the solo-dev best-effort response SLA.
 - [ ] **Account deletion endpoint**, tested end-to-end. Deleting an `auth.users` row cascades through every user-owned table per §8 FK definitions; verify no orphan rows remain. Accessible from in-app Settings — not only by emailing support.
 - [ ] **Explicit consent at signup.** Checkbox (not pre-checked, not implied) for the sub-processor list and cross-border transfer. Record consent timestamp on `users_meta`.
@@ -1441,7 +1478,7 @@ At ~100 users across US multi-state, Taiwan, and Japan, most statutory threshold
 - [ ] **Per-provider outage behavior** decided and implemented:
   - Anthropic down → chat returns a user-visible "AI is temporarily unavailable, please try again in a few minutes." Not a silent hang.
   - Gemini down → categorization falls back to "Uncategorized" with a hint that the user can set it manually. Saves continue.
-  - Perplexity down → card add falls back to manual multiplier entry.
+  - Anthropic web_search rate-limited or `unavailable` → card add falls back to manual multiplier entry (`needs_manual: true` on the proposal). Anthropic-wide outage already covered by the chat-down message above; the card-add surface degrades the same way.
   - Stripe down → no checkout, show the user a polite retry message.
 - [ ] **Gemini 3.1 Flash-Lite preview → 2.5 Flash fallback tested** via the `GEMINI_MODEL` env-var swap in a staging deploy, not just documented.
 - [ ] **SSE reconnect tested under a real Railway redeploy**, not only a local simulation.

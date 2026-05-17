@@ -24,6 +24,12 @@ Version log:
     `propose_transaction`). The cache breakpoint is what keeps the
     §11.3 cost projection valid — without it, per-user variation in
     the prompt would invalidate the cache for every user.
+  * chat_v5 (Day 14) — adds `propose_card` (returns a CardProposal,
+    no DB write) and teaches Claude to ask for the card's network and
+    last 4 digits before calling it. Web_search now runs inside the
+    card-lookup tool impl (not the chat turn), so the surface area
+    Claude reasons about is unchanged. Bumping the version busts the
+    prompt cache once; the next turn re-warms it.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -44,7 +50,7 @@ from typing import Any
 
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v4"
+PROMPT_VERSION = "chat_v5"
 
 
 SYSTEM_PROMPT = """\
@@ -97,6 +103,20 @@ the user names a card ("on my Amex Gold"), call get_cards first to look up \
 the UUID, then pass it as card_id; do not call get_cards more than once per \
 turn — reuse the result already in your context. If two cards match the \
 name ambiguously, ask the user which one before proposing.
+
+- **propose_card**: builds a card proposal when the user wants to add a \
+credit card to their wallet ("add my Chase Sapphire Reserve", "I got an \
+Amex Gold"). The tool runs an authoritative-source web lookup to fill in \
+the rewards program, category multipliers, annual fee, and citations. \
+Returns a payload the client renders as a parse card; the row is only \
+written when the user taps "looks right." **This tool does not add the \
+card.** Do NOT say "I've added it" — the row does not exist yet. \
+**Both `network` (visa / mastercard / amex / discover / other) and \
+`last_four` (4 digits) are REQUIRED.** If the user didn't say either, \
+ASK in a short clarifying message before calling — e.g. "Is that Visa \
+or Amex, and what are the last 4 digits?" Do not guess. The user can \
+have two cards of the same product (two Amex Platinums on the same \
+account), so the last 4 is what disambiguates them.
 
 - **set_goal**: sets a spending budget for a (category, period) slot. \
 "Set" means replace — calling set_goal twice for the same (category, \

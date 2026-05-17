@@ -17,7 +17,12 @@
  */
 
 import { useSyncExternalStore } from "react";
-import { FIXTURE_CARDS, type Card, type Transaction } from "./fixtures";
+import { FIXTURE_CARDS, type Card, type CardProgram, type CardMultiplier, type Transaction } from "./fixtures";
+import {
+  deleteCard as apiDeleteCard,
+  listCards as apiListCards,
+  type CardRow,
+} from "./cardsApi";
 import {
   deleteTransaction as apiDeleteTransaction,
   listTransactions,
@@ -65,6 +70,13 @@ let state: LedgerState = {
  */
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Day 14 — separate timer map for the card-delete undo window. Cards
+// soft-delete on the server (DESIGN.md §8.1), but we delay the network
+// call by the undo grace period so an "undo" can cancel before the
+// server flips active=false. Symmetric to the transaction pattern.
+const cardDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const CARD_DELETE_GRACE_MS = 5_000;
+
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -97,14 +109,18 @@ useAppStore.subscribe((s) => {
   if (bootstrapped && s.jwt !== _lastJwt) {
     _lastJwt = s.jwt;
     void ledger.refresh();
+    void ledger.refreshCards();
   } else if (!s.jwt && _lastJwt) {
     _lastJwt = null;
     // Cancel any in-flight delete timers — they'd hit a 401 with no JWT,
     // and the row's already gone from the user's perspective anyway.
     for (const timer of pendingTimers.values()) clearTimeout(timer);
     pendingTimers.clear();
+    for (const timer of cardDeleteTimers.values()) clearTimeout(timer);
+    cardDeleteTimers.clear();
     setState({
       transactions: [],
+      cards: FIXTURE_CARDS,
       loading: false,
       loaded: false,
       pendingDeletes: {},
@@ -282,13 +298,73 @@ export const ledger = {
     }
   },
 
-  /* ─── Cards: local-only stubs (no backend in v1) ─────────────── */
+  /* ─── Cards: wired to /cards backend as of Day 14 ────────────── */
 
-  deleteCard(id: string) {
-    setState({ cards: state.cards.filter((c) => c.id !== id) });
+  /**
+   * Fetch /cards and replace local state.
+   *
+   * Called automatically on JWT change (alongside `refresh()`). Maps the
+   * `CardRow` wire shape to the local `Card` shape consumed by every
+   * Lovable-imported card-rendering component. The mapping intentionally
+   * drops `source_urls`, `deactivated_at`, and `program` strings outside
+   * the Lovable enum (folded to "Cash") — those aren't displayed on the
+   * post-onboarding cards list, which is the only consumer of the
+   * default `cards` view. The breakdown filter calls
+   * `refreshCardsIncludingInactive()` if it needs deactivated rows.
+   */
+  async refreshCards(): Promise<void> {
+    const { jwt } = useAppStore.getState();
+    if (!jwt) return;
+    try {
+      const resp = await apiListCards();
+      setState({ cards: resp.items.map(cardRowToFixture) });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("ledger cards refresh failed", err);
+    }
   },
 
-  insertCard(card: Card, atIndex: number) {
+  /**
+   * Soft-delete a card via the backend, after a grace window for undo.
+   *
+   * Removes the card from local state immediately so the UI updates,
+   * then schedules the actual `DELETE /cards/:id` for after the
+   * `CARD_DELETE_GRACE_MS` window. `undoDeleteCard` cancels the timer.
+   * If the timer fires, the server flips `active=false` and stamps
+   * `deactivated_at` (DESIGN.md §8.1). Inactive rows are never revived
+   * — a re-add via /cards/confirm produces a fresh `card_id`.
+   */
+  deleteCard(id: string): void {
+    setState({ cards: state.cards.filter((c) => c.id !== id) });
+    const existing = cardDeleteTimers.get(id);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(async () => {
+      cardDeleteTimers.delete(id);
+      try {
+        await apiDeleteCard(id);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("ledger card delete failed", err);
+      }
+    }, CARD_DELETE_GRACE_MS);
+    cardDeleteTimers.set(id, timer);
+  },
+
+  /**
+   * Restore an optimistically-removed card before the grace timer fires.
+   *
+   * Cancels the pending API DELETE. The card reappears at its original
+   * index in the list. If called *after* the timer fired (race), the
+   * backend already soft-deleted it; the local re-insert will look
+   * correct until the next refresh, at which point the row disappears.
+   * Acceptable UX paper-cut for v1.
+   */
+  insertCard(card: Card, atIndex: number): void {
+    const timer = cardDeleteTimers.get(card.id);
+    if (timer) {
+      clearTimeout(timer);
+      cardDeleteTimers.delete(card.id);
+    }
     const next = [...state.cards];
     next.splice(Math.max(0, Math.min(atIndex, next.length)), 0, card);
     setState({ cards: next });
@@ -331,6 +407,37 @@ export function currentMonthTransactions(transactions: Transaction[]): Transacti
 
 export function totalCents(transactions: Transaction[]): number {
   return transactions.reduce((s, t) => s + t.amountCents, 0);
+}
+
+/* ─── CardRow → Card mapper (backend wire shape → Lovable shape) ─── */
+
+// Coarse mapping from the backend's CardProgram enum onto the existing
+// Lovable Card type. The Lovable type predates Day 14's enum and uses
+// "ThankYou" / "Cash" labels; anything not directly representable folds
+// to "Cash" (visually a neutral chip).
+const PROGRAM_TO_FIXTURE: Record<string, CardProgram | undefined> = {
+  UR: "UR",
+  MR: "MR",
+  Bilt: "Bilt",
+  TYP: "ThankYou",
+  Other: "Cash",
+};
+
+export function cardRowToFixture(row: CardRow): Card {
+  const program = PROGRAM_TO_FIXTURE[row.program];
+  const multipliers: CardMultiplier[] = Object.entries(row.multipliers ?? {})
+    .map(([label, factor]) => ({ label, factor: Number(factor) }))
+    .filter((m) => Number.isFinite(m.factor) && m.factor > 0)
+    // Highest multiplier first so the most valuable bonus reads first.
+    .sort((a, b) => b.factor - a.factor);
+  return {
+    id: row.id,
+    name: row.name,
+    last4: row.last_four ?? "",
+    color: row.color ?? undefined,
+    program,
+    multipliers: multipliers.length > 0 ? multipliers : undefined,
+  };
 }
 
 /* ─── First-transaction caption flag (still localStorage) ───────── */

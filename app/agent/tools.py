@@ -38,7 +38,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+from app.integrations.card_lookup import lookup_card
 from app.integrations.gemini import GeminiError, categorize
+from app.models.cards import CardNetwork, CardProgram, CardProposal
 from app.models.goals import Goal, GoalPeriod, SetGoalRequest
 from app.models.transactions import (
     DEFAULT_LIMIT,
@@ -629,6 +631,74 @@ RENDER_CHART_TOOL: dict[str, Any] = {
 }
 
 
+PROPOSE_CARD_TOOL: dict[str, Any] = {
+    "name": "propose_card",
+    "description": (
+        "Build a card proposal from a user-described credit card the user "
+        "wants to add to their wallet. The tool runs a web_search-backed "
+        "lookup against authoritative card-rewards sources (NerdWallet, "
+        "The Points Guy, US Credit Card Guide, Doctor of Credit) to fill "
+        "in the rewards program, category multipliers, annual fee, the "
+        "card network, and citations. Returns a CardProposal — it does "
+        "NOT write a row. The client renders the proposal as a parse card; "
+        "the row is only created when the user taps the confirm button "
+        "(which triggers POST /cards/confirm). "
+        "Only `last_four` is required. The card network is almost always "
+        "determinable from the card name (Chase Sapphire = Visa, all Amex "
+        "cards = Amex, Citi Double Cash = Mastercard, etc.) — DO NOT ask "
+        "the user which network their card is on; the lookup fills it. "
+        "Pass `network` only if the user explicitly told you ('my Visa "
+        "Sapphire'). Do not say 'I added it' after calling this tool — "
+        "the row does not exist yet."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["last_four", "program"],
+        "properties": {
+            "network": {
+                "type": "string",
+                "enum": ["visa", "mastercard", "amex", "discover", "other"],
+                "description": (
+                    "Card network. OPTIONAL. Only pass when the user "
+                    "explicitly named it ('my Visa Sapphire'). For nearly "
+                    "every product the lookup fills it from the card name "
+                    "— do NOT ask the user."
+                ),
+            },
+            "last_four": {
+                "type": "string",
+                "pattern": r"^\d{4}$",
+                "description": (
+                    "Last 4 digits of the card number. Required — the user "
+                    "knows this and it's what disambiguates two of the "
+                    "same product (e.g. two Amex Platinums). Ask the user "
+                    "in a short clarifying message if they didn't say."
+                ),
+            },
+            "program": {
+                "type": "string",
+                "description": (
+                    "The card's display name as the user said it, e.g. "
+                    "'Chase Sapphire Reserve', 'Amex Gold'. This becomes "
+                    "the `name` on the proposed card and is also what we "
+                    "search the web for. NOT the rewards-program enum — "
+                    "the lookup fills that in."
+                ),
+            },
+            "alias": {
+                "type": "string",
+                "description": (
+                    "Optional nickname the user wants to remember the card "
+                    "by (e.g. 'travel card'). Not currently stored as a "
+                    "separate column — included for forward-compat."
+                ),
+            },
+        },
+    },
+}
+
+
 SET_GOAL_TOOL: dict[str, Any] = {
     "name": "set_goal",
     "description": (
@@ -944,6 +1014,89 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     return proposal.model_dump(mode="json")
 
 
+class ProposeCardRequest(BaseModel):
+    """Tool input for `propose_card`.
+
+    `program` is the card's *display name* (what the user calls it,
+    e.g. "Chase Sapphire Reserve") — not the rewards-program enum.
+    Distinguishing here saves an awkward second tool arg; the rewards
+    program (UR / MR / TYP / Bilt / Other) is what the web_search
+    lookup fills in.
+
+    Example request:
+        {"network": "visa", "last_four": "1234",
+         "program": "Chase Sapphire Reserve"}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    network: CardNetwork
+    last_four: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
+    program: str
+    alias: str | None = None
+
+    @field_validator("program")
+    @classmethod
+    def _v_program(cls, value: str) -> str:
+        """Strip and reject empty card-name searches."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("program (card name) cannot be empty")
+        if len(stripped) > 120:
+            raise ValueError("program (card name) is unreasonably long")
+        return stripped
+
+
+def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
+    """Build a CardProposal from a chat-described credit card.
+
+    Request:
+        {"network": "visa", "last_four": "1234",
+         "program": "Chase Sapphire Reserve", "alias": "travel card"}
+
+    Response:
+        CardProposal-shaped dict; see app/models/cards.py.
+
+    The tool does NOT write to `cards`. The structural test in
+    tests/contracts/test_tool_write_invariant.py enforces this — if a
+    refactor here ever calls `.insert(` / `.upsert(` / `.update(` /
+    `.delete(` / `.rpc(`, the test fails.
+
+    Behavior contract:
+      * Validation failure (missing network/last_four, malformed 4-digit
+        last_four) → ValueError propagates and is wrapped by the agent
+        loop into an `is_error` tool_result block. Claude sees the
+        error and re-prompts the user (system prompt teaches this).
+      * `lookup_card` returns `needs_manual=True` → return a
+        CardProposal with empty multipliers + needs_manual=True so the
+        parse card surfaces the manual-fill path. The user typed
+        network and last_four already; only the multipliers / annual
+        fee need typing.
+      * Lookup succeeds → fold the program/multipliers/annual_fee/issuer
+        into the proposal. `issuer` defaults to "Unknown" if the lookup
+        couldn't resolve it (the schema requires a non-empty string).
+    """
+    request = ProposeCardRequest.model_validate(kwargs)
+    result = lookup_card(request.program, user)
+
+    issuer = result.issuer or "Unknown"
+    program_enum: CardProgram = result.program or "Other"
+
+    proposal = CardProposal(
+        network=request.network,
+        last_four=request.last_four,
+        name=request.program,
+        issuer=issuer,
+        program=program_enum,
+        multipliers=result.multipliers,
+        annual_fee=result.annual_fee,
+        source_urls=result.source_urls,
+        alias=request.alias,
+        needs_manual=result.needs_manual,
+    )
+    return proposal.model_dump(mode="json")
+
+
 def set_goal(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     """Upsert a spending budget for a (category, period) slot.
 
@@ -1026,6 +1179,7 @@ TOOL_REGISTRY: dict[str, tuple[dict[str, Any], Callable[..., Any]]] = {
     GET_SPENDING_SUMMARY_TOOL["name"]: (GET_SPENDING_SUMMARY_TOOL, get_spending_summary),
     GET_CARDS_TOOL["name"]: (GET_CARDS_TOOL, get_cards),
     PROPOSE_TRANSACTION_TOOL["name"]: (PROPOSE_TRANSACTION_TOOL, propose_transaction),
+    PROPOSE_CARD_TOOL["name"]: (PROPOSE_CARD_TOOL, propose_card),
     SET_GOAL_TOOL["name"]: (SET_GOAL_TOOL, set_goal),
     RENDER_CHART_TOOL["name"]: (RENDER_CHART_TOOL, render_chart),
 }

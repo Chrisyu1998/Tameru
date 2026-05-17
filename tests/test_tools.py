@@ -70,19 +70,21 @@ def authed_user_b(user_b) -> AuthedUser:
 
 
 def test_registry_contains_expected_surface():
-    """Verify the registry holds reads + propose_transaction + set_goal + render_chart.
+    """Verify the registry holds reads + the propose surface + set_goal + render_chart.
 
-    Cumulative as of Day 10b:
+    Cumulative as of Day 14:
       * Day 9a — read tools (`calculate_total`, `get_transactions`,
         `get_subscriptions`, `get_spending_summary`, `get_cards`).
       * Day 9b — `propose_transaction` (propose-then-confirm) and
         `set_goal` (lone direct-write carve-out).
       * Day 10b — `render_chart` (transport-only echo for generative
         charts; see app/agent/tools.py:render_chart).
+      * Day 14 — `propose_card` (returns a CardProposal; the row commits
+        via `POST /cards/confirm` after the user taps "looks right").
 
-    `propose_card` / `propose_subscription` remain out — they land on
-    Day 14 / Day 19 alongside their confirm endpoints. If one of those
-    slips in early, this test fails as the structural alarm.
+    `propose_subscription` remains out — it lands on Day 19 alongside its
+    confirm endpoint. If it slips in early, this test fails as the
+    structural alarm.
     """
     expected = {
         "calculate_total",
@@ -91,14 +93,15 @@ def test_registry_contains_expected_surface():
         "get_spending_summary",
         "get_cards",
         "propose_transaction",
+        "propose_card",
         "set_goal",
         "render_chart",
     }
     assert set(TOOL_REGISTRY) == expected, (
-        "Reads + propose_transaction + set_goal + render_chart are the "
-        "expected v1 surface. propose_card / propose_subscription belong "
-        "to Day 14 / Day 19; if one of those landed early, this test "
-        "failing is the alarm."
+        "Reads + propose_transaction + propose_card + set_goal + "
+        "render_chart are the expected v1 surface. propose_subscription "
+        "belongs to Day 19; if it landed early, this test failing is "
+        "the alarm."
     )
 
 
@@ -672,13 +675,16 @@ def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
     """active=false rows must not surface. Day 14's DELETE soft-deletes
     by setting active=false rather than removing the row."""
     client = supabase_for_user(user_a.jwt)
+    tag = _tag()
     soft_id = (
         client.table("cards")
         .insert({
             "user_id": user_a.id,
-            "name": f"Inactive-{_tag()}",
+            "name": f"Inactive-{tag}",
             "issuer": "Chase",
             "program": "UR",
+            "network": "visa",
+            "last_four": _digits4(tag),
             "active": False,
         })
         .execute()
@@ -692,13 +698,16 @@ def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
 def test_get_cards_returns_multiple_cards(authed_user_a, user_a):
     """Verify that get cards returns multiple cards."""
     client = supabase_for_user(user_a.jwt)
+    tag = _tag()
     extra_id = (
         client.table("cards")
         .insert({
             "user_id": user_a.id,
-            "name": f"Extra-{_tag()}",
+            "name": f"Extra-{tag}",
             "issuer": "Amex",
             "program": "MR",
+            "network": "amex",
+            "last_four": _digits4(tag),
         })
         .execute()
         .data[0]["id"]
@@ -737,6 +746,15 @@ def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
             "date": "2026-05-13",
             "category": "Other",  # skip Gemini in this dispatch smoke test
         },
+        # propose_card calls into lookup_card → Anthropic + web_search; the
+        # dispatch smoke test runs offline. We bypass the network roundtrip
+        # by monkeypatching lookup_card to return a deterministic stub
+        # below. The args here just satisfy the required-fields schema.
+        "propose_card": {
+            "network": "visa",
+            "last_four": "0000",
+            "program": "Dispatch Test Card",
+        },
         # `Drugstores`/`year` is unused by other set_goal tests in this
         # file so this smoke test won't race with their assertions on a
         # shared session-scoped row.
@@ -750,9 +768,24 @@ def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
             "title": "smoke",
         },
     }
-    for name in TOOL_REGISTRY:
-        result = execute_tool(name, minimal_inputs.get(name, {}), authed_user_a)
-        assert isinstance(result, dict)
+    # Neutralize the network-bound branch of propose_card so the dispatch
+    # smoke test stays offline. Importing locally so the monkeypatch fixture
+    # isn't required at module scope.
+    from app.models.cards import CardLookupResult as _LookupResult
+    import pytest as _pytest
+
+    mp = _pytest.MonkeyPatch()
+    try:
+        mp.setattr(
+            tools_module,
+            "lookup_card",
+            lambda name, user: _LookupResult(needs_manual=True, raw_text="stub"),
+        )
+        for name in TOOL_REGISTRY:
+            result = execute_tool(name, minimal_inputs.get(name, {}), authed_user_a)
+            assert isinstance(result, dict)
+    finally:
+        mp.undo()
 
 
 def test_execute_tool_unknown_name_raises_keyerror(authed_user_a):
@@ -912,13 +945,16 @@ def test_propose_transaction_drops_inactive_card_id(
         lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
     )
     client = supabase_for_user(user_a.jwt)
+    tag = _tag()
     inactive_card_id = (
         client.table("cards")
         .insert({
             "user_id": user_a.id,
-            "name": f"Closed-{_tag()}",
+            "name": f"Closed-{tag}",
             "issuer": "Citi",
             "program": "TYP",
+            "network": "mastercard",
+            "last_four": _digits4(tag),
             "active": False,
         })
         .execute()
@@ -1050,6 +1086,18 @@ def test_set_goal_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_
 def _tag() -> str:
     """Support tag."""
     return uuid.uuid4().hex[:8]
+
+
+def _digits4(tag: str) -> str:
+    """Derive a unique 4-digit last_four from a hex tag.
+
+    `cards.last_four` is now part of the partial unique identity index
+    (DESIGN.md §8.1, Day 14 migration). Tests that insert into `cards`
+    directly need values that don't collide with the session-scoped
+    card_a / card_b fixtures or with each other across repeated runs.
+    """
+    digits = "".join(c for c in tag if c.isdigit())
+    return (digits + "0000")[:4]
 
 def _seed_transaction(
     user,
