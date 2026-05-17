@@ -433,10 +433,8 @@ Subscriptions are auto-logged on their billing schedule by a `pg_cron` job — f
 
 **Idempotency:**
 
-- `UNIQUE (subscription_id, date) WHERE subscription_id IS NOT NULL` on `transactions`.
-- Insert uses `ON CONFLICT DO NOTHING`.
-- `next_billing_date` advances only after successful insert, in the same transaction.
-- The cron function wraps execution in `pg_try_advisory_lock` to prevent concurrent runs.
+- **Auto-log path (pg_cron):** `UNIQUE (subscription_id, date) WHERE subscription_id IS NOT NULL` on `transactions`. Insert uses `ON CONFLICT DO NOTHING`. `next_billing_date` advances only after successful insert, in the same transaction. The cron function wraps execution in `pg_try_advisory_lock` to prevent concurrent runs.
+- **Chat-confirm path (user-initiated):** `subscriptions.client_request_id` + partial unique index `(user_id, client_request_id) WHERE client_request_id IS NOT NULL`. Same shape as `transactions.client_request_id` (§8.2). A replayed `POST /subscriptions/confirm` (e.g. the Day 15 offline queue drains after a lost response) returns the existing row instead of creating a duplicate. Without this, a duplicated subscription would be independently auto-logged each month by the cron above — the dup cost would compound until the user noticed. Cards rely on a natural-key index instead (§8.1); subscriptions can't because no natural key distinguishes a valid second subscription on the same card (family vs. personal Netflix).
 
 Auto-logged transactions appear in the main list tagged with a 🔄 icon. The AI chat is the primary management interface ("Add Netflix $15.99 monthly on my Amex Gold" creates the subscription conversationally).
 
@@ -809,7 +807,10 @@ The cost: two rows can exist in `cards` with the same `(user_id, issuer, last_fo
 | next_billing_date | date | Computed next auto-log date |
 | category | text | Default category for auto-logged tx |
 | status | text | active \| paused \| cancelled |
+| client_request_id | UUID | Nullable. Minted by `propose_subscription`; powers the same offline-replay idempotency contract as `transactions.client_request_id` (§8.2). pg_cron-written rows leave it NULL. |
 | created_at | timestamptz | |
+
+Partial unique index `subscriptions_user_client_request_id_unique ON subscriptions (user_id, client_request_id) WHERE client_request_id IS NOT NULL` makes the chat-confirm path idempotent under the Day 15 offline-queue drain. Cards rely on a natural-key partial unique index instead (§8.1); subscriptions can't, because two valid subscriptions on the same card with the same name and frequency cannot be distinguished by a natural key (e.g., family plan vs. personal plan). Without idempotency here, a duplicated subscription would be auto-logged independently by pg_cron every billing cycle, multiplying the recovery cost monthly — see Day 19 prompt's "Why subscriptions get idempotency where cards don't" for the full asymmetry.
 
 ### 8.4 `merchant_category` (merchant memory)
 
@@ -1095,8 +1096,8 @@ Tameru ships as a Progressive Web App. A Swift-native iOS migration is admitted 
 
 - Installable via Safari "Add to Home Screen."
 - Service Worker caches the app shell for offline load.
-- Transactions made offline stored in IndexedDB; synced on reconnect.
-- Conflict resolution: not needed — single active device per user (§9.1).
+- **Offline scope (chat-unified UX, §6.2 + invariant 8).** A confirm tap (`POST /<resource>/confirm`) that fires while offline queues in IndexedDB and syncs on reconnect via a window-scope `online` listener (Day 15). For transactions the queue is keyed by `client_request_id` and the server returns the existing row idempotently on replay (§8.2). For cards there is no `client_request_id`, but the `cards_active_identity_uniq` partial index on `(user_id, issuer, last_four) WHERE active=true` makes a replay land as a 409 the drain treats as a successful dequeue. **Composing a new transaction, card, or subscription requires connectivity** because the parse step runs server-side in the Claude agent loop (`propose_*` tools are FastAPI route logic, not on-device). v1 does not support fully-offline composition; the queue catches the narrow window between parse-card-render (online) and confirm-tap (offline). The post-launch enhancement, if real-user feedback warrants it, is a client-side regex/heuristic NL parser fallback — not a queue redesign.
+- Conflict resolution: not needed — single active device per user (§9.1). Queue entries carry `owner_user_id` so a sign-out / sign-in-as-different-user flow on the same device cannot drain entries under the wrong account.
 - Lighthouse PWA score ≥ 90.
 - Mobile-first layout — all core flows completable with one thumb.
 - Transaction logged in <10 seconds from tap to save.
