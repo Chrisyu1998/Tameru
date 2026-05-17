@@ -484,6 +484,236 @@ def test_calculate_total_does_not_persist_tameru_proposal_block(
 
 
 # ---------------------------------------------------------------------------
+# GET /chat/messages reconstructs parse cards + committed state for rehydrate.
+# ---------------------------------------------------------------------------
+
+
+def test_get_messages_returns_tameru_proposal_blocks_for_rehydrate(
+    client, user_a, card_a, monkeypatch
+):
+    """Verify /chat/messages exposes tameru_proposal blocks for rehydrate.
+
+    After a propose_transaction turn, /chat/messages should return the
+    assistant row with a `tameru_proposal` block on `content_blocks` so
+    the client can reconstruct an interactive parse card on page refresh
+    instead of orphaning "here's the parse" prose without a card.
+    """
+    _seed_transaction(
+        user_a, card_id=card_a, merchant=f"Lupa-{uuid.uuid4().hex[:6]}", amount="42.50"
+    )
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[
+                    _tool_use(
+                        "propose_transaction",
+                        {
+                            "merchant": "Blue Bottle",
+                            "amount": 5.50,
+                            "date": "2026-05-13",
+                            "category": "Coffee Shops",
+                        },
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("Here's the parse — tap looks right.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "5.50 on blue bottle"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    history = client.get(
+        f"/chat/messages?conversation_id={conversation_id}",
+        headers=_auth(user_a),
+    )
+    assert history.status_code == 200
+    body = history.json()
+    assert len(body["messages"]) == 2
+    assistant_blocks = body["messages"][1]["content_blocks"]
+    proposal_blocks = [
+        b for b in assistant_blocks if b.get("type") == "tameru_proposal"
+    ]
+    assert len(proposal_blocks) == 1
+    assert proposal_blocks[0]["tool_name"] == "propose_transaction"
+    # Not yet confirmed → no committed_id on the block.
+    assert "committed_id" not in proposal_blocks[0]
+
+
+def test_get_messages_annotates_committed_id_for_confirmed_transaction(
+    client, user_a, card_a, monkeypatch
+):
+    """Verify the rehydrate endpoint marks already-logged proposals.
+
+    Drive a propose_transaction turn, simulate the user tapping "looks
+    right" by inserting a `transactions` row with the same
+    `client_request_id`, then assert /chat/messages decorates the
+    matching tameru_proposal block with `committed_id`. The UI uses this
+    to render ParseCard in its locked "logged." state instead of inviting
+    a duplicate confirm.
+    """
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[
+                    _tool_use(
+                        "propose_transaction",
+                        {
+                            "merchant": "Sunny Coffee",
+                            "amount": 4.25,
+                            "date": "2026-05-13",
+                            "category": "Coffee Shops",
+                        },
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("Here's the parse.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "4.25 coffee"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    # Pull the proposal's client_request_id from the persisted tameru_proposal
+    # block — that's the idempotency key the rehydrate lookup joins on.
+    rows = _chat_rows(user_a, conversation_id)
+    proposal = next(
+        b for b in rows[1]["content_blocks"] if b.get("type") == "tameru_proposal"
+    )
+    crid = proposal["result"]["client_request_id"]
+
+    # Simulate "looks right" → /transactions/confirm by inserting a row
+    # with the same client_request_id. RLS scopes the write to user_a.
+    sb = supabase_for_user(user_a.jwt)
+    tx_resp = (
+        sb.table("transactions")
+        .insert(
+            {
+                "user_id": user_a.id,
+                "card_id": card_a,
+                "merchant": "Sunny Coffee",
+                "amount": "4.25",
+                "date": "2026-05-13",
+                "category": "Coffee Shops",
+                "source": "nlp",
+                "client_request_id": crid,
+            }
+        )
+        .execute()
+    )
+    tx_id = tx_resp.data[0]["id"]
+
+    history = client.get(
+        f"/chat/messages?conversation_id={conversation_id}",
+        headers=_auth(user_a),
+    )
+    assert history.status_code == 200
+    body = history.json()
+    proposal_blocks = [
+        b
+        for b in body["messages"][1]["content_blocks"]
+        if b.get("type") == "tameru_proposal"
+    ]
+    assert len(proposal_blocks) == 1
+    assert proposal_blocks[0].get("committed_id") == tx_id
+
+
+def test_get_messages_falls_back_to_trace_for_legacy_rows(
+    client, user_a, card_a, monkeypatch
+):
+    """Verify trace-based fallback fills in tameru_proposal blocks.
+
+    Rows persisted before Day 14b's `_persist_turn` augmentation carry
+    only prose on the assistant `content_blocks`. /chat/messages must
+    still rehydrate parse cards for those by mining propose_* tool calls
+    out of `chat_turn_trace`. Simulated here by overwriting the assistant
+    row's content_blocks to drop the tameru_proposal block after the
+    persist completed — that's the post-condition for any legacy turn.
+    """
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[
+                    _tool_use(
+                        "propose_transaction",
+                        {
+                            "merchant": "Test Roastery",
+                            "amount": 6.00,
+                            "date": "2026-05-13",
+                            "category": "Coffee Shops",
+                        },
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("Here's the parse.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "6 coffee"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    # Strip the augmented block to mimic a legacy row.
+    sb = supabase_for_user(user_a.jwt)
+    rows_resp = (
+        sb.table("chat_messages")
+        .select("id, content_blocks, role")
+        .eq("conversation_id", conversation_id)
+        .execute()
+    )
+    assistant_row = next(r for r in (rows_resp.data or []) if r["role"] == "assistant")
+    legacy_blocks = [
+        b for b in assistant_row["content_blocks"] if b.get("type") != "tameru_proposal"
+    ]
+    sb.table("chat_messages").update({"content_blocks": legacy_blocks}).eq(
+        "id", assistant_row["id"]
+    ).execute()
+
+    history = client.get(
+        f"/chat/messages?conversation_id={conversation_id}",
+        headers=_auth(user_a),
+    )
+    assert history.status_code == 200
+    body = history.json()
+    proposal_blocks = [
+        b
+        for b in body["messages"][1]["content_blocks"]
+        if b.get("type") == "tameru_proposal"
+    ]
+    assert len(proposal_blocks) == 1, (
+        "trace fallback didn't rehydrate the propose_transaction call"
+    )
+    assert proposal_blocks[0]["tool_name"] == "propose_transaction"
+    assert proposal_blocks[0]["result"]["merchant"] == "Test Roastery"
+
+
+# ---------------------------------------------------------------------------
 # Conversation continuity — providing conversation_id reuses it AND replays
 # history to the model.
 # ---------------------------------------------------------------------------

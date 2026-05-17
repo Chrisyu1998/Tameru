@@ -1015,6 +1015,11 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
   }
 
   // Assistant row — may carry `tameru_proposal` blocks alongside text.
+  // The backend (chat.py) annotates each block with `committed_id` when
+  // the proposal's client_request_id (transactions) or name (cards) lines
+  // up with a row in the user's ledger/wallet, so we can mark a
+  // rehydrated parse card as already-logged instead of re-inviting a
+  // duplicate confirm.
   const proposals = m.content_blocks.filter(
     (b) => b.type === "tameru_proposal",
   ) as Array<{
@@ -1022,6 +1027,7 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
     tool_name?: unknown;
     input?: unknown;
     result?: unknown;
+    committed_id?: unknown;
   }>;
 
   if (proposals.length === 0) {
@@ -1043,6 +1049,8 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
         ? (p.result as Record<string, unknown>)
         : {}) as Record<string, unknown>,
     };
+    const committedId =
+      typeof p.committed_id === "string" ? p.committed_id : undefined;
 
     if (synthetic.name === "propose_transaction") {
       const draft = _proposalToDraft(synthetic);
@@ -1053,6 +1061,7 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
         kind: "parse",
         preface: !prefaceClaimed && text ? text : undefined,
         draft,
+        committedTxId: committedId,
       });
       prefaceClaimed = true;
     } else if (synthetic.name === "propose_card") {
@@ -1064,6 +1073,7 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
         kind: "card-parse",
         preface: !prefaceClaimed && text ? text : undefined,
         draft,
+        committedCardId: committedId,
       });
       prefaceClaimed = true;
     }

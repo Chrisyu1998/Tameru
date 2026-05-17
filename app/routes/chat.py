@@ -198,17 +198,39 @@ def chat_messages(
     """Return human-visible history for one conversation, oldest-first.
 
     Caller: chat page mount, when a `tameru-chat-conversation-id` is in
-    localStorage but `chatStore.messages` is empty (Day 10b §3). The wire
-    shape mirrors `chat_messages` minus internal columns — `role +
-    content_blocks + created_at` is the minimum the UI needs to re-render
-    text bubbles. Tool-use trace rows live in `chat_turn_trace` and are
-    deliberately not surfaced.
+    localStorage but `chatStore.messages` is empty (Day 10b §3). Response
+    is the `chat_messages` row content_blocks (text + tameru_proposal
+    blocks for parse-card rehydrate, Day 14b) plus per-block
+    `committed_id` annotations for already-confirmed proposals so the UI
+    renders them in the "logged" state instead of inviting a duplicate
+    confirm.
+
+    Trace fallback: for assistant rows whose chat_messages content_blocks
+    don't already carry `tameru_proposal` blocks (Day-12-and-earlier data
+    persisted before Day 14b's `_persist_turn` augmentation, or any row
+    where the embed was skipped), the corresponding `chat_turn_trace` row
+    is mined for propose_* tool_use+tool_result pairs and those become
+    synthetic tameru_proposal blocks on the response. The trace is the
+    durable source of truth (DESIGN.md §8.12); this fallback means old
+    conversations don't lose their parse cards forever just because the
+    persist-time augmentation didn't exist yet.
+
+    Committed-state detection: client_request_id from each transaction
+    proposal is joined against `transactions` (RLS-scoped); a hit means
+    the user already tapped "looks right," so we set `committed_id` on
+    the block and the UI flips ParseCard into the locked "logged." state.
+    For card proposals we match by `name` against active cards (cards
+    lack an idempotency key today — see DESIGN.md §8.1; name-uniqueness
+    within a user's wallet is a best-effort proxy that's fine for v1's
+    ~10-card cap).
 
     Capped at MESSAGES_PAGE_LIMIT recent rows. `has_more=true` tells the
     UI there's older history (no pagination cursor in v1 — the user is
     expected to start a new conversation, not paginate backwards).
 
-    RLS: read scoped via the user's JWT against `chat_messages_owner`.
+    RLS: read scoped via the user's JWT against `chat_messages_owner`
+    and `chat_turn_trace_owner`. The transactions/cards lookups for
+    committed-state also flow through the JWT-scoped client.
     """
     client = supabase_for_user(user.jwt)
     # Fetch limit+1 to detect more rows without a separate count query.
@@ -228,6 +250,10 @@ def chat_messages(
     # order for the UI so the rendering code stays the simpler append-only
     # shape.
     rows.reverse()
+
+    _inject_proposals_from_trace(client, conversation_id, rows)
+    _annotate_committed_proposals(client, rows)
+
     messages = [
         ChatMessageResponse(
             role=row["role"],
@@ -359,6 +385,244 @@ def _persist_turn(
             "content_blocks": augmented_blocks,
         },
     ]).execute()
+
+def _inject_proposals_from_trace(
+    client: Any, conversation_id: UUID, rows: list[dict[str, Any]]
+) -> None:
+    """Backfill `tameru_proposal` blocks on assistant rows that lack them.
+
+    Day 14b started embedding proposal payloads on the assistant
+    `chat_messages.content_blocks` at persist time so /chat/messages can
+    rehydrate parse cards directly. For rows persisted earlier (or any
+    row where the embed got skipped), the proposal lives only in
+    `chat_turn_trace.messages` — this helper mines that trace and stitches
+    the synthetic blocks back onto the matching assistant row in place.
+
+    Pairing: chat_messages has 2 rows per turn (user + assistant) in seq
+    order; chat_turn_trace has 1 row per turn in seq order. The Nth
+    assistant chat_message corresponds to the Nth trace row in the
+    in-memory list. Anything that breaks that 1:1 (a deleted row, a
+    partially-persisted turn from a PERSISTENCE_FAILED branch) drops the
+    fallback for that turn rather than misaligning everything after — the
+    user sees the prose without a card, which matches the pre-fix UX and
+    is preferable to silently re-pairing the wrong proposal onto the
+    wrong message.
+
+    Idempotent: rows that already have a `tameru_proposal` block are left
+    alone, so re-running this on already-augmented data is a no-op.
+    """
+    assistant_rows = [r for r in rows if r.get("role") == "assistant"]
+    if not assistant_rows:
+        return
+
+    # Only fetch trace data if at least one assistant row is missing the
+    # embedded blocks — every modern turn carries them, so the typical
+    # call should skip the second query entirely.
+    needs_fallback = [
+        r
+        for r in assistant_rows
+        if not any(
+            isinstance(b, dict) and b.get("type") == "tameru_proposal"
+            for b in (r.get("content_blocks") or [])
+        )
+    ]
+    if not needs_fallback:
+        return
+
+    trace_resp = (
+        client.table("chat_turn_trace")
+        .select("messages, seq")
+        .eq("conversation_id", str(conversation_id))
+        .order("seq")
+        .execute()
+    )
+    trace_rows = trace_resp.data or []
+    if len(trace_rows) != len(assistant_rows):
+        # Pairing assumption violated — abort the fallback rather than
+        # risk attaching a proposal to the wrong turn. The user gets the
+        # pre-fix UX (orphaned prose) on this conversation; the next
+        # turn's persistence will land properly augmented blocks.
+        return
+
+    for assistant_row, trace_row in zip(assistant_rows, trace_rows):
+        existing = assistant_row.get("content_blocks") or []
+        if any(
+            isinstance(b, dict) and b.get("type") == "tameru_proposal"
+            for b in existing
+        ):
+            continue
+        proposals = _extract_proposals_from_trace(trace_row.get("messages") or [])
+        if proposals:
+            assistant_row["content_blocks"] = list(existing) + proposals
+
+
+def _extract_proposals_from_trace(
+    trace_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Find propose_* tool_use+tool_result pairs in one trace row.
+
+    The trace stores the Anthropic wire-shape message list — assistant
+    messages with `tool_use` blocks, then user messages with matching
+    `tool_result` blocks (paired by `tool_use_id`). This helper walks the
+    list, builds a result lookup, and emits one synthetic tameru_proposal
+    dict per matched propose_transaction/propose_card pair.
+
+    Tool results in the trace are JSON-encoded strings on
+    `tool_result.content` (that's how Anthropic expects them on the wire);
+    we json.loads them so the synthetic block carries the parsed dict the
+    frontend can render without re-parsing. Errors and is_error results
+    are skipped — the frontend never renders them as parse cards either.
+    """
+    results_by_id: dict[str, dict[str, Any]] = {}
+    for msg in trace_messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_result":
+                continue
+            if block.get("is_error"):
+                continue
+            tool_use_id = block.get("tool_use_id")
+            if not isinstance(tool_use_id, str):
+                continue
+            raw = block.get("content")
+            parsed: Any
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+            else:
+                parsed = raw
+            if not isinstance(parsed, dict) or "error" in parsed:
+                continue
+            results_by_id[tool_use_id] = parsed
+
+    out: list[dict[str, Any]] = []
+    for msg in trace_messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if name not in ("propose_transaction", "propose_card"):
+                continue
+            tool_use_id = block.get("id")
+            result = results_by_id.get(tool_use_id) if isinstance(tool_use_id, str) else None
+            if result is None:
+                continue
+            out.append({
+                "type": "tameru_proposal",
+                "tool_name": name,
+                "input": block.get("input") or {},
+                "result": result,
+            })
+    return out
+
+
+def _annotate_committed_proposals(
+    client: Any, rows: list[dict[str, Any]]
+) -> None:
+    """Attach `committed_id` to proposals the user already confirmed.
+
+    Walks the in-memory rows, collects every proposal's identifier
+    (client_request_id for transactions, name for cards), runs a single
+    RLS-scoped lookup against the respective table, and mutates each
+    block's dict in place with `committed_id` when matched. The UI flips
+    the parse card to its locked "logged." state on that field.
+
+    Card matching is by `name` against active rows — cards don't carry a
+    `client_request_id`, and the proposal's `last_four` is often null
+    (the agent doesn't ask for it up-front). Within a single user's ~10-
+    card wallet, name collisions are rare enough that a best-effort match
+    is fine for v1; the cost of a false negative is the user seeing
+    "looks right" on a card they already added, then getting the 409
+    flow's "you already have it" affordance. A false positive (two cards
+    legitimately share a name) would lock the parse card too early — the
+    same 409 path on the user-visible commit would catch it.
+    """
+    crid_set: set[str] = set()
+    card_name_set: set[str] = set()
+    for row in rows:
+        if row.get("role") != "assistant":
+            continue
+        for block in row.get("content_blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tameru_proposal":
+                continue
+            tool_name = block.get("tool_name")
+            result = block.get("result") or {}
+            if tool_name == "propose_transaction":
+                crid = result.get("client_request_id")
+                if isinstance(crid, str):
+                    crid_set.add(crid)
+            elif tool_name == "propose_card":
+                name = result.get("name")
+                if isinstance(name, str) and name:
+                    card_name_set.add(name)
+
+    committed_txs: dict[str, str] = {}
+    if crid_set:
+        tx_resp = (
+            client.table("transactions")
+            .select("id, client_request_id")
+            .in_("client_request_id", list(crid_set))
+            .execute()
+        )
+        for r in tx_resp.data or []:
+            crid = r.get("client_request_id")
+            tx_id = r.get("id")
+            if isinstance(crid, str) and isinstance(tx_id, str):
+                committed_txs[crid] = tx_id
+
+    committed_cards: dict[str, str] = {}
+    if card_name_set:
+        card_resp = (
+            client.table("cards")
+            .select("id, name")
+            .in_("name", list(card_name_set))
+            .eq("active", True)
+            .execute()
+        )
+        for r in card_resp.data or []:
+            name = r.get("name")
+            card_id = r.get("id")
+            if isinstance(name, str) and isinstance(card_id, str):
+                # First match wins — a wallet with two same-named active
+                # cards is rare, and either id locks the parse card the
+                # same way for the user.
+                committed_cards.setdefault(name, card_id)
+
+    if not committed_txs and not committed_cards:
+        return
+
+    for row in rows:
+        if row.get("role") != "assistant":
+            continue
+        for block in row.get("content_blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") != "tameru_proposal":
+                continue
+            tool_name = block.get("tool_name")
+            result = block.get("result") or {}
+            if tool_name == "propose_transaction":
+                crid = result.get("client_request_id")
+                if isinstance(crid, str) and crid in committed_txs:
+                    block["committed_id"] = committed_txs[crid]
+            elif tool_name == "propose_card":
+                name = result.get("name")
+                if isinstance(name, str) and name in committed_cards:
+                    block["committed_id"] = committed_cards[name]
+
 
 def _sse_frame(event: str, data: str) -> bytes:
     """Encode one SSE frame as bytes.
