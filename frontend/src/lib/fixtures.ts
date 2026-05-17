@@ -28,6 +28,11 @@ export interface Card {
   issuer?: CardIssuer;
   /** Earn rate chips like "4× dining". */
   multipliers?: CardMultiplier[];
+  /**
+   * Annual fee as a string decimal (matches the wire shape). The edit
+   * sheet reads/writes it; the cards-list tile doesn't render it.
+   */
+  annualFee?: string | null;
 }
 
 export interface Transaction {

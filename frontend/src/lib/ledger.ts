@@ -21,6 +21,8 @@ import { FIXTURE_CARDS, type Card, type CardProgram, type CardMultiplier, type T
 import {
   deleteCard as apiDeleteCard,
   listCards as apiListCards,
+  patchCard as apiPatchCard,
+  type CardProgram as WireCardProgram,
   type CardRow,
 } from "./cardsApi";
 import {
@@ -53,6 +55,12 @@ interface LedgerState {
    * with a countdown progress bar.
    */
   pendingDeletes: Record<string, PendingDeleteState>;
+  /**
+   * Cards mid-deletion. Keyed by card id. The card stays in `cards`
+   * until the timer commits, mirroring the transaction undo pattern so
+   * the card row can render the same countdown line.
+   */
+  pendingCardDeletes: Record<string, PendingDeleteState>;
 }
 
 let state: LedgerState = {
@@ -61,6 +69,7 @@ let state: LedgerState = {
   loading: false,
   loaded: false,
   pendingDeletes: {},
+  pendingCardDeletes: {},
 };
 
 /*
@@ -73,9 +82,9 @@ const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // Day 14 — separate timer map for the card-delete undo window. Cards
 // soft-delete on the server (DESIGN.md §8.1), but we delay the network
 // call by the undo grace period so an "undo" can cancel before the
-// server flips status='deleted'. Symmetric to the transaction pattern.
+// server flips status='deleted'. Symmetric to the transaction pattern;
+// reactivity comes from `state.pendingCardDeletes`.
 const cardDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const CARD_DELETE_GRACE_MS = 5_000;
 
 const listeners = new Set<() => void>();
 
@@ -124,6 +133,7 @@ useAppStore.subscribe((s) => {
       loading: false,
       loaded: false,
       pendingDeletes: {},
+      pendingCardDeletes: {},
     });
   }
 });
@@ -147,6 +157,7 @@ export const ledger = {
       loading: false,
       loaded: false,
       pendingDeletes: {},
+      pendingCardDeletes: {},
     };
   },
 
@@ -325,49 +336,122 @@ export const ledger = {
   },
 
   /**
-   * Soft-delete a card via the backend, after a grace window for undo.
+   * PATCH /cards/{id} with the supplied delta. Optimistically updates
+   * local state with the patch; on success swaps in the server's
+   * canonical row; on failure reverts. Mirrors `updateTransaction`.
    *
-   * Removes the card from local state immediately so the UI updates,
-   * then schedules the actual `DELETE /cards/:id` for after the
-   * `CARD_DELETE_GRACE_MS` window. `undoDeleteCard` cancels the timer.
-   * If the timer fires, the server flips `status='deleted'` and stamps
-   * `deleted_at` (DESIGN.md §8.1). Deleted rows are never revived
-   * — a re-add via /cards/confirm produces a fresh `card_id`.
+   * Mutable fields per the backend `CardPatchRequest`: name, program,
+   * multipliers, annual_fee, color. Identity fields (issuer, network,
+   * last_four) are not patchable on the server — supply them here and
+   * the server simply ignores them.
    */
-  deleteCard(id: string): void {
-    setState({ cards: state.cards.filter((c) => c.id !== id) });
-    const existing = cardDeleteTimers.get(id);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(async () => {
+  async updateCard(
+    id: string,
+    patch: Partial<{
+      name: string;
+      program: CardProgram | undefined;
+      multipliers: CardMultiplier[];
+      annualFee: string | null;
+      color: string | null;
+    }>,
+  ): Promise<void> {
+    const prior = state.cards.find((c) => c.id === id);
+    if (!prior) return;
+    // null on the wire means "clear it" — fold to undefined on the
+    // local Card shape so the optimistic copy stays in-type.
+    const optimistic: Card = {
+      ...prior,
+      ...(patch.name !== undefined && { name: patch.name }),
+      ...(patch.program !== undefined && { program: patch.program }),
+      ...(patch.multipliers !== undefined && { multipliers: patch.multipliers }),
+      ...(patch.annualFee !== undefined && { annualFee: patch.annualFee }),
+      ...(patch.color !== undefined && { color: patch.color ?? undefined }),
+    };
+    setState({
+      cards: state.cards.map((c) => (c.id === id ? optimistic : c)),
+    });
+    const body: Parameters<typeof apiPatchCard>[1] = {};
+    if (patch.name !== undefined) body.name = patch.name;
+    if (patch.program !== undefined) {
+      body.program = FIXTURE_PROGRAM_TO_WIRE[patch.program ?? "Cash"];
+    }
+    if (patch.multipliers !== undefined) {
+      body.multipliers = Object.fromEntries(
+        patch.multipliers.map((m) => [m.label, m.factor]),
+      );
+    }
+    if (patch.annualFee !== undefined) body.annual_fee = patch.annualFee;
+    if (patch.color !== undefined) body.color = patch.color;
+    try {
+      const updated = await apiPatchCard(id, body);
+      setState({
+        cards: state.cards.map((c) => (c.id === id ? cardRowToFixture(updated) : c)),
+      });
+    } catch (err) {
+      setState({
+        cards: state.cards.map((c) => (c.id === id ? prior : c)),
+      });
+      // eslint-disable-next-line no-console
+      console.warn("ledger card update failed; reverted", err);
+    }
+  },
+
+  /**
+   * Schedule a card delete with an undo window. The card STAYS in
+   * `cards` for `durationMs` (so the list can render a countdown
+   * progress line on it); when the timer fires we remove it locally
+   * and call DELETE. Calling `undoDeleteCard` before then cancels the
+   * commit cleanly.
+   *
+   * Symmetric to `scheduleDelete` for transactions. Idempotent — a
+   * second call on an already-pending id is a no-op. Soft-delete on
+   * the server flips `status='deleted'` + stamps `deleted_at`
+   * (DESIGN.md §8.1); deleted rows are never revived — a re-add via
+   * /cards/confirm produces a fresh `card_id`.
+   */
+  scheduleDeleteCard(id: string, durationMs: number = 5000): void {
+    if (cardDeleteTimers.has(id)) return;
+    const card = state.cards.find((c) => c.id === id);
+    if (!card) return;
+    const scheduledAt = Date.now();
+    setState({
+      pendingCardDeletes: {
+        ...state.pendingCardDeletes,
+        [id]: { id, scheduledAt, durationMs },
+      },
+    });
+    const timer = setTimeout(() => {
       cardDeleteTimers.delete(id);
-      try {
-        await apiDeleteCard(id);
-      } catch (err) {
+      const idx = state.cards.findIndex((c) => c.id === id);
+      const { [id]: _, ...restPending } = state.pendingCardDeletes;
+      setState({
+        cards: state.cards.filter((c) => c.id !== id),
+        pendingCardDeletes: restPending,
+      });
+      void apiDeleteCard(id).catch((err) => {
+        const next = [...state.cards];
+        next.splice(Math.max(0, Math.min(idx, next.length)), 0, card);
+        setState({ cards: next });
         // eslint-disable-next-line no-console
-        console.warn("ledger card delete failed", err);
-      }
-    }, CARD_DELETE_GRACE_MS);
+        console.warn("ledger card commit-delete failed; restored", err);
+      });
+    }, durationMs);
     cardDeleteTimers.set(id, timer);
   },
 
   /**
-   * Restore an optimistically-removed card before the grace timer fires.
-   *
-   * Cancels the pending API DELETE. The card reappears at its original
-   * index in the list. If called *after* the timer fired (race), the
-   * backend already soft-deleted it; the local re-insert will look
-   * correct until the next refresh, at which point the row disappears.
-   * Acceptable UX paper-cut for v1.
+   * Cancel a pending card delete. Safe to call on an unknown id.
    */
-  insertCard(card: Card, atIndex: number): void {
-    const timer = cardDeleteTimers.get(card.id);
-    if (timer) {
+  undoDeleteCard(id: string): void {
+    const timer = cardDeleteTimers.get(id);
+    if (timer !== undefined) {
       clearTimeout(timer);
-      cardDeleteTimers.delete(card.id);
+      cardDeleteTimers.delete(id);
     }
-    const next = [...state.cards];
-    next.splice(Math.max(0, Math.min(atIndex, next.length)), 0, card);
-    setState({ cards: next });
+    if (state.pendingCardDeletes[id] !== undefined) {
+      const { [id]: _, ...rest } = state.pendingCardDeletes;
+      setState({ pendingCardDeletes: rest });
+    }
   },
 
   /* ─── Bulk ops used by the sidebar's dev shortcuts ───────────── */
@@ -423,6 +507,17 @@ const PROGRAM_TO_FIXTURE: Record<string, CardProgram | undefined> = {
   Other: "Cash",
 };
 
+// Inverse of PROGRAM_TO_FIXTURE for round-tripping an edit patch back
+// onto the wire. Lovable's "ThankYou" maps to the backend's "TYP";
+// "Cash" folds to the backend's "Other".
+const FIXTURE_PROGRAM_TO_WIRE: Record<CardProgram, WireCardProgram> = {
+  UR: "UR",
+  MR: "MR",
+  Bilt: "Bilt",
+  ThankYou: "TYP",
+  Cash: "Other",
+};
+
 export function cardRowToFixture(row: CardRow): Card {
   const program = PROGRAM_TO_FIXTURE[row.program];
   const multipliers: CardMultiplier[] = Object.entries(row.multipliers ?? {})
@@ -438,6 +533,7 @@ export function cardRowToFixture(row: CardRow): Card {
     program,
     issuer: row.issuer,
     multipliers: multipliers.length > 0 ? multipliers : undefined,
+    annualFee: row.annual_fee,
   };
 }
 

@@ -1,22 +1,22 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { Pill } from "@/components/Pill";
 import { SwipeableRow } from "@/components/SwipeableRow";
 import { SketchIcon } from "@/components/SketchIcon";
 import { SketchIllustration } from "@/components/SketchIllustration";
-import { UndoToast, type PendingDelete } from "@/components/UndoToast";
+import { PendingDeleteProgress } from "@/components/PendingDeleteProgress";
+import { EditCardSheet } from "@/components/EditCardSheet";
 import { ledger, useLedger } from "@/lib/ledger";
 import { setChatSeed } from "@/lib/chatSeed";
 import { ISSUER_LABELS } from "@/lib/cardsApi";
+import { cn } from "@/lib/utils";
 import type { Card } from "@/lib/fixtures";
 
 export default function CardsPage() {
   const navigate = useNavigate();
-  const { cards } = useLedger();
-  const [pending, setPending] = useState<PendingDelete | null>(null);
-  // Stash so undo can restore the card at its original index.
-  const lastRemovedRef = useRef<{ card: Card; index: number } | null>(null);
+  const { cards, pendingCardDeletes } = useLedger();
+  const [editing, setEditing] = useState<Card | null>(null);
 
   const askToAddCard = () => {
     setChatSeed("Add a new card:");
@@ -24,27 +24,11 @@ export default function CardsPage() {
   };
 
   const requestDelete = (card: Card) => {
-    const index = cards.findIndex((c) => c.id === card.id);
-    if (index === -1) return;
-    lastRemovedRef.current = { card, index };
-    ledger.deleteCard(card.id);
-    setPending({
-      id: card.id,
-      label: `${card.name} ···· ${card.last4}`,
-      // The deletion has already happened; commit clears the stash.
-      commit: () => {
-        lastRemovedRef.current = null;
-      },
-    });
-  };
-
-  const undoDelete = () => {
-    const stash = lastRemovedRef.current;
-    if (stash) {
-      ledger.insertCard(stash.card, stash.index);
-      lastRemovedRef.current = null;
-    }
-    setPending(null);
+    // The row stays visible during the undo window with the moss line
+    // sweeping across the bottom — same pattern as transactions in the
+    // breakdown list. Tapping the row before the timer fires undoes it.
+    setEditing(null);
+    ledger.scheduleDeleteCard(card.id);
   };
 
   return (
@@ -52,7 +36,7 @@ export default function CardsPage() {
       <header>
         <h1 className="font-serif text-3xl text-ink lowercase-title">my cards</h1>
         <p className="mt-2 text-sm text-ink-tertiary">
-          swipe a card left to remove it.
+          tap a card to edit. swipe left to remove.
         </p>
       </header>
 
@@ -60,13 +44,38 @@ export default function CardsPage() {
         <EmptyCards onAsk={askToAddCard} />
       ) : (
         <ul className="mt-6 flex flex-col gap-3">
-          {cards.map((card) => (
-            <li key={card.id}>
-              <SwipeableRow onConfirmDelete={() => requestDelete(card)}>
-                <CardTile card={card} />
-              </SwipeableRow>
-            </li>
-          ))}
+          {cards.map((card) => {
+            const pending = pendingCardDeletes[card.id];
+            return (
+              <li key={card.id}>
+                <SwipeableRow
+                  onConfirmDelete={() => requestDelete(card)}
+                  onEdit={() => setEditing(card)}
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      pending
+                        ? ledger.undoDeleteCard(card.id)
+                        : setEditing(card)
+                    }
+                    className={cn(
+                      "block w-full text-left transition-opacity",
+                      pending && "opacity-55",
+                    )}
+                  >
+                    <CardTile card={card} pending={!!pending} />
+                  </button>
+                  {pending && (
+                    <PendingDeleteProgress
+                      scheduledAt={pending.scheduledAt}
+                      durationMs={pending.durationMs}
+                    />
+                  )}
+                </SwipeableRow>
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -75,16 +84,20 @@ export default function CardsPage() {
         onClick={askToAddCard}
       />
 
-      <UndoToast
-        pending={pending}
-        onUndo={undoDelete}
-        onTimeout={() => setPending(null)}
+      <EditCardSheet
+        open={editing !== null}
+        card={editing}
+        onClose={() => setEditing(null)}
+        onRequestDelete={(card) => {
+          setEditing(null);
+          ledger.scheduleDeleteCard(card.id);
+        }}
       />
     </div>
   );
 }
 
-function CardTile({ card }: { card: Card }) {
+function CardTile({ card, pending }: { card: Card; pending: boolean }) {
   const stripe = card.color ?? "#8A8377";
   return (
     <div className="relative flex items-stretch overflow-hidden">
@@ -95,25 +108,38 @@ function CardTile({ card }: { card: Card }) {
       />
       <div className="flex-1 px-4 py-3.5">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-[0.95rem] text-ink">{card.name}</span>
+          <span
+            className={cn(
+              "text-[0.95rem] text-ink",
+              pending && "line-through decoration-1",
+            )}
+          >
+            {card.name}
+          </span>
           <span className="tabular text-[0.78rem] text-ink-tertiary">
             ···· {card.last4}
           </span>
         </div>
-        {(card.issuer ||
-          card.program ||
-          (card.multipliers && card.multipliers.length > 0)) && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {card.issuer && (
-              <Pill tone="ink">{ISSUER_LABELS[card.issuer]}</Pill>
-            )}
-            {card.program && <Pill tone="ink">{card.program}</Pill>}
-            {card.multipliers?.map((m) => (
-              <Pill key={`${m.label}-${m.factor}`} tone="moss">
-                {m.factor}× {m.label}
-              </Pill>
-            ))}
-          </div>
+        {pending ? (
+          <p className="mt-2 text-[0.72rem] text-moss-deep tabular">
+            deleting · tap to undo
+          </p>
+        ) : (
+          (card.issuer ||
+            card.program ||
+            (card.multipliers && card.multipliers.length > 0)) && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {card.issuer && (
+                <Pill tone="ink">{ISSUER_LABELS[card.issuer]}</Pill>
+              )}
+              {card.program && <Pill tone="ink">{card.program}</Pill>}
+              {card.multipliers?.map((m) => (
+                <Pill key={`${m.label}-${m.factor}`} tone="moss">
+                  {m.factor}× {m.label}
+                </Pill>
+              ))}
+            </div>
+          )
         )}
       </div>
     </div>
