@@ -361,6 +361,129 @@ def test_two_hop_turn_returns_tool_calls(client, user_a, card_a, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Propose-* tool calls embed a `tameru_proposal` block on the assistant's
+# chat_messages row so GET /chat/messages can rehydrate parse cards after a
+# page refresh. Pre-Day-14b, the assistant row carried only the prose, which
+# left "here's the parse — tap looks right" orphaned without a card to tap.
+# ---------------------------------------------------------------------------
+
+
+def test_propose_transaction_persists_tameru_proposal_block(
+    client, user_a, card_a, monkeypatch
+):
+    """Verify that a propose_transaction turn writes a tameru_proposal block.
+
+    The agent calls `propose_transaction`; we then inspect chat_messages
+    and assert the assistant row carries:
+      * the prose text block (existing behavior, untouched), AND
+      * a `tameru_proposal` block with the full proposal payload so the
+        client can reconstruct the parse card on rehydrate.
+
+    Unrelated tools (calculate_total etc.) MUST NOT add a proposal block —
+    only `propose_transaction` and `propose_card` do.
+    """
+    _seed_transaction(
+        user_a, card_id=card_a, merchant=f"Lupa-{uuid.uuid4().hex[:6]}", amount="42.50"
+    )
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[
+                    _tool_use(
+                        "propose_transaction",
+                        {
+                            "merchant": "Blue Bottle",
+                            "amount": 5.50,
+                            "date": "2026-05-13",
+                            "category": "Coffee Shops",
+                        },
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("Here's the parse — tap looks right to add it.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "5.50 on blue bottle"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    rows = _chat_rows(user_a, conversation_id)
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+
+    assistant_blocks = rows[1]["content_blocks"]
+    text_blocks = [b for b in assistant_blocks if b.get("type") == "text"]
+    proposal_blocks = [
+        b for b in assistant_blocks if b.get("type") == "tameru_proposal"
+    ]
+
+    assert len(text_blocks) == 1
+    assert "parse" in text_blocks[0]["text"].lower()
+    assert len(proposal_blocks) == 1, (
+        f"expected exactly one tameru_proposal block; got {assistant_blocks!r}"
+    )
+    proposal = proposal_blocks[0]
+    assert proposal["tool_name"] == "propose_transaction"
+    assert proposal["input"]["merchant"] == "Blue Bottle"
+    # The result is the TransactionProposal.model_dump(mode="json") payload
+    # — merchant, amount, date, category, and a fresh client_request_id.
+    assert proposal["result"]["merchant"] == "Blue Bottle"
+    assert proposal["result"]["category"] == "Coffee Shops"
+    uuid.UUID(proposal["result"]["client_request_id"])
+
+
+def test_calculate_total_does_not_persist_tameru_proposal_block(
+    client, user_a, card_a, monkeypatch
+):
+    """Verify that non-propose tools never produce a tameru_proposal block.
+
+    Guards against a regression where the persistence helper widens its
+    filter and accidentally surfaces e.g. calculate_total results on the
+    rehydrate path. Only propose_transaction / propose_card belong there.
+    """
+    _seed_transaction(
+        user_a, card_id=card_a, merchant=f"Lupa-{uuid.uuid4().hex[:6]}", amount="42.50"
+    )
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[_tool_use("calculate_total", {"category": "Dining"})],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("You spent $42.50 on Dining.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "how much on dining?"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    rows = _chat_rows(user_a, conversation_id)
+    for r in rows:
+        for block in r["content_blocks"]:
+            assert block.get("type") != "tameru_proposal", (
+                f"calculate_total turn leaked a tameru_proposal block: {block!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Conversation continuity — providing conversation_id reuses it AND replays
 # history to the model.
 # ---------------------------------------------------------------------------

@@ -23,12 +23,21 @@ import {
   isDailyCapEngaged,
   setDailyCapEngaged,
   newId,
+  type CardParseDraft,
   type ChartSpec,
   type ChatMessage,
   type ParseDraft,
   type ToolName,
 } from "./chat";
 import { ledger } from "./ledger";
+import {
+  confirmCard,
+  isActiveCardExistsError,
+  type CardIssuer,
+  type CardNetwork,
+  type CardProgram,
+  type CardProposal,
+} from "./cardsApi";
 import type { Category } from "./categories";
 import type { Transaction } from "./fixtures";
 import {
@@ -241,9 +250,7 @@ export const chatStore = {
     if (state.messages.length > 0) return;
     try {
       const res = await getChatMessages(cid);
-      const rehydrated = res.messages
-        .map((m) => _wireMessageToLocal(m))
-        .filter((m): m is ChatMessage => m !== null);
+      const rehydrated = res.messages.flatMap((m) => _wireMessageToLocal(m));
       if (rehydrated.length > 0) {
         setState({ messages: rehydrated });
       }
@@ -330,6 +337,74 @@ export const chatStore = {
       appendAssistantText(
         "couldn't save that transaction. try again in a moment.",
       );
+    }
+  },
+
+  /**
+   * Commit a card parse draft to the backend.
+   *
+   * Day 14 cards have no `client_request_id` idempotency (DESIGN.md §8.1 —
+   * cards are ≤10/user lifetime; cost of duplicate is a tap to delete). If
+   * the user re-taps "looks right" on a rehydrated card proposal that was
+   * already committed, the server returns 409 `active_card_exists`; we
+   * surface a quiet text bubble so the user knows the card is already in
+   * their wallet rather than silently dropping the click.
+   */
+  async commitCardDraft(msgId: string, draft: CardParseDraft | null) {
+    if (!draft) return;
+    if (draft.issuer === null || draft.network === null) {
+      appendAssistantText(
+        "i need an issuer and network on this card before adding it.",
+      );
+      return;
+    }
+    if (!/^\d{4}$/.test(draft.lastFour)) {
+      appendAssistantText("i need the last 4 digits of the card.");
+      return;
+    }
+
+    const body: CardProposal = {
+      network: draft.network,
+      last_four: draft.lastFour,
+      name: draft.name,
+      issuer: draft.issuer,
+      program: draft.program,
+      multipliers: draft.multipliers,
+      annual_fee: draft.annualFee,
+      source_urls: draft.sourceUrls,
+      alias: draft.alias ?? null,
+      needs_manual: draft.needsManual,
+    };
+
+    try {
+      const card = await confirmCard(body);
+      const committedMessages = state.messages.map((m) =>
+        m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
+          ? { ...m, draft, committedCardId: card.id }
+          : m,
+      );
+      setState({ messages: committedMessages });
+    } catch (err) {
+      if (isActiveCardExistsError(err)) {
+        const detail = err.body.detail;
+        // Flip the card to committed using the existing row's id so the
+        // user can't keep re-tapping. The text crumb explains the no-op.
+        const committedMessages = state.messages.map((m) =>
+          m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
+            ? { ...m, draft, committedCardId: detail.existing_card_id }
+            : m,
+        );
+        setState({ messages: committedMessages });
+        appendAssistantText(
+          `you already have ${detail.existing_card_name} ending ${
+            detail.existing_card_last_four ?? draft.lastFour
+          } — edit that one from the cards page.`,
+        );
+        return;
+      }
+      // eslint-disable-next-line no-console
+      console.error("commitCardDraft → /cards/confirm failed", err);
+      appendAssistantText("couldn't add that card. try again in a moment.");
     }
   },
 
@@ -546,6 +621,9 @@ function _renderTurn(res: ChatTurnResponse): void {
   const proposeCalls = res.tool_calls.filter(
     (tc) => tc.name === "propose_transaction",
   );
+  const proposeCardCalls = res.tool_calls.filter(
+    (tc) => tc.name === "propose_card",
+  );
   const getTransactionsCalls = res.tool_calls.filter(
     (tc) => tc.name === "get_transactions",
   );
@@ -558,6 +636,7 @@ function _renderTurn(res: ChatTurnResponse): void {
   const otherToolName = res.tool_calls.find(
     (tc) =>
       tc.name !== "propose_transaction" &&
+      tc.name !== "propose_card" &&
       tc.name !== "get_transactions" &&
       tc.name !== "render_chart",
   )?.name;
@@ -582,6 +661,26 @@ function _renderTurn(res: ChatTurnResponse): void {
       draft,
     });
     if (i === 0) textConsumed = true;
+  }
+
+  // Card proposals get the same preface-consumes-text treatment, but only
+  // when no transaction proposal already consumed it (the propose order
+  // wins for the bubble preface). Cards are never multi-call in a single
+  // turn under the v1 prompt; the loop tolerates N defensively anyway.
+  for (let i = 0; i < proposeCardCalls.length; i++) {
+    const draft = _proposalToCardDraft(proposeCardCalls[i]);
+    if (!draft) continue;
+    drafted.push({
+      id: newId("ai"),
+      role: "assistant",
+      kind: "card-parse",
+      preface:
+        i === 0 && !textConsumed
+          ? res.assistant_text || "got it. does this look right?"
+          : undefined,
+      draft,
+    });
+    if (i === 0 && !textConsumed) textConsumed = true;
   }
 
   // Render get_transactions as a candidate list — the agent typically uses
@@ -758,6 +857,67 @@ function _proposalToDraft(call: ChatToolCall): ParseDraft | null {
 }
 
 /**
+ * Map a propose_card tool result (CardProposal-shaped dict — see
+ * app/models/cards.py) into the local CardParseDraft. Day 14 cards have no
+ * client_request_id idempotency, so the draft only carries the
+ * commit-shaped fields the user can tweak before tapping "looks right."
+ * Returns null when the payload's missing the load-bearing fields (name
+ * is required at minimum — without it the UI can't render a card
+ * headline).
+ */
+interface CardProposalWire {
+  network: CardNetwork | null;
+  last_four: string | null;
+  name: string;
+  issuer: CardIssuer | null;
+  program: CardProgram;
+  multipliers: Record<string, number>;
+  annual_fee: string | number | null;
+  source_urls: string[];
+  alias: string | null;
+  needs_manual: boolean;
+}
+
+function _proposalToCardDraft(call: ChatToolCall): CardParseDraft | null {
+  const r = call.result as unknown as CardProposalWire;
+  if (!r || typeof r !== "object") return null;
+  if (typeof r.name !== "string" || !r.name) return null;
+
+  // Backend defaults network to "other" and issuer to "other" when the
+  // lookup couldn't determine them (see propose_card in app/agent/tools.py).
+  // Surface that as null on the local draft so the CardParseCard renders
+  // the unresolved "select…" state with a warn ring, matching AddCardStep's
+  // posture — silently defaulting both to "other" would let the user save
+  // wrong identity metadata and trip the (user_id, issuer, last_four)
+  // unique index on the next add of a real card with the same last 4.
+  const issuer =
+    r.issuer === "other" && r.needs_manual ? null : r.issuer ?? null;
+  const network =
+    r.network === "other" && r.needs_manual ? null : r.network ?? null;
+
+  const annualFee =
+    r.annual_fee === null || r.annual_fee === undefined
+      ? null
+      : typeof r.annual_fee === "string"
+        ? r.annual_fee
+        : String(r.annual_fee);
+
+  return {
+    name: r.name,
+    issuer,
+    network,
+    program: r.program ?? "Other",
+    multipliers:
+      r.multipliers && typeof r.multipliers === "object" ? r.multipliers : {},
+    annualFee,
+    sourceUrls: Array.isArray(r.source_urls) ? r.source_urls : [],
+    lastFour: typeof r.last_four === "string" ? r.last_four : "",
+    needsManual: r.needs_manual === true,
+    alias: typeof r.alias === "string" ? r.alias : null,
+  };
+}
+
+/**
  * Validate and narrow a render_chart tool result into the local ChartSpec
  * shape. Anything that doesn't pass the structural check is dropped — the
  * backend's RenderChartRequest validator already enforces shape on the way
@@ -818,25 +978,107 @@ function _toolToVia(name: string | undefined): ToolName | undefined {
 }
 
 /**
- * Collapse a server-side chat_messages row into the local ChatMessage
- * shape. v1 rehydrates everything as plain text — the prompt is explicit
- * that parse cards and candidate lists are session-scoped (their interactive
- * state would be wrong on rehydrate), so we don't try to reconstruct them
- * from content_blocks. Tool_use/tool_result blocks live only in the trace
- * table and never surface here.
+ * Collapse a server-side chat_messages row into one or more local
+ * ChatMessage shapes. v1 rehydrates plain text + parse cards.
  *
- * Returns null when the row has no extractable text, so the caller can
- * skip it cleanly rather than render a blank bubble.
+ * Day 14b: when `_persist_turn` augments an assistant row's content_blocks
+ * with `tameru_proposal` synthetic blocks (one per `propose_transaction` /
+ * `propose_card` tool call in the turn), reconstruct those as parse-card
+ * messages so a page refresh no longer orphans "here's the parse — tap
+ * looks right" prose with no card to tap. The agent's prose becomes the
+ * preface on the first parse card, matching `_renderTurn`'s fresh-turn
+ * behavior.
+ *
+ * Confirmation state isn't persisted today — re-tapping "looks right" on
+ * a rehydrated transaction proposal is safe via `client_request_id`
+ * idempotency on POST /transactions/confirm; for cards, the 409
+ * active_card_exists path in `commitCardDraft` flips the card to a
+ * committed state with the existing row's id.
+ *
+ * Candidate lists are still session-scoped and never rehydrated — their
+ * `candidateIds` reference the in-session ledger snapshot, which has no
+ * meaning on a fresh page mount.
+ *
+ * Returns [] when the row has no rendering-worthy content (no text and no
+ * proposals), so the caller can `.flatMap` cleanly.
  */
-function _wireMessageToLocal(m: ChatMessageWire): ChatMessage | null {
+function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
   const text = m.content_blocks
     .filter((b) => b.type === "text" && typeof b.text === "string")
     .map((b) => b.text as string)
     .join("\n\n")
     .trim();
-  if (!text) return null;
+
   if (m.role === "user") {
-    return { id: newId("user"), role: "user", text };
+    if (!text) return [];
+    return [{ id: newId("user"), role: "user", text }];
   }
-  return { id: newId("ai"), role: "assistant", kind: "text", text };
+
+  // Assistant row — may carry `tameru_proposal` blocks alongside text.
+  const proposals = m.content_blocks.filter(
+    (b) => b.type === "tameru_proposal",
+  ) as Array<{
+    type: "tameru_proposal";
+    tool_name?: unknown;
+    input?: unknown;
+    result?: unknown;
+  }>;
+
+  if (proposals.length === 0) {
+    if (!text) return [];
+    return [{ id: newId("ai"), role: "assistant", kind: "text", text }];
+  }
+
+  const out: ChatMessage[] = [];
+  let prefaceClaimed = false;
+
+  for (let i = 0; i < proposals.length; i++) {
+    const p = proposals[i];
+    const synthetic: ChatToolCall = {
+      name: typeof p.tool_name === "string" ? p.tool_name : "",
+      input: (p.input && typeof p.input === "object"
+        ? (p.input as Record<string, unknown>)
+        : {}) as Record<string, unknown>,
+      result: (p.result && typeof p.result === "object"
+        ? (p.result as Record<string, unknown>)
+        : {}) as Record<string, unknown>,
+    };
+
+    if (synthetic.name === "propose_transaction") {
+      const draft = _proposalToDraft(synthetic);
+      if (!draft) continue;
+      out.push({
+        id: newId("ai"),
+        role: "assistant",
+        kind: "parse",
+        preface: !prefaceClaimed && text ? text : undefined,
+        draft,
+      });
+      prefaceClaimed = true;
+    } else if (synthetic.name === "propose_card") {
+      const draft = _proposalToCardDraft(synthetic);
+      if (!draft) continue;
+      out.push({
+        id: newId("ai"),
+        role: "assistant",
+        kind: "card-parse",
+        preface: !prefaceClaimed && text ? text : undefined,
+        draft,
+      });
+      prefaceClaimed = true;
+    }
+  }
+
+  // If the agent emitted prose but no proposal in the row rehydrated
+  // successfully (every _proposalTo* helper returned null), still surface
+  // the text so the conversation doesn't drop the assistant turn entirely.
+  if (out.length === 0 && text) {
+    out.push({ id: newId("ai"), role: "assistant", kind: "text", text });
+  }
+
+  // If prose existed but was already claimed as a preface, we're done.
+  // If prose existed AND wasn't claimed (every proposal pushed without
+  // claiming — only happens when out is empty after all skips, handled
+  // above), the fallback bubble already covered it.
+  return out;
 }

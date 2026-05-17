@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronsLeft, ChevronsRight, SquarePen, X } from "lucide-react";
 import { CandidateCards } from "@/components/chat/CandidateCards";
+import { CardParseCard } from "@/components/chat/CardParseCard";
 import { Chart } from "@/components/chat/Chart";
 import { EntryInsightBubble } from "@/components/chat/EntryInsightBubble";
 import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble";
@@ -231,6 +232,18 @@ function MessageRow({
           onFix={() => {
             /* desktop drawer skips the inline "fix" sheet flow */
           }}
+        />
+      </div>
+    );
+  }
+  if (msg.kind === "card-parse") {
+    return (
+      <div className="flex w-full justify-start">
+        <CardParseCard
+          preface={msg.preface}
+          draft={msg.draft}
+          committed={!!msg.committedCardId}
+          onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
         />
       </div>
     );

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, Mic, RefreshCw, Send, SquarePen, WifiOff, X } from "lucide-react";
 import { CandidateCards } from "@/components/chat/CandidateCards";
+import { CardParseCard } from "@/components/chat/CardParseCard";
 import { Chart } from "@/components/chat/Chart";
 import { DailyCapCard } from "@/components/chat/DailyCapCard";
 import { EntryInsightBubble } from "@/components/chat/EntryInsightBubble";
@@ -365,6 +366,19 @@ function MessageRow({
           committed={!!msg.committedTxId}
           onConfirm={(draft) => onConfirmDraft(draft)}
           onFix={onFixDraft}
+        />
+      </div>
+    );
+  }
+
+  if (msg.kind === "card-parse") {
+    return (
+      <div className="flex w-full justify-start">
+        <CardParseCard
+          preface={msg.preface}
+          draft={msg.draft}
+          committed={!!msg.committedCardId}
+          onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
         />
       </div>
     );

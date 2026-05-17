@@ -4,6 +4,11 @@
  * / generic chat. Pure mock — no network calls.
  */
 
+import type {
+  CardIssuer,
+  CardNetwork,
+  CardProgram,
+} from "./cardsApi";
 import { CATEGORIES, type Category } from "./categories";
 import { FIXTURE_CARDS, type Transaction } from "./fixtures";
 
@@ -102,6 +107,42 @@ export interface AssistantInsightMessage {
   text: string;
 }
 
+/**
+ * Card parse-card message — Day 14b. The chat-side analog of the
+ * onboarding `AddCardStep` preview tile, rendered when the agent calls
+ * `propose_card`. The proposal payload from the tool is wider than the
+ * commit body (lookup metadata + issuer/network defaults), so this draft
+ * carries the *editable* slice the user can tweak before tapping confirm.
+ * `lastFour` is collected on the card itself (the agent never asks for it
+ * up-front to avoid friction) and the confirm button stays disabled until
+ * it parses as exactly 4 digits. `needsManual=true` from the backend
+ * widens the visible-fields set so the user can fill issuer/network/etc.
+ * when the web_search lookup couldn't determine them.
+ */
+export interface CardParseDraft {
+  name: string;
+  issuer: CardIssuer | null;
+  network: CardNetwork | null;
+  program: CardProgram;
+  multipliers: Record<string, number>;
+  annualFee: string | null;
+  sourceUrls: string[];
+  lastFour: string;
+  needsManual: boolean;
+  /** Optional alias the user supplied via chat ("travel card"). */
+  alias?: string | null;
+}
+
+export interface AssistantCardParseMessage {
+  id: string;
+  role: "assistant";
+  kind: "card-parse";
+  preface?: string;
+  draft: CardParseDraft;
+  /** Set after the user successfully commits this draft. */
+  committedCardId?: string;
+}
+
 export type ChatMessage =
   | UserMessage
   | AssistantTextMessage
@@ -109,7 +150,8 @@ export type ChatMessage =
   | AssistantCandidatesMessage
   | AssistantChartMessage
   | AssistantRichChartMessage
-  | AssistantInsightMessage;
+  | AssistantInsightMessage
+  | AssistantCardParseMessage;
 
 /* ─── Parse draft (the commit surface) ───────────────────────────── */
 

@@ -151,6 +151,7 @@ def chat_turn(
                         user_message=body.message,
                         turn_messages=payload.get("turn_messages") or [],
                         assistant_blocks=payload.get("content_blocks") or [],
+                        tool_calls=payload.get("tool_calls") or [],
                     )
                 except Exception as exc:  # noqa: BLE001 — surface anything
                     yield _sse_frame(
@@ -289,6 +290,7 @@ def _persist_turn(
     user_message: str,
     turn_messages: list[dict[str, Any]],
     assistant_blocks: list[dict[str, Any]],
+    tool_calls: list[dict[str, Any]],
 ) -> None:
     """Write the trace + human-visible rows for one completed turn.
 
@@ -301,6 +303,16 @@ def _persist_turn(
     Trace first — it's the load-bearing row for next-turn replay; if
     the chat_messages write fails afterward the conversation looks
     empty in the UI but the model still has correct context.
+
+    Proposal augmentation: for any `propose_transaction` / `propose_card`
+    tool call in the turn, append a synthetic `tameru_proposal` block to
+    the assistant's `content_blocks` carrying the tool name + input args +
+    proposal payload. This lets `/chat/messages` rehydrate parse cards on
+    page refresh (the prose-only persistence behavior pre-Day-14b orphaned
+    "here's the parse — tap looks right" text without a card to tap).
+    The block type is Tameru-private (Anthropic's API never sees it; it's
+    not in `_load_history`'s replay path), so adding fields here doesn't
+    risk a 400 on the next chat turn.
 
     Atomicity caveat: Supabase Python exposes no transaction primitive,
     so a partial write across the two tables is technically possible.
@@ -315,6 +327,24 @@ def _persist_turn(
         "messages": turn_messages,
     }).execute()
 
+    augmented_blocks = list(assistant_blocks)
+    for tc in tool_calls:
+        name = tc.get("name")
+        if name not in ("propose_transaction", "propose_card"):
+            continue
+        result = tc.get("result")
+        # Skip is_error tool results — _renderTurn on the client never
+        # surfaces them as parse cards either; the model's prose already
+        # acknowledged the failure to the user.
+        if not isinstance(result, dict) or "error" in result:
+            continue
+        augmented_blocks.append({
+            "type": "tameru_proposal",
+            "tool_name": name,
+            "input": tc.get("input") or {},
+            "result": result,
+        })
+
     client.table("chat_messages").insert([
         {
             "user_id": str(user.user_id),
@@ -326,7 +356,7 @@ def _persist_turn(
             "user_id": str(user.user_id),
             "conversation_id": str(conversation_id),
             "role": "assistant",
-            "content_blocks": assistant_blocks,
+            "content_blocks": augmented_blocks,
         },
     ]).execute()
 
