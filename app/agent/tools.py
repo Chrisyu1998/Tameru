@@ -1124,6 +1124,14 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         source_urls=result.source_urls,
         alias=request.alias,
         needs_manual=needs_manual,
+        # Mint a stable join key the client posts back at /cards/confirm.
+        # The persisted `tameru_proposal` block on `chat_messages` carries
+        # this in `result.client_request_id`; the row's
+        # `cards.client_request_id` column carries the same value after
+        # commit, so `_annotate_committed_proposals` can join 1:1 even
+        # when two cards share a `name` (different last_four). Mirrors
+        # the propose_transaction lifecycle for the same id field.
+        client_request_id=uuid4(),
     )
     return proposal.model_dump(mode="json")
 

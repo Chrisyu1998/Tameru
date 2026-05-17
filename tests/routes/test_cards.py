@@ -205,6 +205,34 @@ def test_confirm_rejects_unknown_network(client, user_a):
     assert resp.status_code == 422
 
 
+def test_confirm_idempotent_on_same_client_request_id(client, user_a):
+    """Day 15: same crid posted twice returns the existing row (no 409).
+
+    Mirrors `/transactions/confirm` idempotency. The natural-key 409
+    only fires when a *different* crid races for the same physical card;
+    a network retry of the exact same proposal short-circuits with the
+    prior row.
+    """
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "1"),
+        name=f"Idem Card {tag}",
+        issuer="chase",
+        program="UR",
+        multipliers={"Dining": 2.0},
+    )
+
+    first = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert first.status_code == 200, first.text
+    second = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert second.status_code == 200, second.text
+
+    # Same row id on the replay — no duplicate insert, no 409.
+    assert first.json()["id"] == second.json()["id"]
+    assert first.json()["client_request_id"] == body["client_request_id"]
+
+
 # ---------------------------------------------------------------------------
 # POST /cards/confirm — collision behavior
 # ---------------------------------------------------------------------------
@@ -628,8 +656,16 @@ def _proposal(
     source_urls: list[str] | None = None,
     alias: str | None = None,
     needs_manual: bool = False,
+    client_request_id: str | None = None,
 ) -> dict:
-    """Build a CardProposal-shaped dict for /cards/confirm tests."""
+    """Build a CardProposal-shaped dict for /cards/confirm tests.
+
+    `client_request_id` defaults to a fresh UUID per call so tests
+    aren't forced to thread one in for every case. Tests that want to
+    drive crid-replay behavior pass an explicit value.
+    """
+    from uuid import uuid4
+
     body: dict = {
         "network": network,
         "last_four": last_four,
@@ -639,6 +675,7 @@ def _proposal(
         "multipliers": multipliers or {},
         "source_urls": source_urls or [],
         "needs_manual": needs_manual,
+        "client_request_id": client_request_id or str(uuid4()),
     }
     if annual_fee is not None:
         body["annual_fee"] = annual_fee

@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 import { DeviceDisplacedModal } from './components/DeviceDisplacedModal';
 import { UpdateToast } from './components/UpdateToast';
 import { initAuth, startDeviceCheckPoll } from './lib/auth';
+import { setupAutoDrain } from './lib/offline_queue';
 import { useAppStore } from './store';
 import Layout, { NotFoundPage } from './pages/_layout';
 import HomePage from './pages/home';
@@ -51,12 +52,19 @@ function App() {
 
   useEffect(() => {
     let pollHandle: number | null = null;
+    let teardownDrain: (() => void) | null = null;
     initAuth().then(() => {
       setAuthReady(true);
       pollHandle = startDeviceCheckPoll();
+      // Offline-queue drain: listens for the `online` event, drains
+      // queued confirms on app mount when already online, and rebinds the
+      // banner count on auth changes. Window-scope (not service worker) —
+      // see offline_queue.ts header.
+      teardownDrain = setupAutoDrain();
     });
     return () => {
       if (pollHandle !== null) clearInterval(pollHandle);
+      if (teardownDrain) teardownDrain();
     };
   }, []);
 

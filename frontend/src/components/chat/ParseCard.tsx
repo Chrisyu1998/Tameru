@@ -30,6 +30,14 @@ interface ParseCardProps {
    * card would drift from the row that was actually committed.
    */
   frozen?: boolean;
+  /**
+   * `true` between the user tapping "looks right" while offline (queued
+   * in `offline_queue.ts`) and the drain landing on a terminal outcome.
+   * Hides the action buttons and shows a `queued — syncs when online`
+   * micro-badge in their place. The global "X pending sync" banner
+   * counts the same entries.
+   */
+  pendingSync?: boolean;
   onConfirm: (draft: ParseDraft) => void;
   onFix: () => void;
 }
@@ -55,6 +63,7 @@ export function ParseCard({
   committed,
   committedState,
   frozen,
+  pendingSync,
   onConfirm,
   onFix,
 }: ParseCardProps) {
@@ -64,9 +73,12 @@ export function ParseCard({
   // Lower confidence → "check this one" pencil treatment.
   const lowConf = (v: number) => v < 0.75;
 
-  // Fields are disabled when the card is committed (legacy behavior) OR
-  // when it's a rehydrated read-only historical card.
-  const fieldsDisabled = committed || !!frozen;
+  // Fields are disabled when the card is committed (legacy behavior), or
+  // it's a rehydrated read-only historical card, or it's pending sync
+  // (queued offline). Pending-sync still allows reading the draft but
+  // not editing it — the queued payload is what will be POSTed; any
+  // further edit would just diverge from what's queued.
+  const fieldsDisabled = committed || !!frozen || !!pendingSync;
 
   // Resolve the badge state. `committed && committedState === 'deleted'`
   // is the deleted-after-confirm case; everything else with `committed`
@@ -75,7 +87,9 @@ export function ParseCard({
   const isLogged = committed && !isDeleted;
   // Rehydrated but never confirmed — historical proposal the user
   // closed the app on before tapping "looks right."
-  const isCancelled = !committed && !!frozen;
+  const isCancelled = !committed && !!frozen && !pendingSync;
+  // Queued offline-confirm, waiting for drain.
+  const isPending = !committed && !!pendingSync;
 
   return (
     <div className="w-full max-w-[88%] animate-slide-up-in">
@@ -188,7 +202,12 @@ export function ParseCard({
             <span>not saved.</span>
           </div>
         )}
-        {!committed && !frozen && (
+        {isPending && (
+          <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
+            <span>queued — syncs when online.</span>
+          </div>
+        )}
+        {!committed && !frozen && !pendingSync && (
           <>
             <div className="mt-4 flex flex-col gap-2">
               <button

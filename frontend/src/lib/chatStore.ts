@@ -52,8 +52,16 @@ import {
   fromWire,
   sanitizeCardId,
   type ConfirmTransactionBody,
+  type ConfirmTransactionResult,
   type TransactionRowWire,
 } from "./transactionsApi";
+import { ApiError } from "./api";
+import { useAppStore } from "../store";
+import type {
+  ActiveCardExistsDetail,
+  CardRow,
+} from "./cardsApi";
+import type { PersistedQueueEntry } from "./offline_queue";
 
 type Listener = () => void;
 
@@ -309,7 +317,7 @@ export const chatStore = {
       // insight bubble after so it visually lands beneath the card.
       const committedMessages = state.messages.map((m) =>
         m.id === msgId && m.role === "assistant" && m.kind === "parse"
-          ? { ...m, draft, committedTxId: tx.id }
+          ? { ...m, draft, committedTxId: tx.id, pendingSync: false }
           : m,
       );
       const insight = result.insight;
@@ -329,9 +337,42 @@ export const chatStore = {
         setState({ messages: committedMessages });
       }
     } catch (err) {
-      // Surface the actual reason in the console — the inline chat bubble
-      // is intentionally vague, but a 422/500/network failure should be
-      // diagnosable from devtools without re-running the flow.
+      // Network failure (fetch threw — not an ApiError) → enqueue the
+      // already-built body and mark the parse card as pending sync. The
+      // drain on reconnect/mount replays it; Day 5's client_request_id
+      // makes the replay idempotent, so a flurry of double-taps maps to
+      // at most one committed row server-side. 4xx/5xx fall through to
+      // the existing error bubble — the user can retry directly.
+      if (!(err instanceof ApiError)) {
+        const ownerUserId = useAppStore.getState().user?.id;
+        if (!ownerUserId) {
+          // Defensive: the chat UI requires an authed turn to render a
+          // parse card, so this branch shouldn't be reachable. Surface
+          // a soft error rather than enqueuing under a null owner.
+          // eslint-disable-next-line no-console
+          console.error("commitDraft: cannot enqueue, not signed in", err);
+          appendAssistantText(
+            "you need to be signed in to save transactions.",
+          );
+          return;
+        }
+        const { enqueue } = await import("./offline_queue");
+        await enqueue({
+          ownerUserId,
+          kind: "transaction",
+          payload: body,
+          messageId: msgId,
+        });
+        setState({
+          messages: state.messages.map((m) =>
+            m.id === msgId && m.role === "assistant" && m.kind === "parse"
+              ? { ...m, draft, pendingSync: true }
+              : m,
+          ),
+        });
+        return;
+      }
+      // 4xx / 5xx — surface the existing error. The user can retry.
       // eslint-disable-next-line no-console
       console.error("commitDraft → /transactions/confirm failed", err);
       appendAssistantText(
@@ -343,12 +384,15 @@ export const chatStore = {
   /**
    * Commit a card parse draft to the backend.
    *
-   * Day 14 cards have no `client_request_id` idempotency (DESIGN.md §8.1 —
-   * cards are ≤10/user lifetime; cost of duplicate is a tap to delete). If
-   * the user re-taps "looks right" on a rehydrated card proposal that was
-   * already committed, the server returns 409 `active_card_exists`; we
-   * surface a quiet text bubble so the user knows the card is already in
-   * their wallet rather than silently dropping the click.
+   * Day 15: cards now carry a `client_request_id` (see DESIGN.md §8.1 and
+   * migration `20260517120000_cards_client_request_id.sql`). It's a stable
+   * per-proposal join key — server-minted at `propose_card`, posted back
+   * here, persisted on the row. `/cards/confirm` short-circuits on
+   * same-crid replay (returns the existing row), so a network retry of
+   * the same proposal is harmless. The structural dedup (partial unique
+   * index on issuer + last_four) still owns the "same physical card"
+   * case and surfaces 409 `active_card_exists` for different-crid /
+   * same-card collisions.
    */
   async commitCardDraft(msgId: string, draft: CardParseDraft | null) {
     if (!draft) return;
@@ -360,6 +404,16 @@ export const chatStore = {
     }
     if (!/^\d{4}$/.test(draft.lastFour)) {
       appendAssistantText("i need the last 4 digits of the card.");
+      return;
+    }
+    if (!draft.clientRequestId) {
+      // Defensive: a draft without a crid can't be confirmed — the
+      // backend annotation join would be impossible. Shouldn't happen
+      // with the wired chat (propose_card always emits it now), so flag
+      // it instead of silently dropping the tap.
+      appendAssistantText(
+        "this card draft is missing its proposal id — try asking again.",
+      );
       return;
     }
 
@@ -374,13 +428,14 @@ export const chatStore = {
       source_urls: draft.sourceUrls,
       alias: draft.alias ?? null,
       needs_manual: draft.needsManual,
+      client_request_id: draft.clientRequestId,
     };
 
     try {
       const card = await confirmCard(body);
       const committedMessages = state.messages.map((m) =>
         m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
-          ? { ...m, draft, committedCardId: card.id }
+          ? { ...m, draft, committedCardId: card.id, pendingSync: false }
           : m,
       );
       setState({ messages: committedMessages });
@@ -391,7 +446,12 @@ export const chatStore = {
         // user can't keep re-tapping. The text crumb explains the no-op.
         const committedMessages = state.messages.map((m) =>
           m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
-            ? { ...m, draft, committedCardId: detail.existing_card_id }
+            ? {
+                ...m,
+                draft,
+                committedCardId: detail.existing_card_id,
+                pendingSync: false,
+              }
             : m,
         );
         setState({ messages: committedMessages });
@@ -402,10 +462,247 @@ export const chatStore = {
         );
         return;
       }
+      // Network failure → enqueue the card confirm. Cards have no
+      // client_request_id idempotency, but the partial unique index
+      // `cards_active_identity_uniq` makes a duplicate POST return 409
+      // active_card_exists, which the drain treats as a silent dequeue
+      // (see offline_queue._drainOne). 4xx/5xx fall through to the
+      // existing error path.
+      if (!(err instanceof ApiError)) {
+        const ownerUserId = useAppStore.getState().user?.id;
+        if (!ownerUserId) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "commitCardDraft: cannot enqueue, not signed in",
+            err,
+          );
+          appendAssistantText(
+            "you need to be signed in to add cards.",
+          );
+          return;
+        }
+        const { enqueue } = await import("./offline_queue");
+        await enqueue({
+          ownerUserId,
+          kind: "card",
+          payload: body,
+          messageId: msgId,
+        });
+        setState({
+          messages: state.messages.map((m) =>
+            m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
+              ? { ...m, draft, pendingSync: true }
+              : m,
+          ),
+        });
+        return;
+      }
       // eslint-disable-next-line no-console
       console.error("commitCardDraft → /cards/confirm failed", err);
       appendAssistantText("couldn't add that card. try again in a moment.");
     }
+  },
+
+  /* ─── Offline drain hooks (called from offline_queue.ts) ───────── */
+
+  /**
+   * Drain handler for a 2xx `POST /transactions/confirm` from a queued
+   * entry. Finds the matching in-memory parse card by `client_request_id`
+   * (preferred — survives a same-session rehydrate where the message id
+   * regenerates) or by `messageId` (fallback for legacy entries), patches
+   * its draft to the response's actual field values, and appends the
+   * entry-moment insight bubble.
+   *
+   * Idempotent on no-match: if the user closed the original chat thread,
+   * or the rehydrated message is still pending its `committed_payload`
+   * annotation, we still inject the row into the ledger (the dashboard
+   * needs it) and surface the insight as a standalone bubble. The next
+   * page reload will render the parse card with its committed_payload-
+   * driven `logged.` state.
+   */
+  applyDrainTxSuccess(
+    match: { clientRequestId: string; messageId?: string },
+    result: ConfirmTransactionResult,
+  ): void {
+    const tx = result.transaction;
+    ledger.addTransaction(tx);
+    const next = state.messages.map((m) => {
+      if (m.role !== "assistant" || m.kind !== "parse") return m;
+      const isMatch =
+        (!!m.draft.clientRequestId &&
+          m.draft.clientRequestId === match.clientRequestId) ||
+        (!!match.messageId && m.id === match.messageId);
+      if (!isMatch) return m;
+      return {
+        ...m,
+        draft: _txToDraft(tx, m.draft),
+        committedTxId: tx.id,
+        committedState: "active" as const,
+        pendingSync: false,
+        // Unfreeze: if this message was rehydrated as a read-only
+        // historical artifact, the drain commit makes it the live truth
+        // now. Leaving `frozen=true` would keep the buttons hidden, which
+        // is desired — but the `committed` rendering takes priority
+        // anyway, so clearing `frozen` is just hygiene.
+        frozen: false,
+      };
+    });
+    setState({
+      messages: result.insight
+        ? [
+            ...next,
+            {
+              id: newId("ai"),
+              role: "assistant",
+              kind: "insight",
+              text: result.insight,
+            },
+          ]
+        : next,
+    });
+  },
+
+  /**
+   * Drain handler for a 2xx `POST /cards/confirm` from a queued entry.
+   * Cards have no `client_request_id`, so we match by the in-memory
+   * message id captured at enqueue time. If the id no longer matches
+   * (e.g., the chat thread rehydrated since), the in-memory patch is
+   * a no-op — `_annotate_committed_proposals` on the next /chat/messages
+   * fetch will paint the rehydrated card with `committed_payload`.
+   */
+  applyDrainCardSuccess(
+    match: { clientRequestId?: string; messageId?: string },
+    card: CardRow,
+  ): void {
+    const idx = _findCardParseTarget(
+      state.messages,
+      match.clientRequestId ?? card.client_request_id,
+      match.messageId,
+      card.name,
+    );
+    if (idx === -1) return;
+    setState({
+      messages: state.messages.map((m, i) =>
+        i === idx && m.role === "assistant" && m.kind === "card-parse"
+          ? {
+              ...m,
+              draft: _cardRowToDraft(card),
+              committedCardId: card.id,
+              committedState: "active" as const,
+              pendingSync: false,
+              frozen: false,
+            }
+          : m,
+      ),
+    });
+  },
+
+  /**
+   * Drain handler for a 409 `active_card_exists` on a queued card
+   * confirm. The card is already in the wallet (a prior drain attempt
+   * landed, or a separate session committed it). Silent dequeue — flip
+   * the matching message to committed using the existing row's id; do
+   * NOT append the "you already have this card" text bubble that the
+   * synchronous `commitCardDraft` 409 path renders, because the user's
+   * confirm tap happened a while ago and the live error copy would be
+   * confusing.
+   */
+  applyDrainCardConflict(
+    match: { clientRequestId?: string; messageId?: string },
+    detail: ActiveCardExistsDetail,
+  ): void {
+    // 409 detail doesn't carry crid (the EXISTING row has a different
+    // crid than this proposal — that's why we collided on the natural
+    // key). So we match by the *queued proposal's* crid against the
+    // in-memory draft. The conflict-detail name is the last-resort
+    // fallback for legacy proposals.
+    const idx = _findCardParseTarget(
+      state.messages,
+      match.clientRequestId,
+      match.messageId,
+      detail.existing_card_name,
+    );
+    if (idx === -1) return;
+    setState({
+      messages: state.messages.map((m, i) =>
+        i === idx && m.role === "assistant" && m.kind === "card-parse"
+          ? {
+              ...m,
+              committedCardId: detail.existing_card_id,
+              committedState: "active" as const,
+              pendingSync: false,
+              frozen: false,
+            }
+          : m,
+      ),
+    });
+  },
+
+  /**
+   * Drain handler for a 4xx (other than card 409) on a queued entry.
+   * Server-side validation will never accept this payload (e.g., a 422
+   * from a malformed body that slipped through client-side checks).
+   *
+   * Per Day 15 spec: pop the entry from the queue and re-surface the
+   * proposal as a fixable parse card in the chat thread with a quiet
+   * "couldn't sync" line. We do this by clearing `pendingSync` (so the
+   * buttons return) and clearing `frozen` (so a rehydrated read-only
+   * card becomes editable again), then appending a text bubble. The
+   * user can edit and re-tap "looks right" (which will go straight to
+   * the server now that we're online), or just leave it.
+   *
+   * If we can't find the matching message (e.g., it scrolled off in
+   * another tab — single-active-device makes this unlikely but possible),
+   * just append the error text bubble standalone so the user knows.
+   */
+  applyDrainPermanentFailure(
+    entry: PersistedQueueEntry,
+    err: ApiError,
+  ): void {
+    let matched = false;
+    const next = state.messages.map((m) => {
+      if (entry.kind === "transaction") {
+        if (m.role !== "assistant" || m.kind !== "parse") return m;
+        const isMatch =
+          (!!m.draft.clientRequestId &&
+            m.draft.clientRequestId === entry.payload.client_request_id) ||
+          (!!entry.messageId && m.id === entry.messageId);
+        if (!isMatch) return m;
+        matched = true;
+        return { ...m, pendingSync: false, frozen: false };
+      }
+      // card branch
+      if (m.role !== "assistant" || m.kind !== "card-parse") return m;
+      // crid is the rehydrate-stable join key (Day 15); messageId is the
+      // same-session fallback; name is the legacy fallback for proposals
+      // that pre-date the crid column.
+      const cridMatch =
+        !!entry.payload.client_request_id &&
+        m.draft.clientRequestId === entry.payload.client_request_id;
+      const idMatch = !cridMatch && !!entry.messageId && m.id === entry.messageId;
+      const nameMatch =
+        !cridMatch &&
+        !idMatch &&
+        !matched &&
+        !m.committedCardId &&
+        m.draft.name === entry.payload.name;
+      if (!(cridMatch || idMatch || nameMatch)) return m;
+      matched = true;
+      return { ...m, pendingSync: false, frozen: false };
+    });
+    setState({
+      messages: [
+        ...next,
+        {
+          id: newId("ai"),
+          role: "assistant",
+          kind: "text",
+          text: matched
+            ? "this couldn't sync — fix or discard."
+            : `couldn't sync a queued change (${err.status}).`,
+        },
+      ],
+    });
   },
 
   /* Drawer controls — unchanged from the local mock. */
@@ -813,12 +1110,31 @@ interface TransactionProposalWire {
   client_request_id: string;
 }
 
-function _proposalToDraft(call: ChatToolCall): ParseDraft | null {
+function _proposalToDraft(
+  call: ChatToolCall,
+  committedPayload?: unknown,
+): ParseDraft | null {
   // Backend response_model is TransactionProposal (app/models/transactions.py)
   // and the local Category union now covers every backend value, so we
   // trust the wire shape. Day 10b §1: "if a server row still returns
   // something outside the union it's a real bug, not a cast to paper over."
-  const r = call.result as unknown as TransactionProposalWire;
+  //
+  // Day 15: when the synthetic block carries `committed_payload` (the live
+  // `transactions` row's user-editable fields, stitched on by
+  // `_annotate_committed_proposals`), merge it OVER `call.result` so the
+  // rehydrated draft reflects what was actually committed — not the
+  // agent's original suggestion. The proposal-only fields the row doesn't
+  // carry (`gemini_suggestion`, and `client_request_id` itself echoed via
+  // result) come through from `call.result` via the spread fallback.
+  const committed =
+    committedPayload && typeof committedPayload === "object"
+      ? (committedPayload as Record<string, unknown>)
+      : null;
+  const merged = {
+    ...(call.result as Record<string, unknown>),
+    ...(committed ?? {}),
+  };
+  const r = merged as unknown as TransactionProposalWire;
   const merchant = typeof r.merchant === "string" ? r.merchant : null;
   const date = typeof r.date === "string" ? r.date : null;
   const category = typeof r.category === "string" ? r.category : null;
@@ -872,14 +1188,29 @@ interface CardProposalWire {
   issuer: CardIssuer | null;
   program: CardProgram;
   multipliers: Record<string, number>;
+  client_request_id?: string;
   annual_fee: string | number | null;
   source_urls: string[];
   alias: string | null;
   needs_manual: boolean;
 }
 
-function _proposalToCardDraft(call: ChatToolCall): CardParseDraft | null {
-  const r = call.result as unknown as CardProposalWire;
+function _proposalToCardDraft(
+  call: ChatToolCall,
+  committedPayload?: unknown,
+): CardParseDraft | null {
+  // Day 15: when `committed_payload` is present (live `cards` row), prefer
+  // its values over the proposal's. `needs_manual` only exists on the
+  // proposal — preserved via the spread fallback.
+  const committed =
+    committedPayload && typeof committedPayload === "object"
+      ? (committedPayload as Record<string, unknown>)
+      : null;
+  const merged = {
+    ...((call.result as Record<string, unknown>) ?? {}),
+    ...(committed ?? {}),
+  };
+  const r = merged as unknown as CardProposalWire;
   if (!r || typeof r !== "object") return null;
   if (typeof r.name !== "string" || !r.name) return null;
 
@@ -914,6 +1245,108 @@ function _proposalToCardDraft(call: ChatToolCall): CardParseDraft | null {
     lastFour: typeof r.last_four === "string" ? r.last_four : "",
     needsManual: r.needs_manual === true,
     alias: typeof r.alias === "string" ? r.alias : null,
+    clientRequestId:
+      typeof r.client_request_id === "string" ? r.client_request_id : undefined,
+  };
+}
+
+/**
+ * Project a freshly-committed transaction row into the local ParseDraft
+ * shape, preserving wire-payload bookkeeping fields from the original
+ * draft (`clientRequestId`, `notes`, `geminiSuggestion`) that the row
+ * doesn't carry back. Used by `applyDrainTxSuccess` to flip a queued
+ * parse card's displayed values to the row's actual values — handles
+ * the edit-before-tap case (user changed $40 → $42 offline; the row is
+ * now $42, the rehydrated draft must show $42).
+ */
+function _txToDraft(tx: Transaction, base: ParseDraft): ParseDraft {
+  return {
+    ...base,
+    merchant: tx.merchant,
+    amountCents: tx.amountCents,
+    date: tx.date,
+    cardId: tx.cardId,
+    category: tx.category,
+  };
+}
+
+/**
+ * Locate the in-memory `card-parse` message a drain outcome should
+ * patch. Match priority:
+ *
+ *   1. **`clientRequestId`** — the stable per-proposal join key from
+ *      `propose_card`. Persisted on the rehydrated draft (via both
+ *      `result.client_request_id` and `committed_payload.client_request_id`),
+ *      so it survives a close-and-reopen cycle where the React message
+ *      id was regenerated. 1:1 with the queue entry's
+ *      `payload.client_request_id`. This is the load-bearing key.
+ *   2. **`messageId`** — the in-memory id captured at enqueue time.
+ *      Covers legacy entries (rare, only matters if an upgrade-time
+ *      queued entry pre-dates the crid plumbing) and is a cheap
+ *      same-session fallback.
+ *   3. **`name`** — last-resort fallback for two-same-name cards in
+ *      pre-Day-15 chat history whose proposal blocks don't have a
+ *      crid (legacy). Only considers uncommitted cards; returns the
+ *      first match. New proposals never hit this branch.
+ *
+ * Returns `-1` if no key matches. The drain treats that as a silent
+ * no-op — the row is still in the wallet, and the next /chat/messages
+ * rehydrate paints the card via the backend `committed_payload`
+ * annotation (matched server-side by crid).
+ */
+function _findCardParseTarget(
+  messages: ChatMessage[],
+  clientRequestId: string | undefined,
+  messageId: string | undefined,
+  cardName: string | undefined,
+): number {
+  if (clientRequestId) {
+    const idx = messages.findIndex(
+      (m) =>
+        m.role === "assistant" &&
+        m.kind === "card-parse" &&
+        m.draft.clientRequestId === clientRequestId,
+    );
+    if (idx !== -1) return idx;
+  }
+  if (messageId) {
+    const idx = messages.findIndex(
+      (m) =>
+        m.role === "assistant" &&
+        m.kind === "card-parse" &&
+        m.id === messageId,
+    );
+    if (idx !== -1) return idx;
+  }
+  if (!cardName) return -1;
+  return messages.findIndex(
+    (m) =>
+      m.role === "assistant" &&
+      m.kind === "card-parse" &&
+      !m.committedCardId &&
+      m.draft.name === cardName,
+  );
+}
+
+/**
+ * Project a freshly-committed card row into the local CardParseDraft.
+ * Mirrors `_proposalToCardDraft` field-for-field but consumes the
+ * narrower `CardRow` shape. `needsManual` always becomes false — a
+ * committed card by definition has its identity fields resolved.
+ */
+function _cardRowToDraft(card: CardRow): CardParseDraft {
+  return {
+    name: card.name,
+    issuer: card.issuer,
+    network: card.network,
+    program: card.program,
+    multipliers: card.multipliers,
+    annualFee: card.annual_fee,
+    sourceUrls: card.source_urls,
+    lastFour: card.last_four ?? "",
+    needsManual: false,
+    alias: null,
+    clientRequestId: card.client_request_id,
   };
 }
 
@@ -1030,6 +1463,15 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
     result?: unknown;
     committed_id?: unknown;
     committed_state?: unknown;
+    /**
+     * Day 15 addition: the matched row's current user-editable fields,
+     * stitched on by `_annotate_committed_proposals`. Present only when
+     * `committed_id` is also present (i.e., the proposal has been
+     * confirmed and a row exists). Drives the rehydrated parse card's
+     * displayed values so they match the ledger, not the agent's
+     * original suggestion. See `_proposalToDraft` for merge semantics.
+     */
+    committed_payload?: unknown;
   }>;
 
   if (proposals.length === 0) {
@@ -1059,7 +1501,7 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
         : undefined;
 
     if (synthetic.name === "propose_transaction") {
-      const draft = _proposalToDraft(synthetic);
+      const draft = _proposalToDraft(synthetic, p.committed_payload);
       if (!draft) continue;
       out.push({
         id: newId("ai"),
@@ -1073,7 +1515,7 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
       });
       prefaceClaimed = true;
     } else if (synthetic.name === "propose_card") {
-      const draft = _proposalToCardDraft(synthetic);
+      const draft = _proposalToCardDraft(synthetic, p.committed_payload);
       if (!draft) continue;
       out.push({
         id: newId("ai"),
@@ -1102,3 +1544,14 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
   // above), the fallback bubble already covered it.
   return out;
 }
+
+/**
+ * Test-only handles. The `_wireMessageToLocal` mapper is private to the
+ * module (it captures the rehydrate semantics including `committed_payload`
+ * precedence — Day 15); exposing it here lets unit tests drive it
+ * directly without an HTTP round-trip or a persisted conversation id.
+ * Production code must not import `_testing`.
+ */
+export const _testing = {
+  wireMessageToLocal: _wireMessageToLocal,
+};

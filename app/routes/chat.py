@@ -534,7 +534,7 @@ def _extract_proposals_from_trace(
 def _annotate_committed_proposals(
     client: Any, rows: list[dict[str, Any]]
 ) -> None:
-    """Attach `committed_id` + `committed_state` to confirmed proposals.
+    """Attach `committed_id`, `committed_state`, and `committed_payload`.
 
     Walks the in-memory rows, collects every proposal's identifier
     (client_request_id for transactions, name for cards), runs a single
@@ -542,25 +542,39 @@ def _annotate_committed_proposals(
     NOT the `active_transactions` view — so soft-deleted rows are visible
     here. Mutates each block's dict in place:
 
-      * `committed_id`    — the matched row's UUID (when any row matched).
-      * `committed_state` — `"active"` or `"deleted"` carried back from the
-        row's `status` column. The frontend's ParseCard switches on this
-        to render `logged.` vs `deleted.` badges; the rehydrated card is
-        always read-only when `committed_id` is set, regardless of state.
+      * `committed_id`      — the matched row's UUID (when any row matched).
+      * `committed_state`   — `"active"` or `"deleted"` carried back from
+        the row's `status` column. The frontend's ParseCard switches on
+        this to render `logged.` vs `deleted.` badges; the rehydrated
+        card is always read-only when `committed_id` is set, regardless
+        of state.
+      * `committed_payload` — the *current* values of the user-editable
+        fields on the matched row. Day 15 addition: the original
+        `input`/`result` blocks freeze the agent's proposal, but the user
+        may have edited the parse card before tapping "looks right" (and
+        may have edited the row again later via the edit sheet). Without
+        `committed_payload`, a rehydrated `logged.` card would display
+        the agent's original number even after an edit. The frontend
+        `_proposalToDraft` prefers this over `result` when present.
 
     Reading from the base table (with RLS) is the load-bearing distinction
     from default app reads: this is one of the two surfaces explicitly
     documented in DESIGN.md §8.2 as opting into the base table — the chat
     rehydrate annotation needs to distinguish "never confirmed" from
-    "confirmed and deleted" to set the badge correctly.
+    "confirmed and deleted" to set the badge correctly, and a `deleted.`
+    badge with stale display values is still wrong.
 
-    Card matching is by `name` across any status — cards don't carry a
-    `client_request_id`, and the proposal's `last_four` is often null
-    (the agent doesn't ask for it up-front). Within a single user's ~10-
-    card wallet, name collisions are rare enough that a best-effort match
-    is fine for v1.
+    Card matching is by `client_request_id` (Day 15 follow-up — see
+    migration `20260517120000_cards_client_request_id.sql`). Each
+    `propose_card` proposal mints a stable UUID that the row carries
+    after `/cards/confirm`; the join is 1:1 even when a user holds two
+    same-name cards differing on `last_four`. Legacy proposal blocks
+    (predating the crid column) fall back to a name match — best-effort
+    for two-same-name cards in old history, but every new proposal
+    works cleanly.
     """
     crid_set: set[str] = set()
+    card_crid_set: set[str] = set()
     card_name_set: set[str] = set()
     for row in rows:
         if row.get("role") != "assistant":
@@ -577,19 +591,31 @@ def _annotate_committed_proposals(
                 if isinstance(crid, str):
                     crid_set.add(crid)
             elif tool_name == "propose_card":
-                name = result.get("name")
-                if isinstance(name, str) and name:
-                    card_name_set.add(name)
+                # Prefer crid; fall back to name for legacy blocks (the
+                # crid column was added Day 15; older persisted blocks
+                # only carry a name).
+                card_crid = result.get("client_request_id")
+                if isinstance(card_crid, str) and card_crid:
+                    card_crid_set.add(card_crid)
+                else:
+                    name = result.get("name")
+                    if isinstance(name, str) and name:
+                        card_name_set.add(name)
 
-    # `committed_txs` maps crid → (row_id, status). Same shape for cards.
-    # When the same crid has both active and deleted rows the partial unique
-    # index ensures only one is active — pick that one for the "is this still
-    # logged?" answer. For two deleted rows, pick the most recent.
-    committed_txs: dict[str, tuple[str, str]] = {}
+    # `committed_txs` maps crid → full row dict. Same shape for cards
+    # (keyed by `name`). The full row is kept so we can stitch
+    # `committed_payload` onto each block without a second query. When the
+    # same crid has both active and deleted rows the partial unique index
+    # ensures only one is active — pick that one for the "is this still
+    # logged?" answer. For two deleted rows, the first seen is fine.
+    committed_txs: dict[str, dict[str, Any]] = {}
     if crid_set:
         tx_resp = (
             client.table("transactions")
-            .select("id, client_request_id, status, deleted_at")
+            .select(
+                "id, client_request_id, status, deleted_at, "
+                "amount, merchant, date, category, card_id, notes"
+            )
             .in_("client_request_id", list(crid_set))
             .execute()
         )
@@ -604,14 +630,45 @@ def _annotate_committed_proposals(
             # the first seen is fine for v1 (partial-unique-index guarantees
             # at most one active per crid, and "any deleted id" suffices to
             # render the deleted badge).
-            if prior is None or (prior[1] != "active" and row_status == "active"):
-                committed_txs[crid] = (tx_id, row_status)
+            prior_status = (prior or {}).get("status") if prior else None
+            if prior is None or (prior_status != "active" and row_status == "active"):
+                committed_txs[crid] = r
 
-    committed_cards: dict[str, tuple[str, str]] = {}
+    # `committed_cards_by_crid` is the load-bearing lookup (1:1 join);
+    # `committed_cards_by_name` is the legacy fallback for proposal blocks
+    # written before the crid column existed. `alias` isn't a column on
+    # `cards` (DESIGN.md §8.1 — aliases are proposal-time annotations,
+    # not row state); it falls through to the proposal `result` via the
+    # frontend's spread merge in `_proposalToCardDraft`.
+    _card_select = (
+        "id, name, status, deleted_at, "
+        "network, last_four, issuer, program, multipliers, "
+        "annual_fee, source_urls, client_request_id"
+    )
+    committed_cards_by_crid: dict[str, dict[str, Any]] = {}
+    if card_crid_set:
+        card_resp = (
+            client.table("cards")
+            .select(_card_select)
+            .in_("client_request_id", list(card_crid_set))
+            .execute()
+        )
+        for r in card_resp.data or []:
+            row_crid = r.get("client_request_id")
+            card_id = r.get("id")
+            row_status = r.get("status") or "active"
+            if not (isinstance(row_crid, str) and isinstance(card_id, str)):
+                continue
+            prior = committed_cards_by_crid.get(row_crid)
+            prior_status = (prior or {}).get("status") if prior else None
+            if prior is None or (prior_status != "active" and row_status == "active"):
+                committed_cards_by_crid[row_crid] = r
+
+    committed_cards_by_name: dict[str, dict[str, Any]] = {}
     if card_name_set:
         card_resp = (
             client.table("cards")
-            .select("id, name, status, deleted_at")
+            .select(_card_select)
             .in_("name", list(card_name_set))
             .execute()
         )
@@ -621,11 +678,12 @@ def _annotate_committed_proposals(
             row_status = r.get("status") or "active"
             if not (isinstance(name, str) and isinstance(card_id, str)):
                 continue
-            prior = committed_cards.get(name)
-            if prior is None or (prior[1] != "active" and row_status == "active"):
-                committed_cards[name] = (card_id, row_status)
+            prior = committed_cards_by_name.get(name)
+            prior_status = (prior or {}).get("status") if prior else None
+            if prior is None or (prior_status != "active" and row_status == "active"):
+                committed_cards_by_name[name] = r
 
-    if not committed_txs and not committed_cards:
+    if not committed_txs and not committed_cards_by_crid and not committed_cards_by_name:
         return
 
     for row in rows:
@@ -641,15 +699,78 @@ def _annotate_committed_proposals(
             if tool_name == "propose_transaction":
                 crid = result.get("client_request_id")
                 if isinstance(crid, str) and crid in committed_txs:
-                    tx_id, row_status = committed_txs[crid]
-                    block["committed_id"] = tx_id
-                    block["committed_state"] = row_status
+                    matched = committed_txs[crid]
+                    block["committed_id"] = matched["id"]
+                    block["committed_state"] = matched.get("status") or "active"
+                    block["committed_payload"] = _tx_committed_payload(matched)
             elif tool_name == "propose_card":
-                name = result.get("name")
-                if isinstance(name, str) and name in committed_cards:
-                    card_id, row_status = committed_cards[name]
-                    block["committed_id"] = card_id
-                    block["committed_state"] = row_status
+                # crid wins; fall back to name for legacy blocks. The
+                # crid path is the load-bearing fix for two-same-name
+                # cards (e.g. "Amex Gold" 1234 vs "Amex Gold" 5678).
+                card_crid = result.get("client_request_id")
+                matched: dict[str, Any] | None = None
+                if isinstance(card_crid, str) and card_crid in committed_cards_by_crid:
+                    matched = committed_cards_by_crid[card_crid]
+                else:
+                    name = result.get("name")
+                    if isinstance(name, str) and name in committed_cards_by_name:
+                        matched = committed_cards_by_name[name]
+                if matched is not None:
+                    block["committed_id"] = matched["id"]
+                    block["committed_state"] = matched.get("status") or "active"
+                    block["committed_payload"] = _card_committed_payload(matched)
+
+
+def _tx_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a transactions row into the user-editable `committed_payload`.
+
+    Mirrors the field set the edit sheet exposes (merchant, amount, date,
+    category, card_id, notes) plus the `client_request_id` so the frontend
+    can sanity-check the join key didn't drift. Amount is serialized as the
+    same string shape `/transactions/confirm` returns, so `_proposalToDraft`
+    on the frontend can build a `ParseDraft` from `committed_payload` and
+    `result` interchangeably without a separate parser branch.
+    """
+    return {
+        "client_request_id": row.get("client_request_id"),
+        "merchant": row.get("merchant"),
+        "amount": row.get("amount"),
+        "date": row.get("date"),
+        "card_id": row.get("card_id"),
+        "category": row.get("category"),
+        "notes": row.get("notes"),
+    }
+
+
+def _card_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a cards row into the `committed_payload` projection.
+
+    Mirrors the columns the `cards` table actually carries (DESIGN.md
+    §8.6) so the frontend `_proposalToCardDraft` can build a
+    `CardParseDraft` from `committed_payload` without a separate parser
+    branch. `gemini_suggestion`, `needs_manual`, and `alias` are
+    intentionally omitted — those are proposal-time annotations (or
+    user-chosen labels) that don't persist as row state in v1. They
+    fall through to the proposal `result` via the spread fallback on
+    the frontend.
+    """
+    multipliers = row.get("multipliers")
+    if not isinstance(multipliers, dict):
+        multipliers = {}
+    source_urls = row.get("source_urls")
+    if not isinstance(source_urls, list):
+        source_urls = []
+    return {
+        "client_request_id": row.get("client_request_id"),
+        "network": row.get("network"),
+        "last_four": row.get("last_four"),
+        "name": row.get("name"),
+        "issuer": row.get("issuer"),
+        "program": row.get("program"),
+        "multipliers": multipliers,
+        "annual_fee": row.get("annual_fee"),
+        "source_urls": source_urls,
+    }
 
 
 def _sse_frame(event: str, data: str) -> bytes:

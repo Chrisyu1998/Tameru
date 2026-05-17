@@ -167,6 +167,11 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         annual_fee: annualFee.trim() === "" ? null : annualFee.trim(),
         source_urls: effectiveLookup.source_urls,
         needs_manual: effectiveLookup.needs_manual,
+        // Onboarding-added cards have no chat-side proposal block to
+        // join back to, but the column is NOT NULL — mint a fresh UUID
+        // so the schema invariant holds. The crid never gets used as a
+        // join key for these rows; it's structural padding.
+        client_request_id: crypto.randomUUID(),
       });
       onSaved();
     } catch (e) {

@@ -56,6 +56,11 @@ interface CardParseCardProps {
    * the original confirm never happened. See ParseCard for the parallel.
    */
   frozen?: boolean;
+  /**
+   * `true` between an offline "looks right" tap and drain. See
+   * `ParseCardProps.pendingSync` — same semantics here.
+   */
+  pendingSync?: boolean;
   onConfirm: (draft: CardParseDraft) => void;
 }
 
@@ -65,6 +70,7 @@ export function CardParseCard({
   committed,
   committedState,
   frozen,
+  pendingSync,
   onConfirm,
 }: CardParseCardProps) {
   const [local, setLocal] = useState<CardParseDraft>(draft);
@@ -76,11 +82,13 @@ export function CardParseCard({
     !issuerUnresolved &&
     !networkUnresolved &&
     !committed &&
-    !frozen;
+    !frozen &&
+    !pendingSync;
 
   const isDeleted = committed && committedState === "deleted";
   const isAdded = committed && !isDeleted;
-  const isCancelled = !committed && !!frozen;
+  const isCancelled = !committed && !!frozen && !pendingSync;
+  const isPending = !committed && !!pendingSync;
 
   return (
     <div className="w-full max-w-[88%] animate-slide-up-in">
@@ -111,7 +119,7 @@ export function CardParseCard({
           </span>
         </div>
 
-        {(issuerUnresolved || networkUnresolved) && !committed && !frozen && (
+        {(issuerUnresolved || networkUnresolved) && !committed && !frozen && !pendingSync && (
           <p className="mt-2 text-xs text-warn">
             lookup couldn't determine
             {issuerUnresolved && networkUnresolved
@@ -128,7 +136,7 @@ export function CardParseCard({
             render when unresolved (or while editing pre-confirm) to keep
             the card visually quiet on the happy path. Rehydrated cards
             (`frozen`) skip this block entirely — they're historical. */}
-        {!committed && !frozen && (
+        {!committed && !frozen && !pendingSync && (
           <>
             <div className="mt-4 grid grid-cols-2 gap-3 border-t border-hairline pt-3">
               <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
@@ -248,7 +256,7 @@ export function CardParseCard({
           </div>
         )}
 
-        {local.sourceUrls.length > 0 && !committed && !frozen && (
+        {local.sourceUrls.length > 0 && !committed && !frozen && !pendingSync && (
           <div className="mt-3 border-t border-hairline pt-2 text-[0.7rem] text-ink-quaternary">
             sources:&nbsp;
             {local.sourceUrls.slice(0, 3).map((u, i) => (
@@ -287,7 +295,12 @@ export function CardParseCard({
             <span>not saved.</span>
           </div>
         )}
-        {!committed && !frozen && (
+        {isPending && (
+          <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
+            <span>queued — syncs when online.</span>
+          </div>
+        )}
+        {!committed && !frozen && !pendingSync && (
           <>
             <button
               type="button"

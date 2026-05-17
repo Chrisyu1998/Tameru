@@ -85,6 +85,17 @@ export interface CardProposal {
   color?: string | null;
   alias?: string | null;
   needs_manual: boolean;
+  /**
+   * Stable per-proposal join key, minted server-side at `propose_card`
+   * time. The frontend posts it back verbatim at `/cards/confirm`; the
+   * row stores it in `cards.client_request_id`. Drives the chat
+   * rehydrate annotation's 1:1 join (no name-collision ambiguity) and
+   * the offline-queue drain's in-memory match. Same name as the
+   * transaction-side field, same lifecycle, different role: cards use
+   * crid as a join key, transactions use it as an idempotency token —
+   * but the wire shape is identical.
+   */
+  client_request_id: string;
 }
 
 export type CardStatus = 'active' | 'deleted';
@@ -104,6 +115,7 @@ export interface CardRow {
   status: CardStatus;
   deleted_at: string | null;
   created_at: string;
+  client_request_id: string;
 }
 
 export interface CardListResponse {

@@ -366,6 +366,7 @@ function MessageRow({
           committed={!!msg.committedTxId}
           committedState={msg.committedState}
           frozen={msg.frozen}
+          pendingSync={msg.pendingSync}
           onConfirm={(draft) => onConfirmDraft(draft)}
           onFix={onFixDraft}
         />
@@ -382,6 +383,7 @@ function MessageRow({
           committed={!!msg.committedCardId}
           committedState={msg.committedState}
           frozen={msg.frozen}
+          pendingSync={msg.pendingSync}
           onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
         />
       </div>

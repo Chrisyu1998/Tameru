@@ -638,6 +638,359 @@ def test_get_messages_annotates_committed_id_for_confirmed_transaction(
     assert proposal_blocks[0].get("committed_state") == "active"
 
 
+def test_get_messages_emits_committed_payload_reflecting_edited_row(
+    client, user_a, card_a, monkeypatch
+):
+    """Day 15: `committed_payload` carries the row's *actual* values.
+
+    The agent proposes $4.25; the user edits to $4.99 before tapping
+    "looks right"; the row lands at $4.99. The rehydrate annotation must
+    surface the row's $4.99 as `committed_payload.amount` so the
+    frontend's `_proposalToDraft` (which prefers `committed_payload` over
+    `result`) renders the committed value, not the agent's suggestion.
+
+    This is the load-bearing post-Day-15 contract: without
+    `committed_payload`, a rehydrated `logged.` parse card would display
+    the agent's original number forever even though the ledger has the
+    edit.
+    """
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[
+                    _tool_use(
+                        "propose_transaction",
+                        {
+                            "merchant": "Sunny Coffee",
+                            "amount": 4.25,
+                            "date": "2026-05-13",
+                            "category": "Coffee Shops",
+                        },
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("Here's the parse.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "4.25 coffee"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    rows = _chat_rows(user_a, conversation_id)
+    proposal = next(
+        b for b in rows[1]["content_blocks"] if b.get("type") == "tameru_proposal"
+    )
+    crid = proposal["result"]["client_request_id"]
+
+    # Insert the row at $4.99 (not $4.25) — simulating the user editing
+    # the amount on the parse card before tapping "looks right." Also
+    # change the merchant casing to match a server-side normalization
+    # the row might apply; this exercises the symmetric merchant-from-
+    # committed_payload precedence.
+    sb = supabase_for_user(user_a.jwt)
+    tx_resp = (
+        sb.table("transactions")
+        .insert(
+            {
+                "user_id": user_a.id,
+                "card_id": card_a,
+                "merchant": "Sunny Coffee Roasters",
+                "amount": "4.99",
+                "date": "2026-05-13",
+                "category": "Coffee Shops",
+                "source": "nlp",
+                "client_request_id": crid,
+                "notes": "after edit",
+            }
+        )
+        .execute()
+    )
+    tx_id = tx_resp.data[0]["id"]
+
+    history = client.get(
+        f"/chat/messages?conversation_id={conversation_id}",
+        headers=_auth(user_a),
+    )
+    assert history.status_code == 200
+    body = history.json()
+    proposal_blocks = [
+        b
+        for b in body["messages"][1]["content_blocks"]
+        if b.get("type") == "tameru_proposal"
+    ]
+    assert len(proposal_blocks) == 1
+    block = proposal_blocks[0]
+    assert block.get("committed_id") == tx_id
+    assert block.get("committed_state") == "active"
+
+    # Load-bearing assertion: committed_payload reflects the row, not
+    # the proposal. `result` is untouched (audit trail) — the agent's
+    # original $4.25 stays there for the rehydrate fallback.
+    cp = block.get("committed_payload")
+    assert cp is not None, "Day 15: committed_payload missing"
+    assert cp["merchant"] == "Sunny Coffee Roasters"
+    assert str(cp["amount"]) in ("4.99", "4.9900")  # numeric serialization
+    assert cp["category"] == "Coffee Shops"
+    assert cp["client_request_id"] == crid
+    assert cp["notes"] == "after edit"
+    # `result` (the proposal) stays untouched — that's the audit-trail
+    # property.
+    assert block["result"]["amount"] == "4.25"
+    assert block["result"]["merchant"] == "Sunny Coffee"
+
+
+def test_get_messages_emits_committed_payload_for_committed_card(
+    client, user_a, monkeypatch
+):
+    """Day 15: cards also get `committed_payload` carrying row truth.
+
+    Cards are matched on `name` (no client_request_id), so this test
+    drives a propose_card turn, inserts a row whose `last_four` and
+    `multipliers` differ from the proposal (mimicking the user filling
+    in last-4 + adjusting multipliers post-confirm), and asserts the
+    rehydrate annotation surfaces those committed values — not the
+    proposal's nulls/originals.
+    """
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[
+                    _tool_use(
+                        "propose_card",
+                        {"program": "Amex Gold"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("here's the card.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+    resp = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={"message": "amex gold"},
+    )
+    assert resp.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp.content)[-1][1])["conversation_id"]
+
+    # Pull the proposal's `client_request_id` from the persisted
+    # tameru_proposal block — Day 15 made it the load-bearing join key
+    # for `_annotate_committed_proposals`. The test inserts the row
+    # under that same crid so we exercise the new path (not the legacy
+    # name fallback).
+    rows = _chat_rows(user_a, conversation_id)
+    proposal = next(
+        b for b in rows[1]["content_blocks"] if b.get("type") == "tameru_proposal"
+    )
+    proposal_crid = proposal["result"]["client_request_id"]
+
+    sb = supabase_for_user(user_a.jwt)
+    card_resp = (
+        sb.table("cards")
+        .insert(
+            {
+                "user_id": user_a.id,
+                "name": "Amex Gold",
+                "issuer": "amex",
+                "network": "amex",
+                "program": "MR",
+                "multipliers": {"Dining": 4, "Groceries": 4},
+                "annual_fee": "325",
+                "last_four": "1234",
+                "source_urls": [],
+                "color": None,
+                "status": "active",
+                "client_request_id": proposal_crid,
+            }
+        )
+        .execute()
+    )
+    card_id = card_resp.data[0]["id"]
+
+    history = client.get(
+        f"/chat/messages?conversation_id={conversation_id}",
+        headers=_auth(user_a),
+    )
+    assert history.status_code == 200
+    body = history.json()
+    proposal_blocks = [
+        b
+        for b in body["messages"][1]["content_blocks"]
+        if b.get("type") == "tameru_proposal"
+    ]
+    assert len(proposal_blocks) == 1
+    block = proposal_blocks[0]
+    assert block["tool_name"] == "propose_card"
+    assert block.get("committed_id") == card_id
+    assert block.get("committed_state") == "active"
+    cp = block.get("committed_payload")
+    assert cp is not None, "Day 15: card committed_payload missing"
+    assert cp["name"] == "Amex Gold"
+    assert cp["last_four"] == "1234"
+    assert cp["multipliers"] == {"Dining": 4, "Groceries": 4}
+    # PostgREST serializes `numeric` as a number when integral, string with
+    # fractional digits otherwise. Accept either shape — the frontend
+    # `_proposalToCardDraft` coerces back to a string via `String(...)`.
+    assert str(cp["annual_fee"]) in ("325", "325.00")
+    assert cp["issuer"] == "amex"
+    assert cp["network"] == "amex"
+
+
+def test_get_messages_disambiguates_two_same_name_cards_by_crid(
+    client, user_a, monkeypatch
+):
+    """Day 15: two active cards sharing a `name` annotate cleanly.
+
+    A user can legitimately hold "Amex Gold" 1234 and "Amex Gold" 5678
+    — the partial unique index is on (issuer, last_four), not name. With
+    a name-only join in `_annotate_committed_proposals` (the pre-Day-15
+    behavior), both proposal blocks in chat history would get annotated
+    pointing at whichever row the join returned first. After the
+    `client_request_id` join key was added, each proposal block joins
+    1:1 to its row.
+
+    This test drives two separate propose_card turns (each mints a
+    fresh crid), inserts two cards under those crids with different
+    last_four values, then asserts each proposal block carries the
+    *right* row's `committed_payload`.
+    """
+    # Use a fresh product name that won't collide with the session-scoped
+    # `Amex Gold` rows other annotation tests in this file already created
+    # (the cards table persists across the session via card_a fixture +
+    # earlier inserts; same-name-same-last_four collisions on insert would
+    # 23505 here even though the annotation logic itself is what we want
+    # to exercise).
+    PROGRAM = "Disambiguation Sapphire"
+    _install_scripted_anthropic(
+        monkeypatch,
+        [
+            _MockMessage(
+                content=[_tool_use("propose_card", {"program": PROGRAM})],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("first.")],
+                stop_reason="end_turn",
+            ),
+            _MockMessage(
+                content=[_tool_use("propose_card", {"program": PROGRAM})],
+                stop_reason="tool_use",
+            ),
+            _MockMessage(
+                content=[_text("second.")],
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+
+    # Turn 1: first proposal.
+    resp1 = client.post(
+        "/chat/turn", headers=_auth(user_a), json={"message": "first"}
+    )
+    assert resp1.status_code == 200
+    conversation_id = json.loads(_parse_sse(resp1.content)[-1][1])["conversation_id"]
+
+    # Turn 2: second proposal (same product name, but the agent will
+    # mint a fresh crid for it).
+    resp2 = client.post(
+        "/chat/turn",
+        headers=_auth(user_a),
+        json={
+            "message": "second",
+            "conversation_id": conversation_id,
+        },
+    )
+    assert resp2.status_code == 200
+
+    # Extract both proposals' crids from persisted blocks.
+    rows = _chat_rows(user_a, conversation_id)
+    proposal_blocks = [
+        b
+        for r in rows
+        for b in r["content_blocks"]
+        if b.get("type") == "tameru_proposal"
+    ]
+    assert len(proposal_blocks) == 2
+    crid_a = proposal_blocks[0]["result"]["client_request_id"]
+    crid_b = proposal_blocks[1]["result"]["client_request_id"]
+    assert crid_a != crid_b, "propose_card must mint a fresh crid per call"
+
+    # Insert two cards under those crids, with different last_four.
+    sb = supabase_for_user(user_a.jwt)
+    insert_resp = (
+        sb.table("cards")
+        .insert(
+            [
+                {
+                    "user_id": user_a.id,
+                    "name": PROGRAM,
+                    "issuer": "chase",
+                    "network": "visa",
+                    "program": "UR",
+                    "multipliers": {"Dining": 3},
+                    "last_four": "7777",
+                    "source_urls": [],
+                    "status": "active",
+                    "client_request_id": crid_a,
+                },
+                {
+                    "user_id": user_a.id,
+                    "name": PROGRAM,
+                    "issuer": "chase",
+                    "network": "visa",
+                    "program": "UR",
+                    "multipliers": {"Dining": 3},
+                    "last_four": "8888",
+                    "source_urls": [],
+                    "status": "active",
+                    "client_request_id": crid_b,
+                },
+            ]
+        )
+        .execute()
+    )
+    by_crid = {r["client_request_id"]: r["id"] for r in insert_resp.data}
+
+    history = client.get(
+        f"/chat/messages?conversation_id={conversation_id}",
+        headers=_auth(user_a),
+    )
+    assert history.status_code == 200
+    body = history.json()
+    annotated = [
+        b
+        for m in body["messages"]
+        for b in m["content_blocks"]
+        if b.get("type") == "tameru_proposal"
+    ]
+    assert len(annotated) == 2
+    # Load-bearing: each proposal block points at its OWN row, not at
+    # whichever same-name row the join saw first.
+    block_a = next(b for b in annotated if b["result"]["client_request_id"] == crid_a)
+    block_b = next(b for b in annotated if b["result"]["client_request_id"] == crid_b)
+    assert block_a["committed_id"] == by_crid[crid_a]
+    assert block_b["committed_id"] == by_crid[crid_b]
+    assert block_a["committed_payload"]["last_four"] == "7777"
+    assert block_b["committed_payload"]["last_four"] == "8888"
+    # And each block's committed_payload echoes ITS crid back, not the
+    # other one's.
+    assert block_a["committed_payload"]["client_request_id"] == crid_a
+    assert block_b["committed_payload"]["client_request_id"] == crid_b
+
+
 def test_get_messages_falls_back_to_trace_for_legacy_rows(
     client, user_a, card_a, monkeypatch
 ):

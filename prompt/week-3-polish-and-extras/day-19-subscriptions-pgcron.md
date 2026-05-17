@@ -12,16 +12,22 @@ This day also lands the `propose_subscription` agent tool and registers it in `T
 - `CLAUDE.md` invariant 4.
 - Day 5's `client_request_id` idempotency pattern (`app/routes/transactions.py` confirm path + the `transactions_user_client_request_id_unique` partial index in `supabase/migrations/`). Subscriptions adopt the same shape — see "Why subscriptions get idempotency where cards don't" below.
 
-## Why subscriptions get idempotency where cards don't
+## Why `client_request_id` on subscriptions
 
-Cards rely on a natural-key partial unique index (`cards_active_identity_uniq` on `(user_id, issuer, last_four) WHERE active=true`) to make replays a no-op at the DB layer — a dup card commit returns 409 `active_card_exists` and the Day 15 offline queue treats that as a successful dequeue. Subscriptions have no equivalent natural key (two distinct subscriptions on the same card with the same name and frequency are technically valid — e.g. a family plan held alongside a personal plan), so the cards trick does not transfer.
+After the Day 15 cards follow-up (migration `20260517120000_cards_client_request_id.sql`), every ledger-adjacent table that flows through propose-then-confirm now carries a `client_request_id`. Same name across all three; **different roles depending on whether a natural uniqueness key exists**:
 
-The Day 15 offline-queue + pg_cron-auto-logger combination changes the cost equation that the original Day 19 draft used to skip `client_request_id`:
+| Table | Natural key? | Role of `client_request_id` |
+|---|---|---|
+| `transactions` | None — two coffees at the same place on the same day on the same card is a normal pattern | Idempotency token + chat-rehydrate join key. Same-crid replay returns the existing row. |
+| `cards` | `(user_id, issuer, last_four)` is structurally unique (one physical card per user per issuer) | Chat-rehydrate join key (disambiguates two same-name cards) + same-crid replay shortcut. The natural-key 409 still owns the "different proposals for the same physical card" case. |
+| `subscriptions` | **None** — a family plan and a personal plan on the same card with the same name and frequency are both valid | Idempotency token + chat-rehydrate join key. Same shape as transactions. |
 
-- A duplicated subscription row gets independently auto-logged by `pg_cron` every billing cycle (the `UNIQUE (subscription_id, date)` index is keyed on `subscription_id`, so two dup subscription rows produce two transaction rows per month).
+For subscriptions specifically, the Day 15 offline-queue + pg_cron-auto-logger combination amplifies the cost of a duplicate row:
+
+- A duplicated subscription gets independently auto-logged by `pg_cron` every billing cycle (the `UNIQUE (subscription_id, date)` index is keyed on `subscription_id`, so two dup subscription rows produce two transaction rows per month).
 - The recovery cost is not "one delete" (as for cards) but "delete the dup subscription + delete N already-auto-logged duplicate transactions," and N grows with months-until-the-user-notices.
 
-This asymmetry justifies the modest cost of an idempotency column + partial unique index on subscriptions, matching the Day 5 transactions pattern.
+So subscriptions get the full transactions-style treatment: nullable `client_request_id` column, partial unique index, route-level same-crid short-circuit. The `propose_subscription` tool mints a fresh UUID per call exactly the way `propose_card` (post-Day-15) and `propose_transaction` already do — copy that pattern from `app/agent/tools.py`.
 
 ## Deliverables
 

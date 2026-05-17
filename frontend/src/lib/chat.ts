@@ -59,6 +59,15 @@ export interface AssistantParseMessage {
    * "looks right." Set by `_wireMessageToLocal`; absent / false on `_renderTurn`.
    */
   frozen?: boolean;
+  /**
+   * `true` between the user tapping "looks right" while offline (queued in
+   * `offline_queue.ts`) and the drain landing on a terminal outcome. Hides
+   * the action buttons so a second tap doesn't enqueue a duplicate;
+   * cleared on drain 2xx (where `committedTxId` is also set) or on drain
+   * permanent failure (which re-opens the card for the user to edit
+   * + discard). Never persisted server-side — purely in-session UI state.
+   */
+  pendingSync?: boolean;
 }
 
 export interface AssistantCandidatesMessage {
@@ -148,6 +157,15 @@ export interface CardParseDraft {
   needsManual: boolean;
   /** Optional alias the user supplied via chat ("travel card"). */
   alias?: string | null;
+  /**
+   * Stable per-proposal join key from `propose_card`. Posted back at
+   * `/cards/confirm`; persists on the row. Drives the chat-rehydrate
+   * annotation's 1:1 join and the offline-queue drain's in-memory
+   * match priority (crid → messageId → name). Always present for
+   * fresh proposals after Day 15; optional for legacy rehydrated
+   * drafts that predate the column.
+   */
+  clientRequestId?: string;
 }
 
 export interface AssistantCardParseMessage {
@@ -171,6 +189,12 @@ export interface AssistantCardParseMessage {
    * fresh in-session cards. Mirrors `AssistantParseMessage.frozen`.
    */
   frozen?: boolean;
+  /**
+   * `true` between an offline "looks right" tap (queued in
+   * `offline_queue.ts`) and the drain's terminal outcome. Mirrors
+   * `AssistantParseMessage.pendingSync`.
+   */
+  pendingSync?: boolean;
 }
 
 export type ChatMessage =

@@ -95,10 +95,16 @@ def post_card_confirm(
           bug the (network, last_four) index had — see migration
           20260516140000.
 
-    No `client_request_id` idempotency here. Cards are ≤10/user lifetime;
-    the cost of a duplicate (delete and re-add) is recoverable in one tap.
-    See Day 14 prompt and DESIGN.md §8.1 for the proportionate-cost
-    reasoning.
+    `client_request_id` idempotency (Day 15 follow-up):
+        Same crid → return the existing row (200), no duplicate insert,
+        no 409. Mirrors `/transactions/confirm` idempotency. A network
+        retry of the exact same proposal is harmless.
+
+        This is NOT the structural dedup — the partial unique index on
+        `(user_id, issuer, last_four) WHERE status = 'active'` still
+        owns that. crid handles "same proposal posted twice"; the
+        natural-key 409 handles "different proposals for the same
+        physical card."
     """
     # `CardProposal.last_four` is nullable on the wire so the `propose_card`
     # tool can return a proposal mid-conversation before the user has typed
@@ -118,6 +124,24 @@ def post_card_confirm(
 
     client = supabase_for_user(user.jwt)
 
+    # crid short-circuit: a same-crid replay returns the prior row. The
+    # partial unique index `cards_active_client_request_id_unique`
+    # guarantees at most one active row per (user_id, client_request_id),
+    # so this lookup is safe — single-row or empty. RLS scopes it to the
+    # caller's own rows. Soft-deleted-then-readded cards mint a fresh
+    # crid (the propose-confirm cycle reruns), so a re-add never matches
+    # the deleted row here.
+    crid_lookup = (
+        client.table("cards")
+        .select("*")
+        .eq("client_request_id", str(proposal.client_request_id))
+        .eq("status", "active")
+        .limit(1)
+        .execute()
+    )
+    if crid_lookup.data:
+        return CardRow.model_validate(crid_lookup.data[0])
+
     insert_row: dict[str, object] = {
         "user_id": str(user.user_id),
         "name": proposal.name,
@@ -127,6 +151,7 @@ def post_card_confirm(
         "multipliers": proposal.multipliers,
         "last_four": proposal.last_four,
         "source_urls": proposal.source_urls,
+        "client_request_id": str(proposal.client_request_id),
         # `status` defaults to 'active' and `created_at` to now(); do not
         # set them here so a future default change doesn't silently
         # diverge from the migration.
@@ -139,11 +164,27 @@ def post_card_confirm(
     try:
         resp = client.table("cards").insert(insert_row).execute()
     except Exception as exc:
-        # Unique-violation taxonomy: the partial index `cards_active_identity_uniq`
-        # is the only column-level constraint a propose-confirm proposal can trip.
-        # PostgREST surfaces the Postgres SQLSTATE 23505 message in a stable way;
-        # we string-match the index name for forward-compat across SDK versions.
+        # Unique-violation taxonomy: two partial indexes can fire here.
+        # `cards_active_identity_uniq` is the natural-key dedup (same
+        # physical card) — surfaces as 409 active_card_exists for the
+        # frontend's "edit that one" affordance.
+        # `cards_active_client_request_id_unique` should never fire
+        # because the crid short-circuit above caught the only legitimate
+        # replay path; if it does fire, treat it the same as a crid
+        # replay (return the existing row).
         message = str(exc)
+        if "cards_active_client_request_id_unique" in message:
+            replay = (
+                client.table("cards")
+                .select("*")
+                .eq("client_request_id", str(proposal.client_request_id))
+                .eq("status", "active")
+                .limit(1)
+                .execute()
+            )
+            if replay.data:
+                return CardRow.model_validate(replay.data[0])
+            # Genuinely impossible — fall through to the generic raise.
         if "cards_active_identity_uniq" in message or "duplicate key" in message:
             raise _collision_409(client, proposal.issuer, proposal.last_four) from exc
         raise

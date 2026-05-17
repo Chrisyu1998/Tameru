@@ -163,6 +163,22 @@ class CardProposal(BaseModel):
     color: str | None = None
     alias: str | None = None
     needs_manual: bool = False
+    # Stable per-proposal identifier. Server-mints at `propose_card` time;
+    # the client posts it back unchanged at `/cards/confirm` so the row's
+    # `client_request_id` column matches the persisted `tameru_proposal`
+    # block's `result.client_request_id`. The chat-rehydrate annotation
+    # (`_annotate_committed_proposals`) joins on this — disambiguates
+    # two same-name cards (e.g. "Amex Gold" 1234 vs "Amex Gold" 5678),
+    # which a name-only join can't. See migration
+    # `20260517120000_cards_client_request_id.sql` and DESIGN.md §8.1.
+    #
+    # Not an idempotency token in the transactions sense — the partial
+    # unique index on `(user_id, issuer, last_four) WHERE status =
+    # 'active'` still owns DB-level dedup. This is a *join key*. The
+    # `/cards/confirm` route DOES short-circuit on same-crid replay
+    # (returns the existing row) so a network retry of the exact same
+    # proposal is harmless.
+    client_request_id: UUID
 
     @field_validator("name")
     @classmethod
@@ -261,6 +277,8 @@ class CardRow(BaseModel):
     status: CardStatus
     deleted_at: _dt.datetime | None = None
     created_at: _dt.datetime
+    # Stable per-proposal join key — see `CardProposal.client_request_id`.
+    client_request_id: UUID
 
 
 class CardListResponse(BaseModel):

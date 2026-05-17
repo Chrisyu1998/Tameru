@@ -230,6 +230,7 @@ function MessageRow({
           committed={!!msg.committedTxId}
           committedState={msg.committedState}
           frozen={msg.frozen}
+          pendingSync={msg.pendingSync}
           onConfirm={(draft) => chatStore.commitDraft(msg.id, draft)}
           onFix={() => {
             /* desktop drawer skips the inline "fix" sheet flow */
@@ -247,6 +248,7 @@ function MessageRow({
           committed={!!msg.committedCardId}
           committedState={msg.committedState}
           frozen={msg.frozen}
+          pendingSync={msg.pendingSync}
           onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
         />
       </div>

@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { DesktopComposer } from "@/components/desktop/DesktopComposer";
 import { ChatDrawer } from "@/components/desktop/ChatDrawer";
 import { CmdKTooltip } from "@/components/desktop/CmdKTooltip";
+import { PendingSyncBanner } from "@/components/PendingSyncBanner";
 
 /*
  * Lovable's __root.tsx (TanStack Start) becomes a plain layout component.
@@ -23,6 +24,7 @@ export default function Layout() {
       <div className="min-h-screen bg-canvas text-ink">
         <ThemeToggle />
         <Outlet />
+        <PendingSyncBanner />
       </div>
     );
   }
@@ -41,6 +43,7 @@ export default function Layout() {
       <DesktopComposer />
       <ChatDrawer />
       <CmdKTooltip />
+      <PendingSyncBanner />
     </div>
   );
 }
