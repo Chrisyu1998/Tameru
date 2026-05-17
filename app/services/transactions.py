@@ -76,7 +76,11 @@ def list_transactions(
     client = supabase_for_user(user.jwt)
 
     query = (
-        client.table("transactions")
+        # `active_transactions` is the default-safe read surface (DESIGN.md
+        # §8 status-column doctrine): soft-deleted rows do not appear in any
+        # listing/agent/dashboard read by going through this view. Writes
+        # still target the base `transactions` table.
+        client.table("active_transactions")
         .select("*")
         # date DESC, created_at DESC matches the transactions_user_date_idx
         # index's leading key and gives deterministic ordering when two

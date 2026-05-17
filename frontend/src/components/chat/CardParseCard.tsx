@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 import {
   ISSUERS,
   ISSUER_LABELS,
@@ -43,6 +43,19 @@ interface CardParseCardProps {
   draft: CardParseDraft;
   /** When set, the card is locked into "added" state. */
   committed: boolean;
+  /**
+   * Lifecycle of the committed card row (only meaningful with
+   * `committed=true`). `'active'` → `added.`; `'deleted'` →
+   * `deleted.` — the user closed this card from their wallet. Mirrors
+   * `ParseCardProps.committedState` for transactions.
+   */
+  committedState?: "active" | "deleted";
+  /**
+   * `true` for cards rehydrated from history — read-only historical
+   * artifact. Disables every input and surfaces a "not saved." badge if
+   * the original confirm never happened. See ParseCard for the parallel.
+   */
+  frozen?: boolean;
   onConfirm: (draft: CardParseDraft) => void;
 }
 
@@ -50,6 +63,8 @@ export function CardParseCard({
   preface,
   draft,
   committed,
+  committedState,
+  frozen,
   onConfirm,
 }: CardParseCardProps) {
   const [local, setLocal] = useState<CardParseDraft>(draft);
@@ -57,7 +72,15 @@ export function CardParseCard({
   const issuerUnresolved = local.issuer === null;
   const networkUnresolved = local.network === null;
   const canConfirm =
-    lastFourValid && !issuerUnresolved && !networkUnresolved && !committed;
+    lastFourValid &&
+    !issuerUnresolved &&
+    !networkUnresolved &&
+    !committed &&
+    !frozen;
+
+  const isDeleted = committed && committedState === "deleted";
+  const isAdded = committed && !isDeleted;
+  const isCancelled = !committed && !!frozen;
 
   return (
     <div className="w-full max-w-[88%] animate-slide-up-in">
@@ -70,9 +93,10 @@ export function CardParseCard({
       <div
         className={cn(
           "rounded-2xl border bg-elevated px-4 py-4",
-          committed
+          committed || frozen
             ? "border-moss-soft/60"
             : "border-moss-soft ring-1 ring-moss/20",
+          (isDeleted || isCancelled) && "opacity-75",
         )}
       >
         {/* Card headline */}
@@ -87,7 +111,7 @@ export function CardParseCard({
           </span>
         </div>
 
-        {(issuerUnresolved || networkUnresolved) && !committed && (
+        {(issuerUnresolved || networkUnresolved) && !committed && !frozen && (
           <p className="mt-2 text-xs text-warn">
             lookup couldn't determine
             {issuerUnresolved && networkUnresolved
@@ -102,8 +126,9 @@ export function CardParseCard({
         {/* Editable fields — surfaced inline so the user doesn't have to
             pop a sheet just to fill last-4. Issuer/network selects only
             render when unresolved (or while editing pre-confirm) to keep
-            the card visually quiet on the happy path. */}
-        {!committed && (
+            the card visually quiet on the happy path. Rehydrated cards
+            (`frozen`) skip this block entirely — they're historical. */}
+        {!committed && !frozen && (
           <>
             <div className="mt-4 grid grid-cols-2 gap-3 border-t border-hairline pt-3">
               <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
@@ -223,7 +248,7 @@ export function CardParseCard({
           </div>
         )}
 
-        {local.sourceUrls.length > 0 && !committed && (
+        {local.sourceUrls.length > 0 && !committed && !frozen && (
           <div className="mt-3 border-t border-hairline pt-2 text-[0.7rem] text-ink-quaternary">
             sources:&nbsp;
             {local.sourceUrls.slice(0, 3).map((u, i) => (
@@ -242,13 +267,27 @@ export function CardParseCard({
           </div>
         )}
 
-        {/* Action area */}
-        {committed ? (
+        {/* Action / badge area — terminal states get a badge, fresh
+            uncommitted state gets the action button. Three terminal
+            badge variants mirror ParseCard's transaction surface. */}
+        {isAdded && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-moss-deep">
             <Check className="h-3.5 w-3.5" />
             <span>added.</span>
           </div>
-        ) : (
+        )}
+        {isDeleted && (
+          <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>deleted.</span>
+          </div>
+        )}
+        {isCancelled && (
+          <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
+            <span>not saved.</span>
+          </div>
+        )}
+        {!committed && !frozen && (
           <>
             <button
               type="button"

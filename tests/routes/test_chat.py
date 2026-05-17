@@ -545,8 +545,9 @@ def test_get_messages_returns_tameru_proposal_blocks_for_rehydrate(
     ]
     assert len(proposal_blocks) == 1
     assert proposal_blocks[0]["tool_name"] == "propose_transaction"
-    # Not yet confirmed → no committed_id on the block.
+    # Not yet confirmed → no committed_id / committed_state on the block.
     assert "committed_id" not in proposal_blocks[0]
+    assert "committed_state" not in proposal_blocks[0]
 
 
 def test_get_messages_annotates_committed_id_for_confirmed_transaction(
@@ -634,6 +635,7 @@ def test_get_messages_annotates_committed_id_for_confirmed_transaction(
     ]
     assert len(proposal_blocks) == 1
     assert proposal_blocks[0].get("committed_id") == tx_id
+    assert proposal_blocks[0].get("committed_state") == "active"
 
 
 def test_get_messages_falls_back_to_trace_for_legacy_rows(

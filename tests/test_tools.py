@@ -672,8 +672,9 @@ def test_get_cards_strips_user_id(authed_user_a):
 
 
 def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
-    """active=false rows must not surface. Day 14's DELETE soft-deletes
-    by setting active=false rather than removing the row."""
+    """status='deleted' rows must not surface. DELETE soft-deletes by
+    flipping `status` to 'deleted' rather than removing the row
+    (DESIGN.md §8 status-column doctrine)."""
     client = supabase_for_user(user_a.jwt)
     tag = _tag()
     soft_id = (
@@ -685,7 +686,7 @@ def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
             "program": "UR",
             "network": "visa",
             "last_four": _digits4(tag),
-            "active": False,
+            "status": "deleted",
         })
         .execute()
         .data[0]["id"]
@@ -955,7 +956,7 @@ def test_propose_transaction_drops_inactive_card_id(
             "program": "TYP",
             "network": "mastercard",
             "last_four": _digits4(tag),
-            "active": False,
+            "status": "deleted",
         })
         .execute()
         .data[0]["id"]

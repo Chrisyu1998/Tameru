@@ -364,6 +364,8 @@ function MessageRow({
           preface={msg.preface}
           draft={msg.draft}
           committed={!!msg.committedTxId}
+          committedState={msg.committedState}
+          frozen={msg.frozen}
           onConfirm={(draft) => onConfirmDraft(draft)}
           onFix={onFixDraft}
         />
@@ -378,6 +380,8 @@ function MessageRow({
           preface={msg.preface}
           draft={msg.draft}
           committed={!!msg.committedCardId}
+          committedState={msg.committedState}
+          frozen={msg.frozen}
           onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
         />
       </div>

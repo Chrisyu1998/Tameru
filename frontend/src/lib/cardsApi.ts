@@ -87,6 +87,8 @@ export interface CardProposal {
   needs_manual: boolean;
 }
 
+export type CardStatus = 'active' | 'deleted';
+
 export interface CardRow {
   id: string;
   user_id: string;
@@ -99,8 +101,8 @@ export interface CardRow {
   last_four: string | null;
   color: string | null;
   source_urls: string[];
-  active: boolean;
-  deactivated_at: string | null;
+  status: CardStatus;
+  deleted_at: string | null;
   created_at: string;
 }
 
@@ -165,7 +167,7 @@ export async function patchCard(
 }
 
 export async function deleteCard(cardId: string): Promise<void> {
-  // Soft-delete on the server: active=false + deactivated_at=now(). Returns
+  // Soft-delete on the server: status='deleted' + deleted_at=now(). Returns
   // 204 No Content, so `apiJson` (which JSON-parses) would throw; we use
   // `apiFetch` for the empty-body case and just check status.
   const response = await apiFetch(`/cards/${cardId}`, { method: 'DELETE' });

@@ -10,7 +10,7 @@ Covers the deliverables from prompt/week-1-foundation/day-05-transactions-api.md
   touch `merchant_category`).
 - `GET /transactions`: filter combinations, ordering, pagination boundaries,
   silent `limit` clamp.
-- `DELETE /transactions/{id}`: hard delete, RLS-scoped.
+- `DELETE /transactions/{id}`: soft-delete (status='deleted'), RLS-scoped.
 - Service-layer parity: `list_transactions()` matches the HTTP route for the
   same filters.
 - RLS: user A cannot GET / PATCH / DELETE user B's transactions.
@@ -660,16 +660,36 @@ def test_service_and_route_return_identical_payloads(
 
 
 def test_delete_removes_row(client, user_a, card_a):
-    """Verify that delete removes row."""
+    """Verify that DELETE soft-deletes — GET 404s but the base row survives.
+
+    Per DESIGN.md §8.2, transactions are never hard-deleted by application
+    handlers. The API surface treats deleted rows as 404 (reads go through
+    the `active_transactions` view), but the underlying row is preserved
+    with `status='deleted' + deleted_at` so the chat rehydrate annotation
+    can surface a `deleted.` badge on prior parse cards.
+    """
     merchant = f"DeleteShop-{_tag()}"
     tx_id = _confirm_and_return_id(client, user_a, card_a, merchant=merchant)
 
     resp = client.delete(f"/transactions/{tx_id}", headers=_auth(user_a))
     assert resp.status_code == 204
 
-    # GET the id → 404.
+    # GET via the view → 404.
     after = client.get(f"/transactions/{tx_id}", headers=_auth(user_a))
     assert after.status_code == 404
+
+    # Base table still has the row, now with status='deleted'.
+    sb = supabase_for_user(user_a.jwt)
+    base_row = (
+        sb.table("transactions")
+        .select("id, status, deleted_at")
+        .eq("id", tx_id)
+        .execute()
+        .data
+    )
+    assert len(base_row) == 1, "soft-deleted row should remain in base table"
+    assert base_row[0]["status"] == "deleted"
+    assert base_row[0]["deleted_at"] is not None
 
 
 # ---------------------------------------------------------------------------

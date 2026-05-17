@@ -73,7 +73,7 @@ const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // Day 14 — separate timer map for the card-delete undo window. Cards
 // soft-delete on the server (DESIGN.md §8.1), but we delay the network
 // call by the undo grace period so an "undo" can cancel before the
-// server flips active=false. Symmetric to the transaction pattern.
+// server flips status='deleted'. Symmetric to the transaction pattern.
 const cardDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const CARD_DELETE_GRACE_MS = 5_000;
 
@@ -306,11 +306,11 @@ export const ledger = {
    * Called automatically on JWT change (alongside `refresh()`). Maps the
    * `CardRow` wire shape to the local `Card` shape consumed by every
    * Lovable-imported card-rendering component. The mapping intentionally
-   * drops `source_urls`, `deactivated_at`, and `program` strings outside
+   * drops `source_urls`, `deleted_at`, and `program` strings outside
    * the Lovable enum (folded to "Cash") — those aren't displayed on the
    * post-onboarding cards list, which is the only consumer of the
    * default `cards` view. The breakdown filter calls
-   * `refreshCardsIncludingInactive()` if it needs deactivated rows.
+   * `refreshCardsIncludingInactive()` if it needs deleted rows.
    */
   async refreshCards(): Promise<void> {
     const { jwt } = useAppStore.getState();
@@ -330,8 +330,8 @@ export const ledger = {
    * Removes the card from local state immediately so the UI updates,
    * then schedules the actual `DELETE /cards/:id` for after the
    * `CARD_DELETE_GRACE_MS` window. `undoDeleteCard` cancels the timer.
-   * If the timer fires, the server flips `active=false` and stamps
-   * `deactivated_at` (DESIGN.md §8.1). Inactive rows are never revived
+   * If the timer fires, the server flips `status='deleted'` and stamps
+   * `deleted_at` (DESIGN.md §8.1). Deleted rows are never revived
    * — a re-add via /cards/confirm produces a fresh `card_id`.
    */
   deleteCard(id: string): void {

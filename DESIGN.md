@@ -724,6 +724,23 @@ Every table has:
 
 Enum-like text fields carry `CHECK` constraints enforcing the allowed values listed in each section's description column.
 
+**Status column doctrine (cards, transactions, subscriptions).** The three ledger entities express lifecycle through a `status` text column with a `CHECK` constraint, paired with a `deleted_at TIMESTAMPTZ` companion where the column expresses a tombstone (set when `status` flips to `'deleted'`; `NULL` otherwise). Soft-delete is universal — no row is ever hard-deleted by an application handler in v1. Rationale:
+
+- **Consistency with the existing precedent.** `subscriptions.status` already encodes a multi-state lifecycle (`'active' | 'paused' | 'cancelled'`); standardizing cards and transactions on the same shape unifies the three ledger tables under one idiom.
+- **Extensibility.** A boolean is a forced binary; future states (`'disputed'`, `'reversed'`, `'pending'`) — plausible if the §17 scaling plan ever activates — extend cleanly with a `CHECK` update rather than another schema migration.
+- **Audit + recovery.** A deleted ledger row is recoverable (operator support, undo windows wider than the toast, "what changed?" forensics). Hard-delete forecloses these without saving anything meaningful at v1's data volume.
+- **Stripe-style API parity.** Stripe surfaces `status` on every resource that has a lifecycle. Mirroring the convention is the path of least surprise for any caller familiar with fintech APIs.
+
+**Defaults are asymmetric across the three tables and that asymmetry is load-bearing:**
+
+- **`transactions`** — default reads filter to `WHERE status = 'active'`. A deleted transaction is excluded from totals, ledger fetches, dashboard, baselines, entry-moment, the `get_transactions` agent tool, and `pg_cron` reads. Surfaced only for chat-rehydrate state badges (the `deleted.` ParseCard state), future undo/restore UX, and audit queries.
+- **`cards`** — totals still include cards in any status (§8.1 frontend filter rule 1). A closed card's prior transactions remain part of "total spend" because the money was actually spent; only the *card identity* is in a different status, not the historical transactions on it.
+- **`subscriptions`** — `pg_cron` and the subscription list filter to `status = 'active'`; paused/cancelled rows stay visible in the manager surface (§6.5).
+
+**Partial unique indexes scoping to `status = 'active'`** prevent deleted rows from blocking re-creates: `cards (user_id, issuer, last_four) WHERE status = 'active'`, `transactions (user_id, client_request_id) WHERE status = 'active' AND client_request_id IS NOT NULL`, `transactions (subscription_id, date) WHERE status = 'active' AND subscription_id IS NOT NULL`. Soft-deleted rows do not occupy the unique slot, so re-adding a deleted card or replaying a confirm after a delete creates a fresh row rather than 409-ing on a tombstone.
+
+To make `WHERE status = 'active'` filtering the default-safe path for transactions, an `active_transactions` Postgres view (`SELECT * FROM transactions WHERE status = 'active'`, with `security_invoker = true` so RLS still applies) is exposed to PostgREST. Application read paths target the view; only audit/restore code touches the base table. This pushes the filter into the schema rather than relying on every call site remembering it.
+
 ### 8.1 `cards`
 
 | Field | Type | Description |
@@ -739,12 +756,12 @@ Enum-like text fields carry `CHECK` constraints enforcing the allowed values lis
 | last_four | text | UI identification + active-uniqueness key. Required on the chat / onboarding propose-confirm paths. |
 | color | text | Hex for UI card display |
 | source_urls | text[] | Web-search citations (Claude `web_search_result_location.url`) |
-| active | boolean | Soft delete |
-| deactivated_at | timestamptz | Set by `DELETE /cards/{id}` when `active` flips to `false`. Powers the "closed {MMM YYYY}" label on inactive rows in the spending-breakdown filter (§6.1, Day 14 frontend filter semantics). `NULL` for active rows. |
+| status | text | Lifecycle. CHECK enum: `'active' \| 'deleted'`. NOT NULL DEFAULT `'active'`. Per the §8 status-column doctrine; replaces the prior `active boolean` (migration `20260516xxxxxx_cards_status_column.sql`). |
+| deleted_at | timestamptz | Set by `DELETE /cards/{id}` when `status` flips to `'deleted'`. Powers the "closed {MMM YYYY}" label on deleted rows in the spending-breakdown filter (§6.1, Day 14 frontend filter semantics). `NULL` for active rows. (Renamed from the prior `deactivated_at` in the same migration.) |
 | created_at | timestamptz | |
 
 **Constraints:**
-- `CREATE UNIQUE INDEX cards_active_identity_uniq ON cards (user_id, issuer, last_four) WHERE active = true;` — **partial** unique index keyed on `issuer` (NOT network). Card numbers are issued per BANK, not per network: a single issuer cannot give one person two cards with the same number, but two different banks (e.g. Chase and Capital One) absolutely can produce same-last_4 collisions across Visa cards. Issuer is the proper tiebreaker. Inactive (soft-deleted) rows are deliberately exempt so users can re-add a card after deleting it. (Day 14 originally shipped a `(network, last_four)` version; migration `20260516140000_cards_uniqueness_by_issuer.sql` fixes it.)
+- `CREATE UNIQUE INDEX cards_active_identity_uniq ON cards (user_id, issuer, last_four) WHERE status = 'active';` — **partial** unique index keyed on `issuer` (NOT network). Card numbers are issued per BANK, not per network: a single issuer cannot give one person two cards with the same number, but two different banks (e.g. Chase and Capital One) absolutely can produce same-last_4 collisions across Visa cards. Issuer is the proper tiebreaker. Deleted rows are deliberately exempt so users can re-add a card after deleting it. (Day 14 originally shipped a `(network, last_four)` version; migration `20260516140000_cards_uniqueness_by_issuer.sql` fixed the tiebreaker, and the §8 status-column migration retargets the predicate from `active = true` to `status = 'active'`.)
 
 **Soft-delete / re-add semantics:**
 
@@ -752,21 +769,21 @@ When a user deletes a card and later re-adds the same `(issuer, last_four)`, **i
 
 - Multipliers and annual fees drift over time. A card closed in 2024 and re-added in 2026 should get a fresh lookup, not stale data.
 - Historical transactions stay linked to the original soft-deleted `card_id`. That preserves the historical card snapshot (annual fee at the time, multipliers at the time). Reviving the row would commingle pre-deletion and post-deletion transactions under a single ambiguous identity.
-- Soft-delete already means "I closed this card." Reviving negates that.
-- One rule ("once inactive, always inactive") is simpler than conditional revival logic.
+- `status = 'deleted'` already means "I closed this card." Reviving negates that.
+- One rule ("once deleted, always deleted") is simpler than conditional revival logic.
 
-The cost: two rows can exist in `cards` with the same `(user_id, issuer, last_four)` — one active, one inactive. The partial unique index permits this. The spending-breakdown filter (Day 14, §6.1 frontend filter semantics) distinguishes them with a "closed {MMM YYYY}" suffix derived from `deactivated_at`, rendered in a muted color.
+The cost: two rows can exist in `cards` with the same `(user_id, issuer, last_four)` — one with `status = 'active'`, one with `status = 'deleted'`. The partial unique index permits this. The spending-breakdown filter (Day 14, §6.1 frontend filter semantics) distinguishes them with a "closed {MMM YYYY}" suffix derived from `deleted_at`, rendered in a muted color.
 
 **Frontend filter rules (referenced by Day 14):**
 
-1. **Totals always include inactive cards.** Sum-by-category, sum-by-month, weekly delta, year-to-date math sum across `active = true` AND `active = false`. Transaction reads do not filter by `cards.active`. Otherwise "total spend" silently stops matching "sum of per-card spend" the moment a card is deleted.
-2. **Filter dropdown is dynamic.** Shows all active cards plus inactive cards with ≥1 transaction in the current view's date range. Inactive cards with no transactions in scope are hidden.
-3. **Collision labels.** Inactive rows render as `{name} · {last_four} · closed {MMM YYYY}` in muted color; active rows render as `{name} · {last_four}`.
+1. **Totals always include deleted cards.** Sum-by-category, sum-by-month, weekly delta, year-to-date math sum across `status = 'active'` AND `status = 'deleted'`. Transaction reads do not filter by `cards.status`. Otherwise "total spend" silently stops matching "sum of per-card spend" the moment a card is deleted. (This is the cards/transactions asymmetry from the §8 doctrine: a deleted *card* keeps its historical transactions in the totals, while a deleted *transaction* leaves them entirely.)
+2. **Filter dropdown is dynamic.** Shows all active cards plus deleted cards with ≥1 transaction in the current view's date range. Deleted cards with no transactions in scope are hidden.
+3. **Collision labels.** Deleted rows render as `{name} · {last_four} · closed {MMM YYYY}` in muted color; active rows render as `{name} · {last_four}`.
 
 **409 collision flow on `POST /cards/confirm`:**
 
-- If only active rows match the constraint, the insert fails with a unique violation → return HTTP 409 `{code: "active_card_exists", existing_card: {...}}`. The frontend surfaces an inline "you already have *{name}* ending {last_four} — edit it instead?" affordance linking to PATCH.
-- If only an inactive row matches, the partial index does not fire and the insert succeeds — a new `card_id` is created.
+- If only `status = 'active'` rows match the constraint, the insert fails with a unique violation → return HTTP 409 `{code: "active_card_exists", existing_card: {...}}`. The frontend surfaces an inline "you already have *{name}* ending {last_four} — edit it instead?" affordance linking to PATCH.
+- If only a `status = 'deleted'` row matches, the partial index does not fire and the insert succeeds — a new `card_id` is created.
 
 ### 8.2 `transactions`
 
@@ -784,12 +801,23 @@ The cost: two rows can exist in `cards` with the same `(user_id, issuer, last_fo
 | source | text | manual \| nlp \| receipt_photo \| auto_logged \| csv_import |
 | notes | text | Optional |
 | client_request_id | UUID | Nullable. Set by the client on the chat-confirm path (§6.2 step 4) for offline-replay idempotency. `NULL` for pg_cron auto-logger (§6.5) and CSV batch inserts (§5.4.3). |
+| status | text | Lifecycle. CHECK enum: `'active' \| 'deleted'`. NOT NULL DEFAULT `'active'`. Per the §8 status-column doctrine. |
+| deleted_at | timestamptz | Set by `DELETE /transactions/{id}` when `status` flips to `'deleted'`. `NULL` for active rows. Powers the chat parse-card `deleted.` rehydrate badge (§6.2) and any future undo/restore UX. |
 | created_at | timestamptz | |
 | updated_at | timestamptz | Used for offline sync conflict resolution |
 
 **Constraints:**
-- `UNIQUE (subscription_id, date) WHERE subscription_id IS NOT NULL` — guarantees subscription idempotency for the pg_cron auto-logger.
-- `UNIQUE (user_id, client_request_id) WHERE client_request_id IS NOT NULL` — partial unique index for chat-confirm idempotency. Replay of the same confirm (e.g. IndexedDB queue draining after reconnect) returns the existing row instead of creating a duplicate.
+- `UNIQUE (subscription_id, date) WHERE status = 'active' AND subscription_id IS NOT NULL` — guarantees subscription idempotency for the pg_cron auto-logger. Scoped to `status = 'active'` so a user-deleted auto-logged charge does not block pg_cron from re-creating the slot in the (unlikely) event the same `(subscription_id, date)` re-fires; `next_billing_date` normally advances past the deleted date, so this is defense-in-depth, not the common path.
+- `UNIQUE (user_id, client_request_id) WHERE status = 'active' AND client_request_id IS NOT NULL` — partial unique index for chat-confirm idempotency. Replay of the same confirm (e.g. IndexedDB queue draining after reconnect) returns the existing row instead of creating a duplicate. Scoped to `status = 'active'` so a confirm replayed after the user deleted the original row creates a fresh active row instead of 409-ing on a tombstone. The UI prevents this from happening in normal flow (rehydrated parse cards lock into `deleted.` and disable re-confirm); this scoping is defense-in-depth.
+
+**Soft-delete semantics:**
+
+`DELETE /transactions/{id}` sets `status = 'deleted', deleted_at = now()`; it never issues a SQL `DELETE`. Default read paths target the `active_transactions` view (PostgREST exposes it; RLS still applies via `security_invoker = true`), so a deleted row is invisible to the ledger fetch, the dashboard, baselines, entry-moment, the `get_transactions` agent tool, and `pg_cron` reads. The two surfaces that opt into the base table are:
+
+- **Chat rehydrate annotation** ([`_annotate_committed_proposals`](app/routes/chat.py)) — needs to distinguish "never confirmed" from "confirmed and deleted" to set the parse-card `deleted.` badge correctly.
+- **Future undo/restore + audit/forensic queries** — operator support, "what changed in my totals?" reconstruction. Not user-facing in v1.
+
+Restore is **not** wired in v1: there is no UI affordance to flip `status = 'deleted'` back to `'active'`. The `UndoToast` (mobile swipe-delete window) operates by withholding the DELETE call until the toast expires, not by issuing a soft-delete then reverting. Adding restore is a post-launch enhancement when (and if) a real user asks; the schema supports it without further migration.
 
 **Trust posture for `gemini_suggestion`:** the field is reported by the client on the confirm payload and stored as-is. A user tampering with it forges audit data only on their own account and gains nothing; the authoritative record of what Gemini actually said lives in `ai_call_log` (§8.8). Do not server-side re-derive the suggestion or sign proposals for v1 — the cost/complexity does not match the threat. If fleet-wide override-rate analytics later become load-bearing (e.g. under the §17 scaling plan), introduce a short-lived `transaction_proposals` server-storage layer at that point; do not build it speculatively.
 
@@ -806,11 +834,13 @@ The cost: two rows can exist in `cards` with the same `(user_id, issuer, last_fo
 | start_date | date | First billing |
 | next_billing_date | date | Computed next auto-log date |
 | category | text | Default category for auto-logged tx |
-| status | text | active \| paused \| cancelled |
+| status | text | CHECK enum: `'active' \| 'paused' \| 'cancelled'`. NOT NULL DEFAULT `'active'`. The precedent the §8 status-column doctrine follows; cards and transactions adopt the same `status` shape (with their own state sets). No `'deleted'` value — `'cancelled'` already encodes the terminal lifecycle for subscriptions, and adding `'deleted'` would split a single user intent ("I'm done with this subscription") across two semantically overlapping states. |
 | client_request_id | UUID | Nullable. Minted by `propose_subscription`; powers the same offline-replay idempotency contract as `transactions.client_request_id` (§8.2). pg_cron-written rows leave it NULL. |
 | created_at | timestamptz | |
 
 Partial unique index `subscriptions_user_client_request_id_unique ON subscriptions (user_id, client_request_id) WHERE client_request_id IS NOT NULL` makes the chat-confirm path idempotent under the Day 15 offline-queue drain. Cards rely on a natural-key partial unique index instead (§8.1); subscriptions can't, because two valid subscriptions on the same card with the same name and frequency cannot be distinguished by a natural key (e.g., family plan vs. personal plan). Without idempotency here, a duplicated subscription would be auto-logged independently by pg_cron every billing cycle, multiplying the recovery cost monthly — see Day 19 prompt's "Why subscriptions get idempotency where cards don't" for the full asymmetry.
+
+**Cancel / re-add semantics:** mirror the §8.1 cards doctrine. When a user cancels Netflix in May and re-adds Netflix in August, **insert a new row; do not revive the cancelled row.** Same three reasons: (1) pricing, plan, and `start_date` drift between billing eras; (2) historical auto-logged transactions stay linked to the cancelled `subscription_id`, preserving the audit-clean bound between "May–June Netflix" and "August onward Netflix"; (3) one rule ("once cancelled, always cancelled") across the three ledger tables is simpler than per-entity revival logic. No constraint change enforces this — subscriptions have no natural-key unique index by design — so the rule is upheld at the application layer: `propose_subscription` mints a fresh `client_request_id` for every confirm, and `POST /subscriptions/confirm` never looks for a cancelled-row match to revive.
 
 ### 8.4 `merchant_category` (merchant memory)
 

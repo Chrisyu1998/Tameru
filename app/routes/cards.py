@@ -11,9 +11,9 @@ internals (app/agent/tools.py) — both surfaces share one integration
 module so the same web_search query, allowlist, and ai_call_log shape
 power both entry points.
 
-Soft-delete + re-add semantics: see DESIGN.md §8.1. Inactive rows are
-never revived — DELETE flips `active=false` and stamps `deactivated_at`,
-and a new insert with the same `(network, last_four)` creates a fresh
+Soft-delete + re-add semantics: see DESIGN.md §8.1. Deleted rows are
+never revived — DELETE flips `status='deleted'` and stamps `deleted_at`,
+and a new insert with the same `(issuer, last_four)` creates a fresh
 row with a new `card_id`. Old transactions stay linked to the old row.
 """
 
@@ -80,15 +80,15 @@ def post_card_confirm(
 
     409 collision flow (DESIGN.md §8.1, §6.1):
         - If a row already exists with the same (user_id, issuer,
-          last_four) AND active=true, the `cards_active_identity_uniq`
+          last_four) AND status='active', the `cards_active_identity_uniq`
           partial unique index fires. We catch the unique violation and
           return HTTP 409 with `code=active_card_exists` plus the
           existing card's id, name, and last_four so the frontend can
           render the "edit it instead?" affordance.
-        - If only an INACTIVE row matches, the partial index does NOT
+        - If only a DELETED row matches, the partial index does NOT
           fire and the insert succeeds — a new row with a new `card_id`
           is created. Old transactions stay linked to the previous
-          inactive row.
+          deleted row.
         - Two cards from DIFFERENT issuers with the same network and
           last_four (e.g. Chase Visa 1234 and Capital One Visa 1234)
           coexist freely under the issuer-keyed index. This was the
@@ -127,7 +127,7 @@ def post_card_confirm(
         "multipliers": proposal.multipliers,
         "last_four": proposal.last_four,
         "source_urls": proposal.source_urls,
-        # `active` and `created_at` come from column defaults; do not
+        # `status` defaults to 'active' and `created_at` to now(); do not
         # set them here so a future default change doesn't silently
         # diverge from the migration.
     }
@@ -157,8 +157,8 @@ def get_cards(
     include_inactive: bool = Query(
         default=False,
         description=(
-            "When True, include soft-deleted cards. Used by the spending-"
-            "breakdown filter (DESIGN.md §8.1 frontend filter rules)."
+            "When True, include soft-deleted (status='deleted') cards. Used by "
+            "the spending-breakdown filter (DESIGN.md §8.1 frontend filter rules)."
         ),
     ),
 ) -> CardListResponse:
@@ -167,8 +167,8 @@ def get_cards(
     Default: active cards only — the cards-page list (UX frame 18) and
     the agent's `get_cards` tool both want only the live wallet.
 
-    `include_inactive=true`: returns active + inactive in one list. The
-    spending-breakdown filter renders inactive rows with a "closed
+    `include_inactive=true`: returns active + deleted in one list. The
+    spending-breakdown filter renders deleted rows with a "closed
     {MMM YYYY}" suffix in muted color (DESIGN.md §8.1 Rule 3).
 
     No pagination — cards are bounded to ~10 per user lifetime.
@@ -176,7 +176,7 @@ def get_cards(
     client = supabase_for_user(user.jwt)
     query = client.table("cards").select("*").order("created_at", desc=False)
     if not include_inactive:
-        query = query.eq("active", True)
+        query = query.eq("status", "active")
     resp = query.execute()
     rows = resp.data or []
     return CardListResponse(items=[CardRow.model_validate(row) for row in rows])
@@ -240,7 +240,7 @@ def delete_card(
     card_id: UUID,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> Response:
-    """Soft-delete: `active=false` + `deactivated_at=now()`.
+    """Soft-delete: `status='deleted'` + `deleted_at=now()`.
 
     The row stays in the table so historical transactions linked via
     `transactions.card_id` keep their card snapshot. The partial unique
@@ -250,15 +250,15 @@ def delete_card(
 
     RLS makes "delete nonexistent" and "delete someone else's card"
     indistinguishable from the caller's seat — both return 204 without
-    a write. Matches the transactions DELETE behavior from Day 5.
+    a write. Matches the transactions DELETE behavior.
     """
     client = supabase_for_user(user.jwt)
     client.table("cards").update(
         {
-            "active": False,
-            "deactivated_at": datetime.now(timezone.utc).isoformat(),
+            "status": "deleted",
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
         }
-    ).eq("id", str(card_id)).eq("active", True).execute()
+    ).eq("id", str(card_id)).eq("status", "active").execute()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -278,9 +278,9 @@ def _collision_409(
 
     Keyed on `issuer` + `last_four` because the partial unique index
     `cards_active_identity_uniq` is `(user_id, issuer, last_four) WHERE
-    active = true` (DESIGN.md §8.1, migration 20260516140000). Issuer
-    is the canonical Tameru enum value (closed CHECK constraint), so
-    exact equality is sufficient — no LOWER() needed.
+    status = 'active'` (DESIGN.md §8.1, migration 20260516150000).
+    Issuer is the canonical Tameru enum value (closed CHECK constraint),
+    so exact equality is sufficient — no LOWER() needed.
 
     If for some reason the colliding row can't be re-read (race window
     where it was deleted between INSERT failure and SELECT), fall back
@@ -293,7 +293,7 @@ def _collision_409(
             .select("id, name, last_four")
             .eq("issuer", issuer)
             .eq("last_four", last_four)
-            .eq("active", True)
+            .eq("status", "active")
             .limit(1)
             .execute()
         )

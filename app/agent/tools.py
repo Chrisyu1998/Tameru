@@ -202,7 +202,7 @@ class GetCardsResponse(BaseModel):
     """Tool result for `get_cards`.
 
     Example response:
-        {"items": [{"id": "...", "name": "Amex Gold", "active": true}]}
+        {"items": [{"id": "...", "name": "Amex Gold", "status": "active"}]}
     """
 
     items: list[dict[str, Any]]
@@ -763,7 +763,9 @@ def calculate_total(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     request = CalculateTotalRequest.model_validate(kwargs)
     filters = _filters_from_input(request.model_dump(exclude_none=True), allow_pagination=False)
     client = supabase_for_user(user.jwt)
-    query = client.table("transactions").select("amount")
+    # Reads through `active_transactions` so soft-deleted rows don't appear
+    # in agent totals (DESIGN.md §8 status-column doctrine).
+    query = client.table("active_transactions").select("amount")
     query = apply_transaction_filters(query, filters)
     resp = query.range(0, RESULT_ROW_CAP).execute()
     rows = resp.data or []
@@ -875,7 +877,8 @@ def get_spending_summary(user: AuthedUser, *, months: int = 1) -> dict[str, Any]
     # pollute "this month so far" — a small but trust-eroding bug,
     # since users read this number as "money already spent."
     resp = (
-        client.table("transactions")
+        # Default-safe read via the view (DESIGN.md §8).
+        client.table("active_transactions")
         .select("category, amount, date")
         .gte("date", start.isoformat())
         .lte("date", today.isoformat())
@@ -914,13 +917,13 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
         {}
 
     Response:
-        {"items": [{"id": "...", "name": "Amex Gold", "active": true}]}
+        {"items": [{"id": "...", "name": "Amex Gold", "status": "active"}]}
     """
     client = supabase_for_user(user.jwt)
     resp = (
         client.table("cards")
         .select("*")
-        .eq("active", True)
+        .eq("status", "active")
         .order("created_at", desc=False)
         .execute()
     )
@@ -1275,21 +1278,21 @@ def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 def _card_belongs_to_user(client: Any, card_id: UUID) -> bool:
     """Defensive check used by `propose_transaction`.
 
-    Returns True iff the RLS-scoped client sees the card AND the card is
-    still `active=true`. Hallucinated UUIDs, cross-user UUIDs, and
-    soft-deleted cards (`active=false`, see DESIGN.md §8.1) all return
-    False. The `active` filter matters because `get_cards` only returns
-    active cards — but stale conversation history can still surface an
-    inactive card's UUID to Claude, and we don't want a chat-typed
+    Returns True iff the RLS-scoped client sees the card AND the card has
+    `status = 'active'`. Hallucinated UUIDs, cross-user UUIDs, and
+    soft-deleted cards (`status='deleted'`, see DESIGN.md §8.1) all return
+    False. The status filter matters because `get_cards` only returns
+    active cards — but stale conversation history can still surface a
+    deleted card's UUID to Claude, and we don't want a chat-typed
     transaction to be silently posted against a card the user closed.
-    Confirm-side `_assert_card_owned` does not (yet) filter on `active`;
-    flagging that gap for a follow-up so propose and confirm don't drift.
+    Mirrors the confirm-side `_assert_card_owned` (app/routes/transactions.py)
+    so propose and confirm agree on which cards are usable.
     """
     resp = (
         client.table("cards")
         .select("id")
         .eq("id", str(card_id))
-        .eq("active", True)
+        .eq("status", "active")
         .limit(1)
         .execute()
     )

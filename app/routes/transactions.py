@@ -149,10 +149,15 @@ def get_transaction(
     transaction_id: UUID,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> TransactionRow:
-    """Provide get transaction."""
+    """Provide get transaction.
+
+    Reads from `active_transactions` (the default-safe view, DESIGN.md §8
+    status-column doctrine) so soft-deleted rows return 404 just like
+    rows that never existed.
+    """
     client = supabase_for_user(user.jwt)
     resp = (
-        client.table("transactions")
+        client.table("active_transactions")
         .select("*")
         .eq("id", str(transaction_id))
         .execute()
@@ -173,8 +178,10 @@ def patch_transaction(
 
     # Load the existing row first — both for the 404 path and so we can
     # compare category and pick the right merchant for the §8.4 upsert.
+    # Reads through `active_transactions` so a deleted row 404s identically
+    # to one that never existed.
     current_resp = (
-        client.table("transactions")
+        client.table("active_transactions")
         .select("*")
         .eq("id", str(transaction_id))
         .execute()
@@ -233,10 +240,12 @@ def patch_transaction(
         client.table("transactions")
         .update(update)
         .eq("id", str(transaction_id))
+        .eq("status", "active")
         .execute()
     )
     if not resp.data:
-        # RLS or row vanished between the two queries. Treat as 404.
+        # RLS, the row vanished, or it was soft-deleted between the two
+        # queries. Treat as 404 either way.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     updated = resp.data[0]
 
@@ -258,12 +267,27 @@ def delete_transaction(
     transaction_id: UUID,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> Response:
-    """Provide delete transaction."""
+    """Soft-delete: `status='deleted'` + `deleted_at=now()`.
+
+    Per the §8 status-column doctrine, transactions are never hard-deleted
+    by an application handler. The row stays in the base table so the chat
+    rehydrate annotation can surface a `deleted.` parse-card badge instead
+    of a stale "looks right?" affordance (DESIGN.md §8.2 soft-delete
+    semantics).
+
+    The `.eq("status", "active")` filter on the UPDATE makes this idempotent
+    — re-DELETE on an already-deleted row is a no-op. RLS keeps "delete
+    nonexistent" and "delete someone else's row" indistinguishable from the
+    caller's seat, so we return 204 in every case to avoid leaking which
+    ids exist.
+    """
     client = supabase_for_user(user.jwt)
-    client.table("transactions").delete().eq("id", str(transaction_id)).execute()
-    # RLS makes "delete nonexistent" and "delete someone else's row" both
-    # be no-ops — we return 204 in either case rather than leaking which
-    # ids exist by 404-ing on one branch and 204-ing on the other.
+    client.table("transactions").update(
+        {
+            "status": "deleted",
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", str(transaction_id)).eq("status", "active").execute()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -279,12 +303,23 @@ def _domain_error(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=422, detail={"code": code, "message": message})
 
 def _assert_card_owned(user: AuthedUser, card_id: UUID) -> None:
-    """RLS on `cards` returns empty for another user's card id; an absent
-    row here means either a non-existent id or a cross-tenant id. Both
-    should fail the same way — the error message doesn't distinguish so a
-    probing client can't enumerate other users' card ids."""
+    """Require `card_id` to resolve to an active card owned by the caller.
+
+    RLS on `cards` returns empty for another user's card id; `status='active'`
+    additionally filters out soft-deleted cards. Absent rows here mean any of:
+    non-existent id, cross-tenant id, or deleted card — all fail the same way
+    so a probing client can't enumerate ids or lifecycle. Matches the agent
+    side's `_card_belongs_to_user` (app/agent/tools.py) so propose and confirm
+    don't disagree on whether a closed card is usable.
+    """
     client = supabase_for_user(user.jwt)
-    resp = client.table("cards").select("id").eq("id", str(card_id)).execute()
+    resp = (
+        client.table("cards")
+        .select("id")
+        .eq("id", str(card_id))
+        .eq("status", "active")
+        .execute()
+    )
     if not resp.data:
         raise _domain_error(
             "invalid_card",
@@ -302,10 +337,16 @@ def _assert_date_within_bounds(d: date) -> None:
 def _load_existing_by_client_request_id(
     user: AuthedUser, client_request_id: UUID
 ) -> TransactionRow | None:
-    """Support load existing by client request id."""
+    """Return the active row for this `client_request_id`, or None.
+
+    Reads from `active_transactions` so a soft-deleted prior commit does
+    NOT short-circuit the confirm — replaying after the user deleted the
+    original row creates a fresh active row (DESIGN.md §8.2 partial-index
+    rationale). Matches the partial-unique-index predicate exactly.
+    """
     client = supabase_for_user(user.jwt)
     resp = (
-        client.table("transactions")
+        client.table("active_transactions")
         .select("*")
         .eq("client_request_id", str(client_request_id))
         .execute()

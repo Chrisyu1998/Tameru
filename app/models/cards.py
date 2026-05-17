@@ -233,11 +233,16 @@ class CardConfirmRequest(CardProposal):
     pass
 
 
+CardStatus = Literal["active", "deleted"]
+
+
 class CardRow(BaseModel):
     """Response shape for a single `cards` row.
 
-    Mirrors the `cards` table after the Day 14 migration: `network` is now
-    required + NOT NULL, `deactivated_at` lands when the row is soft-deleted.
+    Mirrors the `cards` table after the §8 status-column migration: `status`
+    encodes the lifecycle (replaces the prior `active` boolean), and
+    `deleted_at` lands when the row is soft-deleted (renamed from
+    `deactivated_at`).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -253,18 +258,18 @@ class CardRow(BaseModel):
     last_four: str | None = None
     color: str | None = None
     source_urls: list[str] = Field(default_factory=list)
-    active: bool
-    deactivated_at: _dt.datetime | None = None
+    status: CardStatus
+    deleted_at: _dt.datetime | None = None
     created_at: _dt.datetime
 
 
 class CardListResponse(BaseModel):
     """`GET /cards` response.
 
-    `include_inactive=true` callers see both active and inactive cards in
+    `include_inactive=true` callers see both active and deleted cards in
     one list; the frontend filter (DESIGN.md §8.1 frontend filter rules)
-    distinguishes them by `active` + `deactivated_at`. No pagination —
-    cards are bounded to ~10 per user lifetime.
+    distinguishes them by `status` + `deleted_at`. No pagination — cards
+    are bounded to ~10 per user lifetime.
     """
 
     items: list[CardRow]
@@ -274,9 +279,9 @@ class CardPatchRequest(BaseModel):
     """Partial update body for `PATCH /cards/{id}`.
 
     Editable fields: `name`, `alias` (via name), `multipliers`, `annual_fee`,
-    `color`, `program`. `network`, `last_four`, `issuer`, `active`, and
-    `deactivated_at` are NOT patchable — those represent card identity,
-    which the soft-delete-then-re-add flow handles (DESIGN.md §8.1).
+    `color`, `program`. `network`, `last_four`, `issuer`, `status`, and
+    `deleted_at` are NOT patchable — those represent card identity, which
+    the soft-delete-then-re-add flow handles (DESIGN.md §8.1).
     """
 
     model_config = ConfigDict(extra="forbid")

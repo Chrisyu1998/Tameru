@@ -201,9 +201,10 @@ def chat_messages(
     localStorage but `chatStore.messages` is empty (Day 10b §3). Response
     is the `chat_messages` row content_blocks (text + tameru_proposal
     blocks for parse-card rehydrate, Day 14b) plus per-block
-    `committed_id` annotations for already-confirmed proposals so the UI
-    renders them in the "logged" state instead of inviting a duplicate
-    confirm.
+    `committed_id` + `committed_state` annotations for already-confirmed
+    proposals so the UI renders them in the "logged." or "deleted." badge
+    state (DESIGN.md §8 status-column doctrine; see
+    `_annotate_committed_proposals` below).
 
     Trace fallback: for assistant rows whose chat_messages content_blocks
     don't already carry `tameru_proposal` blocks (Day-12-and-earlier data
@@ -216,13 +217,16 @@ def chat_messages(
     persist-time augmentation didn't exist yet.
 
     Committed-state detection: client_request_id from each transaction
-    proposal is joined against `transactions` (RLS-scoped); a hit means
-    the user already tapped "looks right," so we set `committed_id` on
-    the block and the UI flips ParseCard into the locked "logged." state.
-    For card proposals we match by `name` against active cards (cards
-    lack an idempotency key today — see DESIGN.md §8.1; name-uniqueness
-    within a user's wallet is a best-effort proxy that's fine for v1's
-    ~10-card cap).
+    proposal is joined against `transactions` (base table, RLS-scoped —
+    deliberately bypassing `active_transactions` so soft-deleted rows are
+    visible here). A hit means the user already tapped "looks right;"
+    `committed_state` carries the row's current `status` so the UI flips
+    ParseCard into `logged.` (active row) or `deleted.` (deleted row),
+    and the rehydrated card stays read-only either way. For card
+    proposals we match by `name` across any status (cards lack an
+    idempotency key — see DESIGN.md §8.1; name-uniqueness within a
+    user's wallet is a best-effort proxy that's fine for v1's ~10-card
+    cap).
 
     Capped at MESSAGES_PAGE_LIMIT recent rows. `has_more=true` tells the
     UI there's older history (no pagination cursor in v1 — the user is
@@ -530,23 +534,31 @@ def _extract_proposals_from_trace(
 def _annotate_committed_proposals(
     client: Any, rows: list[dict[str, Any]]
 ) -> None:
-    """Attach `committed_id` to proposals the user already confirmed.
+    """Attach `committed_id` + `committed_state` to confirmed proposals.
 
     Walks the in-memory rows, collects every proposal's identifier
     (client_request_id for transactions, name for cards), runs a single
-    RLS-scoped lookup against the respective table, and mutates each
-    block's dict in place with `committed_id` when matched. The UI flips
-    the parse card to its locked "logged." state on that field.
+    RLS-scoped lookup against the base `transactions` / `cards` tables —
+    NOT the `active_transactions` view — so soft-deleted rows are visible
+    here. Mutates each block's dict in place:
 
-    Card matching is by `name` against active rows — cards don't carry a
+      * `committed_id`    — the matched row's UUID (when any row matched).
+      * `committed_state` — `"active"` or `"deleted"` carried back from the
+        row's `status` column. The frontend's ParseCard switches on this
+        to render `logged.` vs `deleted.` badges; the rehydrated card is
+        always read-only when `committed_id` is set, regardless of state.
+
+    Reading from the base table (with RLS) is the load-bearing distinction
+    from default app reads: this is one of the two surfaces explicitly
+    documented in DESIGN.md §8.2 as opting into the base table — the chat
+    rehydrate annotation needs to distinguish "never confirmed" from
+    "confirmed and deleted" to set the badge correctly.
+
+    Card matching is by `name` across any status — cards don't carry a
     `client_request_id`, and the proposal's `last_four` is often null
     (the agent doesn't ask for it up-front). Within a single user's ~10-
     card wallet, name collisions are rare enough that a best-effort match
-    is fine for v1; the cost of a false negative is the user seeing
-    "looks right" on a card they already added, then getting the 409
-    flow's "you already have it" affordance. A false positive (two cards
-    legitimately share a name) would lock the parse card too early — the
-    same 409 path on the user-visible commit would catch it.
+    is fine for v1.
     """
     crid_set: set[str] = set()
     card_name_set: set[str] = set()
@@ -569,37 +581,49 @@ def _annotate_committed_proposals(
                 if isinstance(name, str) and name:
                     card_name_set.add(name)
 
-    committed_txs: dict[str, str] = {}
+    # `committed_txs` maps crid → (row_id, status). Same shape for cards.
+    # When the same crid has both active and deleted rows the partial unique
+    # index ensures only one is active — pick that one for the "is this still
+    # logged?" answer. For two deleted rows, pick the most recent.
+    committed_txs: dict[str, tuple[str, str]] = {}
     if crid_set:
         tx_resp = (
             client.table("transactions")
-            .select("id, client_request_id")
+            .select("id, client_request_id, status, deleted_at")
             .in_("client_request_id", list(crid_set))
             .execute()
         )
         for r in tx_resp.data or []:
             crid = r.get("client_request_id")
             tx_id = r.get("id")
-            if isinstance(crid, str) and isinstance(tx_id, str):
-                committed_txs[crid] = tx_id
+            row_status = r.get("status") or "active"
+            if not (isinstance(crid, str) and isinstance(tx_id, str)):
+                continue
+            prior = committed_txs.get(crid)
+            # Active row wins over deleted; among same-status candidates,
+            # the first seen is fine for v1 (partial-unique-index guarantees
+            # at most one active per crid, and "any deleted id" suffices to
+            # render the deleted badge).
+            if prior is None or (prior[1] != "active" and row_status == "active"):
+                committed_txs[crid] = (tx_id, row_status)
 
-    committed_cards: dict[str, str] = {}
+    committed_cards: dict[str, tuple[str, str]] = {}
     if card_name_set:
         card_resp = (
             client.table("cards")
-            .select("id, name")
+            .select("id, name, status, deleted_at")
             .in_("name", list(card_name_set))
-            .eq("active", True)
             .execute()
         )
         for r in card_resp.data or []:
             name = r.get("name")
             card_id = r.get("id")
-            if isinstance(name, str) and isinstance(card_id, str):
-                # First match wins — a wallet with two same-named active
-                # cards is rare, and either id locks the parse card the
-                # same way for the user.
-                committed_cards.setdefault(name, card_id)
+            row_status = r.get("status") or "active"
+            if not (isinstance(name, str) and isinstance(card_id, str)):
+                continue
+            prior = committed_cards.get(name)
+            if prior is None or (prior[1] != "active" and row_status == "active"):
+                committed_cards[name] = (card_id, row_status)
 
     if not committed_txs and not committed_cards:
         return
@@ -617,11 +641,15 @@ def _annotate_committed_proposals(
             if tool_name == "propose_transaction":
                 crid = result.get("client_request_id")
                 if isinstance(crid, str) and crid in committed_txs:
-                    block["committed_id"] = committed_txs[crid]
+                    tx_id, row_status = committed_txs[crid]
+                    block["committed_id"] = tx_id
+                    block["committed_state"] = row_status
             elif tool_name == "propose_card":
                 name = result.get("name")
                 if isinstance(name, str) and name in committed_cards:
-                    block["committed_id"] = committed_cards[name]
+                    card_id, row_status = committed_cards[name]
+                    block["committed_id"] = card_id
+                    block["committed_state"] = row_status
 
 
 def _sse_frame(event: str, data: str) -> bytes:

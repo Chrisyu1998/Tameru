@@ -42,6 +42,23 @@ export interface AssistantParseMessage {
   draft: ParseDraft;
   /** Set after the user commits this draft. */
   committedTxId?: string;
+  /**
+   * Lifecycle of the committed row, sourced from the rehydrate annotation
+   * (`committed_state` on the wire's `tameru_proposal` block) — `'active'`
+   * means the transaction still exists, `'deleted'` means it was soft-
+   * deleted after confirm. Undefined for fresh in-session commits (assumed
+   * `'active'`) and for never-confirmed drafts. Drives the badge text on
+   * `ParseCard` (`logged.` vs `deleted.`).
+   */
+  committedState?: "active" | "deleted";
+  /**
+   * `true` for parse cards reconstructed from `chat_messages` history on a
+   * page reload. Rehydrated cards are read-only — the draft is a historical
+   * artifact and editing it would diverge from the row that was actually
+   * committed. Fresh in-session cards are editable until the user taps
+   * "looks right." Set by `_wireMessageToLocal`; absent / false on `_renderTurn`.
+   */
+  frozen?: boolean;
 }
 
 export interface AssistantCandidatesMessage {
@@ -141,6 +158,19 @@ export interface AssistantCardParseMessage {
   draft: CardParseDraft;
   /** Set after the user successfully commits this draft. */
   committedCardId?: string;
+  /**
+   * Lifecycle of the committed card row, sourced from the rehydrate
+   * annotation. `'active'` means the card is still in the wallet;
+   * `'deleted'` means the user closed it after adding. Drives the badge
+   * text on `CardParseCard` (`added.` vs `deleted.`). Same shape as
+   * `AssistantParseMessage.committedState` for transactions.
+   */
+  committedState?: "active" | "deleted";
+  /**
+   * `true` for rehydrated cards (read-only history); `false`/absent for
+   * fresh in-session cards. Mirrors `AssistantParseMessage.frozen`.
+   */
+  frozen?: boolean;
 }
 
 export type ChatMessage =

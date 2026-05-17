@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Calendar, Check, CreditCard, Pencil, Tag } from "lucide-react";
+import { Calendar, Check, CreditCard, Pencil, Tag, Trash2 } from "lucide-react";
 import { cardLabel, type ParseDraft } from "@/lib/chat";
 import { CATEGORIES, type Category } from "@/lib/categories";
 import { formatMoney, formatShortDate } from "@/lib/format";
@@ -15,19 +15,46 @@ interface ParseCardProps {
   draft: ParseDraft;
   /** When set, the card is locked into "logged" state. */
   committed: boolean;
+  /**
+   * Lifecycle of the committed row when the card was confirmed (only
+   * meaningful with `committed=true`). `'active'` → render `logged.`;
+   * `'deleted'` → render `deleted.` in a muted style. Undefined defaults
+   * to `'active'` so legacy in-session commits behave unchanged.
+   */
+  committedState?: "active" | "deleted";
+  /**
+   * `true` for parse cards rehydrated from history. The card becomes a
+   * read-only historical artifact (no inputs, no buttons, no badges that
+   * imply pending action). DESIGN.md §8 status-column doctrine: the
+   * proposal payload is frozen at confirm time; editing a rehydrated
+   * card would drift from the row that was actually committed.
+   */
+  frozen?: boolean;
   onConfirm: (draft: ParseDraft) => void;
   onFix: () => void;
 }
 
 /**
  * The primary commit surface.
- * Per spec: looks like the primary action — accent prominent.
- * Lower-confidence fields show a slightly more prominent pencil.
+ *
+ * Three render modes:
+ *   - **fresh, uncommitted** (`!committed && !frozen`) — fully editable,
+ *     "looks right" + "let me fix it" buttons. The original Day 9 surface.
+ *   - **committed** (`committed`) — locked into the badge state:
+ *     `logged.` when `committedState === 'active'` (default), or
+ *     `deleted.` when the row was soft-deleted after confirm.
+ *   - **rehydrated, never confirmed** (`!committed && frozen`) — read-only
+ *     with a `not saved.` badge. The user closed the app before tapping
+ *     "looks right;" we surface the historical proposal but can't re-confirm
+ *     it because the in-flight draft is no longer trustworthy (the user
+ *     may have intended to abandon it).
  */
 export function ParseCard({
   preface,
   draft,
   committed,
+  committedState,
+  frozen,
   onConfirm,
   onFix,
 }: ParseCardProps) {
@@ -36,6 +63,19 @@ export function ParseCard({
 
   // Lower confidence → "check this one" pencil treatment.
   const lowConf = (v: number) => v < 0.75;
+
+  // Fields are disabled when the card is committed (legacy behavior) OR
+  // when it's a rehydrated read-only historical card.
+  const fieldsDisabled = committed || !!frozen;
+
+  // Resolve the badge state. `committed && committedState === 'deleted'`
+  // is the deleted-after-confirm case; everything else with `committed`
+  // is the standard logged-active case.
+  const isDeleted = committed && committedState === "deleted";
+  const isLogged = committed && !isDeleted;
+  // Rehydrated but never confirmed — historical proposal the user
+  // closed the app on before tapping "looks right."
+  const isCancelled = !committed && !!frozen;
 
   return (
     <div className="w-full max-w-[88%] animate-slide-up-in">
@@ -48,9 +88,13 @@ export function ParseCard({
       <div
         className={cn(
           "rounded-2xl border bg-elevated px-4 py-4",
-          committed
+          // Pre-confirm fresh cards get the loud primary-action ring;
+          // every "frozen" or terminal state gets the quiet hairline.
+          committed || frozen
             ? "border-moss-soft/60"
-            : "border-moss-soft ring-1 ring-moss/20"
+            : "border-moss-soft ring-1 ring-moss/20",
+          // Deleted / cancelled cards fade slightly to telegraph "historical."
+          (isDeleted || isCancelled) && "opacity-75"
         )}
       >
         {/* Merchant + amount headline */}
@@ -59,7 +103,7 @@ export function ParseCard({
             label="merchant"
             value={local.merchant}
             confident={!lowConf(local.confidence.merchant)}
-            disabled={committed}
+            disabled={fieldsDisabled}
             onChange={(v) => setLocal({ ...local, merchant: v })}
             display={
               <span className="font-serif text-lg text-ink lowercase-title">
@@ -71,7 +115,7 @@ export function ParseCard({
             label="amount"
             value={(local.amountCents / 100).toString()}
             confident={!lowConf(local.confidence.amount)}
-            disabled={committed}
+            disabled={fieldsDisabled}
             inputMode="decimal"
             onChange={(v) => {
               const n = parseFloat(v);
@@ -93,7 +137,7 @@ export function ParseCard({
             icon={<Calendar className="h-3.5 w-3.5" />}
             label="date"
             confident={!lowConf(local.confidence.date)}
-            disabled={committed}
+            disabled={fieldsDisabled}
             value={local.date}
             displayValue={formatShortDate(local.date)}
             inputType="date"
@@ -103,7 +147,7 @@ export function ParseCard({
             icon={<CreditCard className="h-3.5 w-3.5" />}
             label="card"
             confident={!lowConf(local.confidence.card)}
-            disabled={committed}
+            disabled={fieldsDisabled}
             value={local.cardId}
             displayValue={
               local.cardId && card.last4 !== "—"
@@ -117,7 +161,7 @@ export function ParseCard({
             icon={<Tag className="h-3.5 w-3.5" />}
             label="category"
             confident={!lowConf(local.confidence.category)}
-            disabled={committed}
+            disabled={fieldsDisabled}
             value={local.category}
             displayValue={local.category}
             asSelect="category"
@@ -125,13 +169,26 @@ export function ParseCard({
           />
         </div>
 
-        {/* Action area */}
-        {committed ? (
+        {/* Action / badge area — terminal states get a badge; the fresh
+            uncommitted state gets the action buttons. */}
+        {isLogged && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-moss-deep">
             <Check className="h-3.5 w-3.5" />
             <span>logged.</span>
           </div>
-        ) : (
+        )}
+        {isDeleted && (
+          <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>deleted.</span>
+          </div>
+        )}
+        {isCancelled && (
+          <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
+            <span>not saved.</span>
+          </div>
+        )}
+        {!committed && !frozen && (
           <>
             <div className="mt-4 flex flex-col gap-2">
               <button

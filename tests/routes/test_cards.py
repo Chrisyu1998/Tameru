@@ -12,7 +12,7 @@ Covers the deliverables from prompt/week-2-chat-mvp-and-deploy/day-14-cards-perp
 - `GET /cards`: default returns active only; `?include_inactive=true`
   returns both buckets.
 - `PATCH /cards/{id}`: name + multipliers + annual_fee patch.
-- `DELETE /cards/{id}`: soft-delete sets active=false + deactivated_at.
+- `DELETE /cards/{id}`: soft-delete sets status='deleted' + deleted_at.
 - RLS: user A cannot GET / PATCH / DELETE user B's cards.
 
 `lookup_card` is monkeypatched on every test so no real Anthropic call
@@ -157,8 +157,8 @@ def test_confirm_creates_card(client, user_a):
     body = resp.json()
     assert body["name"] == f"Test Card {tag}"
     assert body["network"] == "visa"
-    assert body["active"] is True
-    assert body["deactivated_at"] is None
+    assert body["status"] == "active"
+    assert body["deleted_at"] is None
     assert Decimal(body["annual_fee"]) == Decimal("95")
 
 
@@ -252,7 +252,7 @@ def test_confirm_409_when_active_identity_collides(client, user_a):
 def test_confirm_after_soft_delete_inserts_new_row(client, user_a):
     """Verify that soft-delete + re-add yields two rows, never reviving.
 
-    DESIGN.md §8.1: inactive rows are exempt from the partial unique
+    DESIGN.md §8.1: deleted rows are exempt from the partial unique
     index; re-adding the same (issuer, last_four) creates a fresh
     `card_id`. Historical transactions linked to the old row stay
     pointing at it.
@@ -288,21 +288,21 @@ def test_confirm_after_soft_delete_inserts_new_row(client, user_a):
     assert second.status_code == 200, second.text
     second_id = second.json()["id"]
     assert second_id != first_id, "expected a fresh card_id, got a revived row"
-    assert second.json()["active"] is True
+    assert second.json()["status"] == "active"
 
-    # Verify the old row is still inactive (not revived).
+    # Verify the old row is still deleted (not revived).
     db = supabase_for_user(user_a.jwt)
     rows = (
         db.table("cards")
-        .select("id, active, deactivated_at")
+        .select("id, status, deleted_at")
         .in_("id", [first_id, second_id])
         .execute()
         .data
     )
     by_id = {r["id"]: r for r in rows}
-    assert by_id[first_id]["active"] is False
-    assert by_id[first_id]["deactivated_at"] is not None
-    assert by_id[second_id]["active"] is True
+    assert by_id[first_id]["status"] == "deleted"
+    assert by_id[first_id]["deleted_at"] is not None
+    assert by_id[second_id]["status"] == "active"
 
 
 def test_confirm_allows_same_last_four_across_issuers(client, user_a):
@@ -391,8 +391,8 @@ def test_confirm_rejects_missing_last_four_at_commit(client, user_a):
 # ---------------------------------------------------------------------------
 
 
-def test_delete_sets_active_false_and_deactivated_at(client, user_a):
-    """Verify that DELETE soft-deletes — active=false + deactivated_at set."""
+def test_delete_sets_status_deleted_and_deleted_at(client, user_a):
+    """Verify that DELETE soft-deletes — status='deleted' + deleted_at set."""
     tag = _tag()
     confirm = client.post(
         "/cards/confirm",
@@ -413,13 +413,13 @@ def test_delete_sets_active_false_and_deactivated_at(client, user_a):
     db = supabase_for_user(user_a.jwt)
     row = (
         db.table("cards")
-        .select("active, deactivated_at")
+        .select("status, deleted_at")
         .eq("id", card_id)
         .execute()
         .data[0]
     )
-    assert row["active"] is False
-    assert row["deactivated_at"] is not None
+    assert row["status"] == "deleted"
+    assert row["deleted_at"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +486,8 @@ def test_get_cards_include_inactive_returns_both(client, user_a):
     ids = {row["id"] for row in resp.json()["items"]}
     assert inactive_id in ids
     by_id = {row["id"]: row for row in resp.json()["items"]}
-    assert by_id[inactive_id]["active"] is False
-    assert by_id[inactive_id]["deactivated_at"] is not None
+    assert by_id[inactive_id]["status"] == "deleted"
+    assert by_id[inactive_id]["deleted_at"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -556,8 +556,8 @@ def test_rls_user_a_cannot_delete_user_b_card(client, user_a, user_b, card_b):
     assert resp.status_code == 204
 
     db_b = supabase_for_user(user_b.jwt)
-    row = db_b.table("cards").select("active").eq("id", card_b).execute().data[0]
-    assert row["active"] is True
+    row = db_b.table("cards").select("status").eq("id", card_b).execute().data[0]
+    assert row["status"] == "active"
 
 
 # ---------------------------------------------------------------------------
