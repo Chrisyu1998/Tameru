@@ -25,6 +25,27 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 CardNetwork = Literal["visa", "mastercard", "amex", "discover", "other"]
 CardProgram = Literal["UR", "MR", "TYP", "Bilt", "Other"]
+# Closed-enum issuer (DESIGN.md §8.1, migration
+# 20260516140000_cards_uniqueness_by_issuer.sql). Eliminates the
+# case-sensitivity and variant collisions ("Chase" vs "chase" vs
+# "Chase Bank") that would defeat the (user_id, issuer, last_four)
+# partial unique index. `other` is the escape hatch for issuers we
+# haven't enumerated yet; the user can patch later.
+CardIssuer = Literal[
+    "chase",
+    "amex",
+    "citi",
+    "capital_one",
+    "discover",
+    "bank_of_america",
+    "wells_fargo",
+    "usaa",
+    "bilt",
+    "barclays",
+    "us_bank",
+    "synchrony",
+    "other",
+]
 
 
 # Per DESIGN.md §6.1 — domain allowlist for the Claude web_search call.
@@ -82,9 +103,14 @@ class CardLookupResult(BaseModel):
     # head. None when sources don't agree or the card is genuinely available
     # on multiple networks (rare — Costco Visa vs older versions, etc.).
     network: CardNetwork | None = None
+    # Issuer is the actual uniqueness tiebreaker (DESIGN.md §8.1). The
+    # lookup maps web-search strings ("Chase", "American Express", "Citibank")
+    # onto the closed enum via _normalize_issuer() in card_lookup.py.
+    # None when the lookup couldn't determine the issuer — the caller
+    # falls back to "other" on the CardProposal and flags needs_manual.
+    issuer: CardIssuer | None = None
     multipliers: dict[str, float] = Field(default_factory=dict)
     annual_fee: Decimal | None = None
-    issuer: str | None = None
     source_urls: list[str] = Field(default_factory=list)
     needs_manual: bool = False
     # Only set when needs_manual=True — gives the UI a debugging breadcrumb
@@ -117,9 +143,19 @@ class CardProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     network: CardNetwork
-    last_four: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
+    # Nullable on the tool-return shape: `propose_card` may return a
+    # proposal with `last_four=None` when the user didn't say it in chat.
+    # The parse-card UI collects it before the user can tap "looks right";
+    # `POST /cards/confirm` rejects payloads that still have it missing
+    # at commit time (the column is NOT NULL on the DB).
+    last_four: str | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        pattern=r"^\d{4}$",
+    )
     name: str
-    issuer: str
+    issuer: CardIssuer
     program: CardProgram = "Other"
     multipliers: dict[str, float] = Field(default_factory=dict)
     annual_fee: Decimal | None = None
@@ -128,13 +164,13 @@ class CardProposal(BaseModel):
     alias: str | None = None
     needs_manual: bool = False
 
-    @field_validator("name", "issuer")
+    @field_validator("name")
     @classmethod
-    def _v_non_empty(cls, value: str) -> str:
-        """Strip and reject empty-string display fields."""
+    def _v_name(cls, value: str) -> str:
+        """Strip and reject empty-string card names."""
         stripped = value.strip()
         if not stripped:
-            raise ValueError("name/issuer cannot be empty or whitespace-only")
+            raise ValueError("name cannot be empty or whitespace-only")
         return stripped
 
     @field_validator("annual_fee")
@@ -209,7 +245,7 @@ class CardRow(BaseModel):
     id: UUID
     user_id: UUID
     name: str
-    issuer: str
+    issuer: CardIssuer
     network: CardNetwork
     program: CardProgram
     multipliers: dict[str, float] = Field(default_factory=dict)

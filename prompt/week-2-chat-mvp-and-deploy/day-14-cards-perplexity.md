@@ -39,8 +39,12 @@ UPDATE cards SET network = 'other' WHERE network IS NULL;
 ALTER TABLE cards ALTER COLUMN network SET NOT NULL;
 
 -- Active-identity uniqueness. Inactive rows are exempt by design (DESIGN.md §8.1).
+-- Note: the active-identity index is keyed on `issuer`, not `network`
+-- (corrected post-Day-14 in migration
+-- 20260516140000_cards_uniqueness_by_issuer.sql). See DESIGN.md §8.1
+-- "Constraints" for the rationale.
 CREATE UNIQUE INDEX cards_active_identity_uniq
-  ON cards (user_id, network, last_four)
+  ON cards (user_id, issuer, last_four)
   WHERE active = true;
 ```
 
@@ -60,9 +64,9 @@ CREATE UNIQUE INDEX cards_active_identity_uniq
 ### `app/routes/cards.py`
 
 - `POST /cards/lookup` — body: `{name}`. Calls `lookup_card`, returns the proposed card data + citations. Used by the onboarding flow *and* by the `propose_card` tool internals.
-- **`POST /cards/confirm`** — body: `CardProposal` payload (`network` **required**, `last_four` **required**, `program`, `multipliers`, `annual_fee`, `source_urls`, `alias?`). Inserts the row. Returns the created card.
+- **`POST /cards/confirm`** — body: `CardProposal` payload (`network` **required**, `issuer` **required** (closed-enum CardIssuer), `last_four` **required at commit**, `program`, `multipliers`, `annual_fee`, `source_urls`, `alias?`). Inserts the row. Returns the created card. Note: `last_four` is nullable on the wire shape (`propose_card` may return a proposal without it mid-conversation), but the route 422s if the commit payload is still missing it — the partial unique index would otherwise treat null-last_four rows as distinct and silently allow duplicates.
   - **Collision handling** (matches DESIGN.md §8.1):
-    - If the `cards_active_identity_uniq` partial index raises a unique-violation → return **HTTP 409** with `{code: "active_card_exists", existing_card: {id, name, last_four, deactivated_at: null}}`. The frontend renders a "you already have Amex Plat ending 1234 — edit it instead?" affordance linking to the PATCH sheet.
+    - If the `cards_active_identity_uniq` partial index raises a unique-violation → return **HTTP 409** with `{code: "active_card_exists", existing_card: {id, name, last_four, deactivated_at: null}}`. The frontend renders a "you already have Amex Plat ending 1234 — edit it instead?" affordance linking to the PATCH sheet. The collision is keyed on `(issuer, last_four)` — see DESIGN.md §8.1 for why network is the wrong tiebreaker.
     - If only an inactive row matches, the partial index does NOT fire — the insert succeeds and a new row is created. Per DESIGN.md §8.1, soft-deleted rows are never revived: a fresh row gets fresh multipliers, fresh annual_fee, fresh `card_id`, and historical transactions stay attached to the previous soft-deleted row.
   - **No `client_request_id` idempotency here.** Cards are low-frequency (3–5 per user lifetime); the worst case on offline-queue replay is a duplicate the user deletes. Don't add the column or the partial unique index "for consistency" with transactions.
 - **No `POST /cards` (direct write from a free-form user form).** The only commit path is `/confirm` after a proposal the user saw.
@@ -73,10 +77,10 @@ CREATE UNIQUE INDEX cards_active_identity_uniq
 ### `propose_card` — `app/agent/tools.py` (new, deferred from Day 9)
 
 ```text
-propose_card({network, last_four, program, alias?}) → CardProposal
+propose_card({program, network?, last_four?, alias?}) → CardProposal
 ```
 
-- `network` and `last_four` are **required** tool args. If Claude tries to call `propose_card` without them, the system prompt instructs Claude to ask the user (e.g., "Is that Visa or Amex, and what are the last 4 digits?") before retrying. The tool impl returns a validation error if either is missing — Claude will see the error and re-prompt the user.
+- **Only `program` (the card name) is required.** `network` and `last_four` are optional tool args (Day 14 follow-up — issuer and network are derived by the lookup; last_four is collected by the parse-card UI before commit). The system prompt teaches Claude to pass `network` only when the user explicitly named it ("my Visa Sapphire") and `last_four` only when the user said it ("ending 4321"); never to ask the user which network or issuer their card is on. `issuer` is filled by the lookup from the card name and can be edited on the parse card.
 - Tool implementation:
   1. Call `lookup_card(name=program)` to fill multipliers, annual_fee, issuer, and source_urls. If `lookup_card` returns `{needs_manual: true, ...}`, return the proposal with empty multipliers and `needs_manual=true` so the parse card surfaces the manual-fill path.
   2. Build and return a `CardProposal` (define in `app/models/cards.py` if not already present — mirrors the Day 5 `TransactionProposal` pattern).

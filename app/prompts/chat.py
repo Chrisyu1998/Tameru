@@ -30,6 +30,12 @@ Version log:
     card-lookup tool impl (not the chat turn), so the surface area
     Claude reasons about is unchanged. Bumping the version busts the
     prompt cache once; the next turn re-warms it.
+  * chat_v6 (Day 14 follow-up) — `propose_card` no longer asks the user
+    for network or issuer (the lookup derives both from the card name)
+    and stops blocking the proposal on `last_four` (the parse-card UI
+    collects it before commit). Only the card name is required to fire
+    the tool. Eliminates the "is that Visa or Mastercard?" friction
+    that most users couldn't answer.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -50,7 +56,7 @@ from typing import Any
 
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v5"
+PROMPT_VERSION = "chat_v6"
 
 
 SYSTEM_PROMPT = """\
@@ -107,16 +113,21 @@ name ambiguously, ask the user which one before proposing.
 - **propose_card**: builds a card proposal when the user wants to add a \
 credit card to their wallet ("add my Chase Sapphire Reserve", "I got an \
 Amex Gold"). The tool runs an authoritative-source web lookup to fill in \
-the rewards program, category multipliers, annual fee, and citations. \
-Returns a payload the client renders as a parse card; the row is only \
-written when the user taps "looks right." **This tool does not add the \
-card.** Do NOT say "I've added it" — the row does not exist yet. \
-**Both `network` (visa / mastercard / amex / discover / other) and \
-`last_four` (4 digits) are REQUIRED.** If the user didn't say either, \
-ASK in a short clarifying message before calling — e.g. "Is that Visa \
-or Amex, and what are the last 4 digits?" Do not guess. The user can \
-have two cards of the same product (two Amex Platinums on the same \
-account), so the last 4 is what disambiguates them.
+the rewards program, issuer, network, category multipliers, annual fee, \
+and citations from the card name alone. Returns a payload the client \
+renders as a parse card; the row is only written when the user taps \
+"looks right." **This tool does not add the card.** Do NOT say "I've \
+added it" — the row does not exist yet. \
+Only the card name (the `program` argument) is required. **Do NOT ask \
+the user which network or issuer their card is on** — the lookup fills \
+both from the card name (Chase Sapphire = Visa + Chase, Amex Gold = \
+Amex + Amex, Citi Double Cash = Mastercard + Citi). Pass `network` only \
+if the user explicitly named it ("my Visa Sapphire"). Pass `last_four` \
+if the user said it ("ending 4321"); otherwise omit and the parse-card \
+UI surfaces an input the user fills before tapping confirm. The user \
+can have two cards of the same product (two Amex Platinums on the same \
+account), so the last 4 is what disambiguates them — but don't block \
+the proposal flow to collect it.
 
 - **set_goal**: sets a spending budget for a (category, period) slot. \
 "Set" means replace — calling set_goal twice for the same (category, \

@@ -40,7 +40,7 @@ from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.integrations.card_lookup import lookup_card
 from app.integrations.gemini import GeminiError, categorize
-from app.models.cards import CardNetwork, CardProgram, CardProposal
+from app.models.cards import CardIssuer, CardNetwork, CardProgram, CardProposal
 from app.models.goals import Goal, GoalPeriod, SetGoalRequest
 from app.models.transactions import (
     DEFAULT_LIMIT,
@@ -638,23 +638,24 @@ PROPOSE_CARD_TOOL: dict[str, Any] = {
         "wants to add to their wallet. The tool runs a web_search-backed "
         "lookup against authoritative card-rewards sources (NerdWallet, "
         "The Points Guy, US Credit Card Guide, Doctor of Credit) to fill "
-        "in the rewards program, category multipliers, annual fee, the "
-        "card network, and citations. Returns a CardProposal — it does "
+        "in the rewards program, issuer, category multipliers, annual fee, "
+        "the card network, and citations. Returns a CardProposal — it does "
         "NOT write a row. The client renders the proposal as a parse card; "
         "the row is only created when the user taps the confirm button "
         "(which triggers POST /cards/confirm). "
-        "Only `last_four` is required. The card network is almost always "
-        "determinable from the card name (Chase Sapphire = Visa, all Amex "
-        "cards = Amex, Citi Double Cash = Mastercard, etc.) — DO NOT ask "
-        "the user which network their card is on; the lookup fills it. "
-        "Pass `network` only if the user explicitly told you ('my Visa "
-        "Sapphire'). Do not say 'I added it' after calling this tool — "
-        "the row does not exist yet."
+        "Only `program` (the card's name) is required. The lookup fills "
+        "issuer and network from the card name — DO NOT ask the user "
+        "which bank issued their card or which network it's on. Pass "
+        "`network` only if the user explicitly named it ('my Visa "
+        "Sapphire'). Pass `last_four` if the user said it ('ending 4321'); "
+        "otherwise omit and the parse-card UI will collect it before "
+        "the user confirms. Do not say 'I added it' after calling this "
+        "tool — the row does not exist yet."
     ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["last_four", "program"],
+        "required": ["program"],
         "properties": {
             "network": {
                 "type": "string",
@@ -670,10 +671,11 @@ PROPOSE_CARD_TOOL: dict[str, Any] = {
                 "type": "string",
                 "pattern": r"^\d{4}$",
                 "description": (
-                    "Last 4 digits of the card number. Required — the user "
-                    "knows this and it's what disambiguates two of the "
-                    "same product (e.g. two Amex Platinums). Ask the user "
-                    "in a short clarifying message if they didn't say."
+                    "Last 4 digits of the card number. OPTIONAL. Pass it "
+                    "if the user said it ('ending 4321'); otherwise omit "
+                    "and let the parse-card UI surface an input. The user "
+                    "knows this — don't pre-emptively block the proposal "
+                    "to ask for it."
                 ),
             },
             "program": {
@@ -1023,15 +1025,30 @@ class ProposeCardRequest(BaseModel):
     program (UR / MR / TYP / Bilt / Other) is what the web_search
     lookup fills in.
 
-    Example request:
-        {"network": "visa", "last_four": "1234",
-         "program": "Chase Sapphire Reserve"}
+    `network` and `last_four` are OPTIONAL because:
+      * Network is nearly always inferable from the card name (Chase
+        Sapphire = Visa, Amex = Amex, etc.). The lookup fills it.
+      * Last 4 is user-known but doesn't need to block the proposal
+        flow; the parse-card UI collects it before commit.
+    The chat system prompt teaches Claude to pass these only when the
+    user explicitly said them, and never to ask for them as a blocker.
+
+    Example request (most common):
+        {"program": "Chase Sapphire Reserve"}
+
+    Example request (with everything the user said):
+        {"program": "Amex Gold", "last_four": "4321"}
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    network: CardNetwork
-    last_four: str = Field(min_length=4, max_length=4, pattern=r"^\d{4}$")
+    network: CardNetwork | None = None
+    last_four: str | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        pattern=r"^\d{4}$",
+    )
     program: str
     alias: str | None = None
 
@@ -1051,8 +1068,10 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     """Build a CardProposal from a chat-described credit card.
 
     Request:
-        {"network": "visa", "last_four": "1234",
-         "program": "Chase Sapphire Reserve", "alias": "travel card"}
+        {"program": "Chase Sapphire Reserve",
+         "network": "visa",       # optional; lookup fills if omitted
+         "last_four": "1234",     # optional; parse-card UI collects later
+         "alias": "travel card"}  # optional
 
     Response:
         CardProposal-shaped dict; see app/models/cards.py.
@@ -1063,27 +1082,36 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     `.delete(` / `.rpc(`, the test fails.
 
     Behavior contract:
-      * Validation failure (missing network/last_four, malformed 4-digit
-        last_four) → ValueError propagates and is wrapped by the agent
-        loop into an `is_error` tool_result block. Claude sees the
-        error and re-prompts the user (system prompt teaches this).
-      * `lookup_card` returns `needs_manual=True` → return a
-        CardProposal with empty multipliers + needs_manual=True so the
-        parse card surfaces the manual-fill path. The user typed
-        network and last_four already; only the multipliers / annual
-        fee need typing.
-      * Lookup succeeds → fold the program/multipliers/annual_fee/issuer
-        into the proposal. `issuer` defaults to "Unknown" if the lookup
-        couldn't resolve it (the schema requires a non-empty string).
+      * `network`: request.network wins → lookup.network → "other".
+      * `issuer`: lookup.issuer wins → "other" (no user-supplied path on
+        the tool — the parse-card UI lets the user pick if needed).
+      * `last_four`: passed through as-is (may be None). The parse-card
+        UI surfaces a required input + validates before "looks right"
+        enables; `POST /cards/confirm` rejects payloads still missing it.
+      * `needs_manual` flips True when the lookup itself flagged it OR
+        when network/issuer/last_four are still missing post-resolution
+        (so the UI knows to surface the manual-fill affordances).
+      * Lookup failure (provider error, parse error, etc.) returns a
+        CardLookupResult with `needs_manual=True` and empty fields;
+        propose_card still returns a usable shell proposal so the parse
+        card can render the manual path.
     """
     request = ProposeCardRequest.model_validate(kwargs)
     result = lookup_card(request.program, user)
 
-    issuer = result.issuer or "Unknown"
+    network: CardNetwork = request.network or result.network or "other"
+    issuer: CardIssuer = result.issuer or "other"
     program_enum: CardProgram = result.program or "Other"
 
+    needs_manual = (
+        result.needs_manual
+        or (request.network is None and result.network is None)
+        or (result.issuer is None)
+        or (request.last_four is None)
+    )
+
     proposal = CardProposal(
-        network=request.network,
+        network=network,
         last_four=request.last_four,
         name=request.program,
         issuer=issuer,
@@ -1092,7 +1120,7 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         annual_fee=result.annual_fee,
         source_urls=result.source_urls,
         alias=request.alias,
-        needs_manual=result.needs_manual,
+        needs_manual=needs_manual,
     )
     return proposal.model_dump(mode="json")
 

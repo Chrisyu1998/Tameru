@@ -1,4 +1,5 @@
 import type { Category } from "./categories";
+import type { CardIssuer } from "./cardsApi";
 
 /** Loyalty / points programs surfaced as a small chip on each card. */
 export type CardProgram = "UR" | "MR" | "Bilt" | "ThankYou" | "Cash";
@@ -19,6 +20,12 @@ export interface Card {
   color?: string;
   /** Loyalty program chip. */
   program?: CardProgram;
+  /**
+   * Issuing bank — surfaced as a neutral chip alongside `program` on the
+   * cards-page tile (Day 14 follow-up). Closed-enum so chips and selects
+   * can title-case via `ISSUER_LABELS` without lookup-code churn.
+   */
+  issuer?: CardIssuer;
   /** Earn rate chips like "4× dining". */
   multipliers?: CardMultiplier[];
 }

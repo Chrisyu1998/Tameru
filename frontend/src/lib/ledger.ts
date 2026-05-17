@@ -436,6 +436,7 @@ export function cardRowToFixture(row: CardRow): Card {
     last4: row.last_four ?? "",
     color: row.color ?? undefined,
     program,
+    issuer: row.issuer,
     multipliers: multipliers.length > 0 ? multipliers : undefined,
   };
 }

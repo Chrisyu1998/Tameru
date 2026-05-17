@@ -12,11 +12,54 @@ import { apiFetch, apiJson, ApiError } from './api';
 export type CardNetwork = 'visa' | 'mastercard' | 'amex' | 'discover' | 'other';
 export type CardProgram = 'UR' | 'MR' | 'TYP' | 'Bilt' | 'Other';
 
+// Closed-enum issuer. Mirrors `app/models/cards.py::CardIssuer` and the
+// DB CHECK constraint installed by migration
+// 20260516140000_cards_uniqueness_by_issuer.sql. If you add a value here,
+// update the backend Literal + DB CHECK in the same change.
+export type CardIssuer =
+  | 'chase'
+  | 'amex'
+  | 'citi'
+  | 'capital_one'
+  | 'discover'
+  | 'bank_of_america'
+  | 'wells_fargo'
+  | 'usaa'
+  | 'bilt'
+  | 'barclays'
+  | 'us_bank'
+  | 'synchrony'
+  | 'other';
+
+// Friendly labels for the UI — the enum stays canonical snake_case for the
+// wire / DB; the display map exists so chips and selects show titlecase
+// without sprinkling lookup code through components.
+export const ISSUER_LABELS: Record<CardIssuer, string> = {
+  chase: 'Chase',
+  amex: 'Amex',
+  citi: 'Citi',
+  capital_one: 'Capital One',
+  discover: 'Discover',
+  bank_of_america: 'Bank of America',
+  wells_fargo: 'Wells Fargo',
+  usaa: 'USAA',
+  bilt: 'Bilt',
+  barclays: 'Barclays',
+  us_bank: 'US Bank',
+  synchrony: 'Synchrony',
+  other: 'Other',
+};
+
+export const ISSUERS: readonly CardIssuer[] = Object.keys(
+  ISSUER_LABELS,
+) as CardIssuer[];
+
 export interface CardLookupResult {
   program: CardProgram | null;
+  network: CardNetwork | null;
   multipliers: Record<string, number>;
   annual_fee: string | null;
-  issuer: string | null;
+  issuer: CardIssuer | null;
   source_urls: string[];
   needs_manual: boolean;
   raw_text?: string | null;
@@ -29,9 +72,12 @@ export interface CardLookupResponse {
 
 export interface CardProposal {
   network: CardNetwork;
-  last_four: string;
+  // Optional on the proposal-tool return shape (propose_card may not have
+  // the user's last 4 yet). The parse-card UI MUST collect it before
+  // `POST /cards/confirm`, which 422s if it's still missing at commit.
+  last_four: string | null;
   name: string;
-  issuer: string;
+  issuer: CardIssuer;
   program: CardProgram;
   multipliers: Record<string, number>;
   annual_fee?: string | null;
@@ -45,7 +91,7 @@ export interface CardRow {
   id: string;
   user_id: string;
   name: string;
-  issuer: string;
+  issuer: CardIssuer;
   network: CardNetwork;
   program: CardProgram;
   multipliers: Record<string, number>;

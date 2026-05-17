@@ -114,7 +114,10 @@ def card_a(user_a) -> str:
             {
                 "user_id": user_a.id,
                 "name": "A card",
-                "issuer": "Chase",
+                # `issuer` is a closed CHECK enum since the Day 14 follow-up
+                # migration (20260516140000_cards_uniqueness_by_issuer.sql).
+                # All inserts here use canonical lowercase identifiers.
+                "issuer": "chase",
                 "program": "UR",
                 "network": "visa",
                 "last_four": "1111",
@@ -137,7 +140,7 @@ def card_b(user_b) -> str:
             {
                 "user_id": user_b.id,
                 "name": "B card",
-                "issuer": "Amex",
+                "issuer": "amex",
                 "program": "MR",
                 "network": "amex",
                 "last_four": "2222",

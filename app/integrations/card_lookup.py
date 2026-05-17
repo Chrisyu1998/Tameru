@@ -32,6 +32,7 @@ from app.auth import AuthedUser
 from app.integrations.aicalllog import log_ai_call
 from app.models.cards import (
     CARD_LOOKUP_ALLOWED_DOMAINS,
+    CardIssuer,
     CardLookupResult,
     CardProgram,
 )
@@ -101,6 +102,15 @@ ONLY when the same product is genuinely available on multiple networks \
 (rare — Costco's co-branded card history is one example) or when the \
 sources don't agree.
 
+  - issuer: one of ["chase", "amex", "citi", "capital_one", "discover", \
+"bank_of_america", "wells_fargo", "usaa", "bilt", "barclays", "us_bank", \
+"synchrony", "other"]. Use the issuing bank's canonical Tameru identifier \
+(snake_case, lowercase). Map common variants: "American Express" → "amex", \
+"Citibank" → "citi", "Capital One" → "capital_one", "BofA"/"Bank of America" \
+→ "bank_of_america", "US Bank" → "us_bank". For an issuer outside the list \
+(e.g. a small regional bank), return "other". Return null only if the \
+issuer cannot be determined at all.
+
   - multipliers: object mapping the card's bonus categories to their \
 multiplier value as a number (e.g. {"Dining": 3, "Travel": 3}). Use Tameru's \
 category labels where they match the card's bonus categories. Omit a category \
@@ -110,19 +120,16 @@ non-1× base earn).
   - annual_fee: USD numeric. Use the current published fee. Null if not \
 found.
 
-  - issuer: a single short brand name (e.g. "Chase", "American Express", \
-"Citi", "Bilt"). Null if not found.
-
 Return your entire output as a single JSON object inside ```json fences:
 
 ```json
-{"program": "UR", "network": "visa", "multipliers": {"Dining": 3, "Travel": 3}, "annual_fee": 95, "issuer": "Chase"}
+{"program": "UR", "network": "visa", "issuer": "chase", "multipliers": {"Dining": 3, "Travel": 3}, "annual_fee": 95}
 ```
 
 If you cannot find the card or sources disagree wildly, return:
 
 ```json
-{"program": null, "network": null, "multipliers": {}, "annual_fee": null, "issuer": null}
+{"program": null, "network": null, "issuer": null, "multipliers": {}, "annual_fee": null}
 ```
 
 Do not include any prose outside the JSON fences. Cite your sources via \
@@ -282,9 +289,9 @@ def lookup_card(card_name: str, user: AuthedUser) -> CardLookupResult:
 
         program = _normalize_program(parsed.get("program"))
         network = _normalize_network(parsed.get("network"))
+        issuer = _normalize_issuer(parsed.get("issuer"))
         multipliers = _normalize_multipliers(parsed.get("multipliers"))
         annual_fee = _coerce_number(parsed.get("annual_fee"))
-        issuer = _coerce_str(parsed.get("issuer"))
 
         # If every meaningful field came back empty / null, treat it as a
         # low-confidence miss and route the user to manual entry. Citations
@@ -293,9 +300,9 @@ def lookup_card(card_name: str, user: AuthedUser) -> CardLookupResult:
         if (
             program is None
             and network is None
+            and issuer is None
             and not multipliers
             and annual_fee is None
-            and issuer is None
         ):
             success = True  # the API call succeeded; the answer was empty
             return CardLookupResult(
@@ -308,9 +315,9 @@ def lookup_card(card_name: str, user: AuthedUser) -> CardLookupResult:
         return CardLookupResult(
             program=program,
             network=network,
+            issuer=issuer,
             multipliers=multipliers,
             annual_fee=annual_fee,
-            issuer=issuer,
             source_urls=citations,
             needs_manual=False,
         )
@@ -499,6 +506,55 @@ def _normalize_program(value: Any) -> CardProgram | None:
     return None
 
 
+def _normalize_issuer(value: Any) -> CardIssuer | None:
+    """Map model output onto the closed `CardIssuer` enum, or None.
+
+    The system prompt already instructs Claude to return canonical
+    snake_case identifiers, but real web text contains friendly variants
+    ("American Express", "Capital One", "BofA") that the model occasionally
+    leaks through. This helper folds the common cases without forcing
+    the model to retry. Anything genuinely outside the enum returns None
+    so the caller can decide to fall back to "other" + needs_manual=True
+    rather than serializing a value the DB CHECK constraint would reject.
+    """
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower().replace(" ", "_")
+    if cleaned in (
+        "chase",
+        "amex",
+        "citi",
+        "capital_one",
+        "discover",
+        "bank_of_america",
+        "wells_fargo",
+        "usaa",
+        "bilt",
+        "barclays",
+        "us_bank",
+        "synchrony",
+        "other",
+    ):
+        return cleaned  # type: ignore[return-value]
+    # Friendly-name folds — matches the system-prompt guidance and absorbs
+    # the most common model variants.
+    if cleaned in ("american_express", "amex_card", "amexco"):
+        return "amex"
+    if cleaned in ("citibank",):
+        return "citi"
+    if cleaned in ("capitalone",):
+        return "capital_one"
+    if cleaned in ("bofa", "boa"):
+        return "bank_of_america"
+    if cleaned in ("wellsfargo",):
+        return "wells_fargo"
+    if cleaned in ("usbank", "u.s._bank", "u.s_bank"):
+        return "us_bank"
+    if cleaned in ("bilt_rewards",):
+        return "bilt"
+    return None
+
+
 def _normalize_network(value: Any) -> str | None:
     """Map model output onto the closed `CardNetwork` enum, or None.
 
@@ -560,11 +616,3 @@ def _coerce_number(value: Any) -> Any:
             return None
         return n if n >= 0 else None
     return None
-
-
-def _coerce_str(value: Any) -> str | None:
-    """Trim and reject empty / non-string issuer fields."""
-    if not isinstance(value, str):
-        return None
-    stripped = value.strip()
-    return stripped or None

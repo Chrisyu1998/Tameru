@@ -79,7 +79,7 @@ def post_card_confirm(
         transactions confirm shape from Day 5).
 
     409 collision flow (DESIGN.md §8.1, §6.1):
-        - If a row already exists with the same (user_id, network,
+        - If a row already exists with the same (user_id, issuer,
           last_four) AND active=true, the `cards_active_identity_uniq`
           partial unique index fires. We catch the unique violation and
           return HTTP 409 with `code=active_card_exists` plus the
@@ -89,12 +89,33 @@ def post_card_confirm(
           fire and the insert succeeds — a new row with a new `card_id`
           is created. Old transactions stay linked to the previous
           inactive row.
+        - Two cards from DIFFERENT issuers with the same network and
+          last_four (e.g. Chase Visa 1234 and Capital One Visa 1234)
+          coexist freely under the issuer-keyed index. This was the
+          bug the (network, last_four) index had — see migration
+          20260516140000.
 
     No `client_request_id` idempotency here. Cards are ≤10/user lifetime;
     the cost of a duplicate (delete and re-add) is recoverable in one tap.
     See Day 14 prompt and DESIGN.md §8.1 for the proportionate-cost
     reasoning.
     """
+    # `CardProposal.last_four` is nullable on the wire so the `propose_card`
+    # tool can return a proposal mid-conversation before the user has typed
+    # it. At commit time, the parse-card UI must have collected it — defend
+    # against a forged client that POSTs without one. The DB column is
+    # nullable too, but a missing last_four would make the partial unique
+    # index treat the row as distinct from every other null-last_four row,
+    # silently allowing duplicates per user. 422 here is the right boundary.
+    if proposal.last_four is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "missing_last_four",
+                "message": "last_four is required at commit time",
+            },
+        )
+
     client = supabase_for_user(user.jwt)
 
     insert_row: dict[str, object] = {
@@ -124,7 +145,7 @@ def post_card_confirm(
         # we string-match the index name for forward-compat across SDK versions.
         message = str(exc)
         if "cards_active_identity_uniq" in message or "duplicate key" in message:
-            raise _collision_409(client, proposal.network, proposal.last_four) from exc
+            raise _collision_409(client, proposal.issuer, proposal.last_four) from exc
         raise
 
     return CardRow.model_validate(resp.data[0])
@@ -223,7 +244,7 @@ def delete_card(
 
     The row stays in the table so historical transactions linked via
     `transactions.card_id` keep their card snapshot. The partial unique
-    index frees up the `(user_id, network, last_four)` slot so the user
+    index frees up the `(user_id, issuer, last_four)` slot so the user
     can re-add the same card if they want — a new row gets a fresh
     `card_id` (DESIGN.md §8.1 soft-delete / re-add semantics).
 
@@ -247,13 +268,19 @@ def delete_card(
 
 
 def _collision_409(
-    client, network: str, last_four: str
+    client, issuer: str, last_four: str
 ) -> HTTPException:
     """Resolve the colliding active row and build the 409 payload.
 
     Called from the unique-violation branch of POST /cards/confirm. RLS
     scopes the read so we can only resolve our own collisions — exactly
     the row the frontend will edit.
+
+    Keyed on `issuer` + `last_four` because the partial unique index
+    `cards_active_identity_uniq` is `(user_id, issuer, last_four) WHERE
+    active = true` (DESIGN.md §8.1, migration 20260516140000). Issuer
+    is the canonical Tameru enum value (closed CHECK constraint), so
+    exact equality is sufficient — no LOWER() needed.
 
     If for some reason the colliding row can't be re-read (race window
     where it was deleted between INSERT failure and SELECT), fall back
@@ -264,7 +291,7 @@ def _collision_409(
         lookup = (
             client.table("cards")
             .select("id, name, last_four")
-            .eq("network", network)
+            .eq("issuer", issuer)
             .eq("last_four", last_four)
             .eq("active", True)
             .limit(1)
@@ -282,7 +309,7 @@ def _collision_409(
             detail={
                 "code": "active_card_exists",
                 "message": (
-                    f"a card with network={network} ending {last_four} "
+                    f"a card from issuer={issuer} ending {last_four} "
                     "is already active"
                 ),
             },

@@ -681,7 +681,7 @@ def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
         .insert({
             "user_id": user_a.id,
             "name": f"Inactive-{tag}",
-            "issuer": "Chase",
+            "issuer": "chase",
             "program": "UR",
             "network": "visa",
             "last_four": _digits4(tag),
@@ -704,7 +704,7 @@ def test_get_cards_returns_multiple_cards(authed_user_a, user_a):
         .insert({
             "user_id": user_a.id,
             "name": f"Extra-{tag}",
-            "issuer": "Amex",
+            "issuer": "amex",
             "program": "MR",
             "network": "amex",
             "last_four": _digits4(tag),
@@ -951,7 +951,7 @@ def test_propose_transaction_drops_inactive_card_id(
         .insert({
             "user_id": user_a.id,
             "name": f"Closed-{tag}",
-            "issuer": "Citi",
+            "issuer": "citi",
             "program": "TYP",
             "network": "mastercard",
             "last_four": _digits4(tag),

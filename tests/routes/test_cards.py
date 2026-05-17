@@ -18,9 +18,12 @@ Covers the deliverables from prompt/week-2-chat-mvp-and-deploy/day-14-cards-perp
 `lookup_card` is monkeypatched on every test so no real Anthropic call
 fires — tests stay deterministic and offline.
 
-Conftest's card_a / card_b session fixtures occupy `(visa, 1111)` and
+Conftest's card_a / card_b session fixtures occupy `(chase, 1111)` and
 `(amex, 2222)` respectively; tests that exercise the partial unique
-index use new (network, last_four) pairs that don't collide.
+index use new (issuer, last_four) pairs that don't collide. Issuer is
+keyed on the closed CHECK enum installed by migration
+20260516140000_cards_uniqueness_by_issuer.sql — values must be the
+canonical lowercase identifiers (`chase`, `amex`, `capital_one`, …).
 """
 
 from __future__ import annotations
@@ -56,7 +59,7 @@ def stub_lookup(monkeypatch):
             program="UR",
             multipliers={"Dining": 3.0, "Travel": 3.0},
             annual_fee=Decimal("95"),
-            issuer="Chase",
+            issuer="chase",
             source_urls=["https://nerdwallet.com/chase-sapphire-preferred"],
             needs_manual=False,
         )
@@ -144,7 +147,7 @@ def test_confirm_creates_card(client, user_a):
             network="visa",
             last_four=_last_four(tag, "9"),
             name=f"Test Card {tag}",
-            issuer="Chase",
+            issuer="chase",
             program="UR",
             multipliers={"Dining": 3.0},
             annual_fee="95",
@@ -165,7 +168,7 @@ def test_confirm_rejects_missing_last_four(client, user_a):
         network="visa",
         last_four="1234",
         name="X",
-        issuer="X",
+        issuer="chase",
     )
     body.pop("last_four")
     resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
@@ -181,7 +184,7 @@ def test_confirm_rejects_non_four_digit_last_four(client, user_a):
             network="visa",
             last_four="12",  # too short
             name="X",
-            issuer="X",
+            issuer="chase",
         ),
     )
     assert resp.status_code == 422
@@ -196,7 +199,7 @@ def test_confirm_rejects_unknown_network(client, user_a):
             network="diners",
             last_four="1234",
             name="X",
-            issuer="X",
+            issuer="chase",
         ),
     )
     assert resp.status_code == 422
@@ -208,10 +211,10 @@ def test_confirm_rejects_unknown_network(client, user_a):
 
 
 def test_confirm_409_when_active_identity_collides(client, user_a):
-    """Verify that confirming a duplicate (network, last_four) returns 409.
+    """Verify that confirming a duplicate (issuer, last_four) returns 409.
 
     The first confirm succeeds; the second confirm of the same
-    `(visa, last_four)` returns 409 active_card_exists with the existing
+    `(chase, last_four)` returns 409 active_card_exists with the existing
     card's id surfaced for the frontend's "edit instead?" affordance.
     """
     tag = _tag()
@@ -223,7 +226,7 @@ def test_confirm_409_when_active_identity_collides(client, user_a):
             network="visa",
             last_four=last_four,
             name=f"First {tag}",
-            issuer="Chase",
+            issuer="chase",
         ),
     )
     assert first.status_code == 200, first.text
@@ -236,7 +239,7 @@ def test_confirm_409_when_active_identity_collides(client, user_a):
             network="visa",
             last_four=last_four,
             name=f"Duplicate {tag}",
-            issuer="Chase",
+            issuer="chase",
         ),
     )
     assert second.status_code == 409, second.text
@@ -250,7 +253,7 @@ def test_confirm_after_soft_delete_inserts_new_row(client, user_a):
     """Verify that soft-delete + re-add yields two rows, never reviving.
 
     DESIGN.md §8.1: inactive rows are exempt from the partial unique
-    index; re-adding the same (network, last_four) creates a fresh
+    index; re-adding the same (issuer, last_four) creates a fresh
     `card_id`. Historical transactions linked to the old row stay
     pointing at it.
     """
@@ -263,7 +266,7 @@ def test_confirm_after_soft_delete_inserts_new_row(client, user_a):
             network="mastercard",
             last_four=last_four,
             name=f"First {tag}",
-            issuer="Citi",
+            issuer="citi",
         ),
     )
     assert first.status_code == 200
@@ -279,7 +282,7 @@ def test_confirm_after_soft_delete_inserts_new_row(client, user_a):
             network="mastercard",
             last_four=last_four,
             name=f"Second {tag}",
-            issuer="Citi",
+            issuer="citi",
         ),
     )
     assert second.status_code == 200, second.text
@@ -302,38 +305,85 @@ def test_confirm_after_soft_delete_inserts_new_row(client, user_a):
     assert by_id[second_id]["active"] is True
 
 
-def test_confirm_allows_same_last_four_across_networks(client, user_a):
-    """Verify that (visa, 5678) and (amex, 5678) can coexist active.
+def test_confirm_allows_same_last_four_across_issuers(client, user_a):
+    """Verify that (chase, visa, 5678) and (capital_one, visa, 5678) coexist.
 
-    The partial unique index keys on (user_id, network, last_four), so
-    a last_four collision *across* networks is legal.
+    REGRESSION TEST: the prior (user_id, network, last_four) index
+    incorrectly blocked this case. Card numbers are issued per BANK, not
+    per network — two different banks can produce Visa cards whose last
+    4 digits collide, and Tameru must accept both as distinct cards.
     """
     tag = _tag()
     last_four = _last_four(tag, "5")
-    visa_resp = client.post(
+    chase_resp = client.post(
         "/cards/confirm",
         headers=_auth(user_a),
         json=_proposal(
             network="visa",
             last_four=last_four,
-            name=f"Visa {tag}",
-            issuer="Chase",
+            name=f"Chase Visa {tag}",
+            issuer="chase",
         ),
     )
-    assert visa_resp.status_code == 200, visa_resp.text
+    assert chase_resp.status_code == 200, chase_resp.text
 
-    amex_resp = client.post(
+    capital_one_resp = client.post(
         "/cards/confirm",
         headers=_auth(user_a),
         json=_proposal(
-            network="amex",
+            network="visa",
             last_four=last_four,
-            name=f"Amex {tag}",
-            issuer="Amex",
+            name=f"Capital One Visa {tag}",
+            issuer="capital_one",
         ),
     )
-    assert amex_resp.status_code == 200, amex_resp.text
-    assert amex_resp.json()["id"] != visa_resp.json()["id"]
+    assert capital_one_resp.status_code == 200, capital_one_resp.text
+    assert capital_one_resp.json()["id"] != chase_resp.json()["id"]
+
+
+def test_confirm_rejects_unknown_issuer(client, user_a):
+    """Verify that an out-of-enum issuer is rejected at the API boundary.
+
+    Pydantic Literal validation fires before the DB CHECK constraint —
+    the route returns 422 with a clear field error rather than letting
+    the request hit Postgres.
+    """
+    resp = client.post(
+        "/cards/confirm",
+        headers=_auth(user_a),
+        json=_proposal(
+            network="visa",
+            last_four="1234",
+            name="MyBank Card",
+            issuer="MyBank",  # not in the closed enum
+        ),
+    )
+    assert resp.status_code == 422
+    assert "issuer" in resp.text.lower()
+
+
+def test_confirm_rejects_missing_last_four_at_commit(client, user_a):
+    """Verify that confirm requires last_four at commit time.
+
+    The wire shape allows last_four=None (since propose_card can return
+    that mid-conversation), but the confirm endpoint MUST reject it —
+    the partial unique index would treat null-last_four rows as distinct,
+    silently allowing duplicates.
+    """
+    body = _proposal(
+        network="visa",
+        last_four="1234",
+        name=f"NoLast4 {_tag()}",
+        issuer="chase",
+    )
+    body.pop("last_four")
+    resp = client.post(
+        "/cards/confirm",
+        headers=_auth(user_a),
+        json=body,
+    )
+    assert resp.status_code == 422
+    assert "last_four" in resp.text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +401,7 @@ def test_delete_sets_active_false_and_deactivated_at(client, user_a):
             network="discover",
             last_four=_last_four(tag, "3"),
             name=f"To Delete {tag}",
-            issuer="Discover",
+            issuer="discover",
         ),
     )
     assert confirm.status_code == 200
@@ -387,7 +437,7 @@ def test_get_cards_default_excludes_inactive(client, user_a):
             network="visa",
             last_four=_last_four(tag, "8"),
             name=f"Active {tag}",
-            issuer="Chase",
+            issuer="chase",
         ),
     )
     active_id = confirm.json()["id"]
@@ -399,7 +449,7 @@ def test_get_cards_default_excludes_inactive(client, user_a):
             network="amex",
             last_four=_last_four(tag, "7"),
             name=f"DeletedSoon {tag}",
-            issuer="Amex",
+            issuer="amex",
         ),
     )
     deleted_id = deleted_confirm.json()["id"]
@@ -422,7 +472,7 @@ def test_get_cards_include_inactive_returns_both(client, user_a):
             network="amex",
             last_four=_last_four(tag, "6"),
             name=f"Inactive {tag}",
-            issuer="Amex",
+            issuer="amex",
         ),
     )
     inactive_id = confirm.json()["id"]
@@ -455,7 +505,7 @@ def test_patch_updates_name_and_multipliers(client, user_a):
             network="visa",
             last_four=_last_four(tag, "1"),
             name=f"Before {tag}",
-            issuer="Chase",
+            issuer="chase",
             multipliers={"Dining": 2.0},
         ),
     )

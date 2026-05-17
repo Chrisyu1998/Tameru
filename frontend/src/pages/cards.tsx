@@ -8,6 +8,7 @@ import { SketchIllustration } from "@/components/SketchIllustration";
 import { UndoToast, type PendingDelete } from "@/components/UndoToast";
 import { ledger, useLedger } from "@/lib/ledger";
 import { setChatSeed } from "@/lib/chatSeed";
+import { ISSUER_LABELS } from "@/lib/cardsApi";
 import type { Card } from "@/lib/fixtures";
 
 export default function CardsPage() {
@@ -99,8 +100,13 @@ function CardTile({ card }: { card: Card }) {
             ···· {card.last4}
           </span>
         </div>
-        {(card.program || (card.multipliers && card.multipliers.length > 0)) && (
+        {(card.issuer ||
+          card.program ||
+          (card.multipliers && card.multipliers.length > 0)) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {card.issuer && (
+              <Pill tone="ink">{ISSUER_LABELS[card.issuer]}</Pill>
+            )}
             {card.program && <Pill tone="ink">{card.program}</Pill>}
             {card.multipliers?.map((m) => (
               <Pill key={`${m.label}-${m.factor}`} tone="moss">

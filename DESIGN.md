@@ -733,8 +733,8 @@ Enum-like text fields carry `CHECK` constraints enforcing the allowed values lis
 | id | UUID | Primary key |
 | user_id | UUID | FK → auth.users |
 | name | text | "Chase Sapphire Reserve" |
-| issuer | text | Chase, Amex, Citi, Bilt |
-| network | text | `visa` \| `mastercard` \| `amex` \| `discover` \| `other` (CHECK constraint). Required. Combined with `last_four` to disambiguate two cards of the same product. |
+| issuer | text | Closed CHECK enum: `chase` \| `amex` \| `citi` \| `capital_one` \| `discover` \| `bank_of_america` \| `wells_fargo` \| `usaa` \| `bilt` \| `barclays` \| `us_bank` \| `synchrony` \| `other`. Required. The actual uniqueness tiebreaker — see Constraints. `other` is the escape hatch for unenumerated issuers. |
+| network | text | `visa` \| `mastercard` \| `amex` \| `discover` \| `other` (CHECK constraint). Required. Silent metadata, filled by the lookup; not user-asked. Network is NOT a uniqueness tiebreaker (two cards from different banks can share network + last_four). |
 | program | text | UR / MR / TYP / Bilt / Other |
 | multipliers | JSONB | `{"Dining": 4, "Groceries": 4}` |
 | annual_fee | numeric | USD; informational |
@@ -746,18 +746,18 @@ Enum-like text fields carry `CHECK` constraints enforcing the allowed values lis
 | created_at | timestamptz | |
 
 **Constraints:**
-- `CREATE UNIQUE INDEX cards_active_identity_uniq ON cards (user_id, network, last_four) WHERE active = true;` — **partial** unique index. Prevents two active cards with the same `(network, last_four)` for one user. Inactive (soft-deleted) rows are deliberately exempt so users can re-add a card after deleting it.
+- `CREATE UNIQUE INDEX cards_active_identity_uniq ON cards (user_id, issuer, last_four) WHERE active = true;` — **partial** unique index keyed on `issuer` (NOT network). Card numbers are issued per BANK, not per network: a single issuer cannot give one person two cards with the same number, but two different banks (e.g. Chase and Capital One) absolutely can produce same-last_4 collisions across Visa cards. Issuer is the proper tiebreaker. Inactive (soft-deleted) rows are deliberately exempt so users can re-add a card after deleting it. (Day 14 originally shipped a `(network, last_four)` version; migration `20260516140000_cards_uniqueness_by_issuer.sql` fixes it.)
 
 **Soft-delete / re-add semantics:**
 
-When a user deletes a card and later re-adds the same `(network, last_four)`, **insert a new row; do not revive the soft-deleted row.** Rationale:
+When a user deletes a card and later re-adds the same `(issuer, last_four)`, **insert a new row; do not revive the soft-deleted row.** Rationale:
 
 - Multipliers and annual fees drift over time. A card closed in 2024 and re-added in 2026 should get a fresh lookup, not stale data.
 - Historical transactions stay linked to the original soft-deleted `card_id`. That preserves the historical card snapshot (annual fee at the time, multipliers at the time). Reviving the row would commingle pre-deletion and post-deletion transactions under a single ambiguous identity.
 - Soft-delete already means "I closed this card." Reviving negates that.
 - One rule ("once inactive, always inactive") is simpler than conditional revival logic.
 
-The cost: two rows can exist in `cards` with the same `(user_id, network, last_four)` — one active, one inactive. The partial unique index permits this. The spending-breakdown filter (Day 14, §6.1 frontend filter semantics) distinguishes them with a "closed {MMM YYYY}" suffix derived from `deactivated_at`, rendered in a muted color.
+The cost: two rows can exist in `cards` with the same `(user_id, issuer, last_four)` — one active, one inactive. The partial unique index permits this. The spending-breakdown filter (Day 14, §6.1 frontend filter semantics) distinguishes them with a "closed {MMM YYYY}" suffix derived from `deactivated_at`, rendered in a muted color.
 
 **Frontend filter rules (referenced by Day 14):**
 

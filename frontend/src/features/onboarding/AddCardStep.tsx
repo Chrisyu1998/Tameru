@@ -4,9 +4,12 @@ import { Button } from "@/components/Button";
 import { CATEGORIES } from "@/lib/categories";
 import { StepDots } from "./StepDots";
 import {
+  ISSUER_LABELS,
+  ISSUERS,
   confirmCard,
   isActiveCardExistsError,
   lookupCard,
+  type CardIssuer,
   type CardLookupResult,
   type CardNetwork,
   type CardProgram,
@@ -15,24 +18,27 @@ import {
 /*
  * Day 14 onboarding step — UX frame 4 "Add First Card."
  *
- * Two-stage flow:
- *   1. User enters name + network + last_four; suggestion chips set the name.
- *   2. We call POST /cards/lookup; the response renders an editable preview
- *      with multipliers; tap "add card" → POST /cards/confirm.
+ * Pre-lookup form: just the card name (Day 14 follow-up — we no longer
+ * ask the user for network / issuer / last 4 upfront, since the lookup
+ * derives network + issuer from the card name, and last 4 belongs on the
+ * editable preview where the user has visual context).
  *
- * 409 collision (DESIGN.md §8.1): if the user re-types a (network, last_four)
- * that's already active, the confirm endpoint returns active_card_exists and
- * we surface an inline banner pointing at the existing card. The "edit it
- * instead" deep-link is wired in cards.tsx (the post-onboarding surface).
+ * Post-lookup preview: network / issuer / last 4 / program / multipliers /
+ * annual fee all pre-filled from the lookup and editable. "add card" stays
+ * disabled until last 4 is a valid 4-digit number.
+ *
+ * 409 collision (DESIGN.md §8.1): when the user re-types an
+ * (issuer, last_four) that's already active, the confirm endpoint returns
+ * active_card_exists and we surface an inline banner.
  */
 
 const SUGGESTIONS = ["Chase Sapphire Preferred", "Amex Gold", "Citi Double Cash"];
 
 const NETWORKS: { value: CardNetwork; label: string }[] = [
   { value: "visa", label: "Visa" },
-  { value: "mastercard", label: "MC" },
+  { value: "mastercard", label: "Mastercard" },
   { value: "amex", label: "Amex" },
-  { value: "discover", label: "Disc" },
+  { value: "discover", label: "Discover" },
   { value: "other", label: "Other" },
 ];
 
@@ -43,19 +49,24 @@ interface AddCardStepProps {
 
 export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
   const [name, setName] = useState("");
-  const [network, setNetwork] = useState<CardNetwork>("visa");
-  const [lastFour, setLastFour] = useState("");
   const [submittedName, setSubmittedName] = useState<string | null>(null);
   const [lookup, setLookup] = useState<CardLookupResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Editable copies of the lookup result — the parse-card preview lets the
-  // user tweak multipliers / annual fee / issuer before commit.
+  // Editable preview-tile state — populated when a lookup completes.
+  // `network` and `issuer` are NULLABLE on purpose: silently defaulting
+  // them to "visa"/"other" when the lookup couldn't determine them would
+  // save the card with wrong identity metadata (especially harmful now
+  // that the partial unique index is keyed on issuer — DESIGN.md §8.1).
+  // When either is null the PreviewTile renders a "select…" placeholder
+  // option and blocks confirm until the user picks explicitly.
+  const [network, setNetwork] = useState<CardNetwork | null>(null);
+  const [issuer, setIssuer] = useState<CardIssuer | null>(null);
+  const [lastFour, setLastFour] = useState("");
+  const [program, setProgram] = useState<CardProgram>("Other");
   const [multipliers, setMultipliers] = useState<Record<string, number>>({});
   const [annualFee, setAnnualFee] = useState<string>("");
-  const [issuer, setIssuer] = useState<string>("");
-  const [program, setProgram] = useState<CardProgram>("Other");
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
@@ -68,10 +79,20 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
       .then((resp) => {
         if (cancelled) return;
         setLookup(resp.lookup);
+        // Pass network/issuer through verbatim — DO NOT fall back to
+        // "visa"/"other" silently. Null state forces the PreviewTile to
+        // render a "select…" placeholder and disables confirm until the
+        // user picks. See Codex P2 above and DESIGN.md §8.1 (issuer is
+        // the uniqueness key — wrong-but-valid defaults are a real bug).
+        setNetwork(resp.lookup.network);
+        setIssuer(resp.lookup.issuer);
+        setProgram(resp.lookup.program ?? "Other");
         setMultipliers(resp.lookup.multipliers);
         setAnnualFee(resp.lookup.annual_fee ?? "");
-        setIssuer(resp.lookup.issuer ?? "");
-        setProgram(resp.lookup.program ?? "Other");
+        // Don't pre-fill last 4 — the user must enter it explicitly. Empty
+        // forces them to look at their card and type the right digits
+        // rather than accidentally accepting a stale value.
+        setLastFour("");
         setLoading(false);
       })
       .catch((e) => {
@@ -83,6 +104,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         );
         setLookup({
           program: null,
+          network: null,
           multipliers: {},
           annual_fee: null,
           issuer: null,
@@ -96,31 +118,42 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
     };
   }, [submittedName]);
 
-  const lastFourValid = /^\d{4}$/.test(lastFour);
-  const canStartLookup = name.trim().length > 0 && lastFourValid;
-  // Codex P2: confirming with a name that diverged from the looked-up name
-  // would save card-X under name-Y's rewards/sources. Block confirm when the
-  // current name doesn't match the one we ran the lookup against — the user
-  // sees the preview disappear (via `effectiveLookup` below) and the button
-  // reverts to "look it up" so the data round-trips through a fresh lookup.
+  // Codex P2: if the user edits the card name post-lookup, the preview's
+  // multipliers/source_urls belong to the OLD name. Block confirm until
+  // the user re-runs the lookup against the new name.
   const nameMatchesLookup =
     submittedName !== null && name.trim() === submittedName;
   const effectiveLookup = nameMatchesLookup ? lookup : null;
+
+  const lastFourValid = /^\d{4}$/.test(lastFour);
+  const canStartLookup = name.trim().length > 0;
+  // Codex P2: require issuer + network to be explicitly resolved before
+  // confirm. When the lookup returns null for either, the user has to
+  // pick from the dropdown — silently saving with `other`/`visa` would
+  // create wrong identity metadata, especially harmful now that the
+  // uniqueness index is keyed on issuer.
   const canConfirm =
-    canStartLookup &&
-    issuer.trim().length > 0 &&
-    !confirming &&
-    effectiveLookup !== null;
+    nameMatchesLookup &&
+    lastFourValid &&
+    effectiveLookup !== null &&
+    issuer !== null &&
+    network !== null &&
+    !confirming;
 
   const startLookup = () => {
     setSubmittedName(name.trim());
   };
 
   const handleConfirm = async () => {
-    // Belt-and-braces beyond the button-disabled state above: only commit
-    // when the current name matches the looked-up name. Otherwise the saved
-    // row would mix one card's name with another card's rewards/sources.
-    if (!effectiveLookup || !submittedName) return;
+    if (
+      !effectiveLookup ||
+      !submittedName ||
+      !lastFourValid ||
+      issuer === null ||
+      network === null
+    ) {
+      return;
+    }
     setConfirming(true);
     setError(null);
     try {
@@ -128,7 +161,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         network,
         last_four: lastFour,
         name: submittedName,
-        issuer: issuer.trim(),
+        issuer,
         program,
         multipliers,
         annual_fee: annualFee.trim() === "" ? null : annualFee.trim(),
@@ -161,7 +194,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         add your first card
       </h1>
       <p className="mt-2 text-sm text-ink-secondary">
-        we'll fetch the reward structure so you don't have to.
+        type the card name — we'll figure out the rest.
       </p>
 
       <div className="mt-8 flex items-center gap-3 rounded-2xl border border-hairline bg-elevated px-4 py-3">
@@ -188,37 +221,6 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         ))}
       </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <div className="flex flex-1 flex-wrap gap-1.5">
-          {NETWORKS.map((n) => (
-            <button
-              key={n.value}
-              type="button"
-              onClick={() => setNetwork(n.value)}
-              className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                network === n.value
-                  ? "border-moss bg-moss text-surface"
-                  : "border-hairline bg-surface text-ink-secondary hover:bg-sunken/60"
-              }`}
-            >
-              {n.label}
-            </button>
-          ))}
-        </div>
-        <input
-          type="text"
-          inputMode="numeric"
-          pattern="\d{4}"
-          maxLength={4}
-          value={lastFour}
-          onChange={(e) =>
-            setLastFour(e.target.value.replace(/\D/g, "").slice(0, 4))
-          }
-          placeholder="last 4"
-          className="w-20 rounded-xl border border-hairline bg-elevated px-3 py-2 text-center text-sm text-ink placeholder:text-ink-quaternary focus:outline-none"
-        />
-      </div>
-
       {submittedName && (
         <div className="mt-6">
           {loading ? (
@@ -234,12 +236,12 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
           ) : effectiveLookup ? (
             <PreviewTile
               name={submittedName}
-              networkLabel={
-                NETWORKS.find((n) => n.value === network)?.label ?? "—"
-              }
-              lastFour={lastFour}
+              network={network}
+              onNetwork={setNetwork}
               issuer={issuer}
               onIssuer={setIssuer}
+              lastFour={lastFour}
+              onLastFour={setLastFour}
               program={program}
               onProgram={setProgram}
               annualFee={annualFee}
@@ -299,10 +301,12 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
 
 interface PreviewTileProps {
   name: string;
-  networkLabel: string;
+  network: CardNetwork | null;
+  onNetwork: (v: CardNetwork) => void;
+  issuer: CardIssuer | null;
+  onIssuer: (v: CardIssuer) => void;
   lastFour: string;
-  issuer: string;
-  onIssuer: (v: string) => void;
+  onLastFour: (v: string) => void;
   program: CardProgram;
   onProgram: (v: CardProgram) => void;
   annualFee: string;
@@ -314,6 +318,16 @@ interface PreviewTileProps {
 }
 
 function PreviewTile(props: PreviewTileProps) {
+  // Codex P2: when the lookup couldn't determine network/issuer we show
+  // the user a "select…" placeholder + amber border instead of silently
+  // defaulting. Confirm stays disabled (in the parent's `canConfirm`)
+  // until both are picked. Issuer is the load-bearing one — it's the
+  // uniqueness tiebreaker (DESIGN.md §8.1) — but network gets the same
+  // treatment for symmetry and to surface the lookup miss honestly.
+  const issuerUnresolved = props.issuer === null;
+  const networkUnresolved = props.network === null;
+  const unresolvedAny = issuerUnresolved || networkUnresolved;
+
   return (
     <div className="rounded-3xl border border-hairline bg-elevated px-4 py-4">
       <div className="flex items-baseline justify-between">
@@ -321,11 +335,24 @@ function PreviewTile(props: PreviewTileProps) {
           {props.name}
         </span>
         <span className="text-xs text-ink-tertiary tabular">
-          {props.networkLabel} · ···· {props.lastFour}
+          {props.issuer ? ISSUER_LABELS[props.issuer] : "—"} ·{" "}
+          {props.network ?? "—"}
+          {props.lastFour ? ` · ···· ${props.lastFour}` : ""}
         </span>
       </div>
 
-      {props.needsManual && (
+      {unresolvedAny && (
+        <p className="mt-2 text-xs text-amber-deep">
+          lookup couldn't determine
+          {issuerUnresolved && networkUnresolved
+            ? " issuer or network"
+            : issuerUnresolved
+              ? " the issuing bank"
+              : " the card network"}{" "}
+          — pick below to continue.
+        </p>
+      )}
+      {props.needsManual && !unresolvedAny && (
         <p className="mt-2 text-xs text-amber-deep">
           couldn't auto-fill — tweak the fields below.
         </p>
@@ -334,10 +361,68 @@ function PreviewTile(props: PreviewTileProps) {
       <div className="mt-4 grid grid-cols-2 gap-3">
         <label className="flex flex-col text-xs text-ink-tertiary">
           issuer
+          <select
+            value={props.issuer ?? ""}
+            onChange={(e) => props.onIssuer(e.target.value as CardIssuer)}
+            className={
+              "mt-1 rounded-lg border bg-surface px-2 py-1 text-sm text-ink focus:outline-none " +
+              (issuerUnresolved
+                ? "border-amber-soft ring-1 ring-amber-soft/40"
+                : "border-hairline")
+            }
+          >
+            {issuerUnresolved && (
+              <option value="" disabled>
+                select…
+              </option>
+            )}
+            {ISSUERS.map((i) => (
+              <option key={i} value={i}>
+                {ISSUER_LABELS[i]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col text-xs text-ink-tertiary">
+          network
+          <select
+            value={props.network ?? ""}
+            onChange={(e) => props.onNetwork(e.target.value as CardNetwork)}
+            className={
+              "mt-1 rounded-lg border bg-surface px-2 py-1 text-sm text-ink focus:outline-none " +
+              (networkUnresolved
+                ? "border-amber-soft ring-1 ring-amber-soft/40"
+                : "border-hairline")
+            }
+          >
+            {networkUnresolved && (
+              <option value="" disabled>
+                select…
+              </option>
+            )}
+            {NETWORKS.map((n) => (
+              <option key={n.value} value={n.value}>
+                {n.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <label className="flex flex-col text-xs text-ink-tertiary">
+          last 4
           <input
-            value={props.issuer}
-            onChange={(e) => props.onIssuer(e.target.value)}
-            className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink focus:outline-none"
+            type="text"
+            inputMode="numeric"
+            pattern="\d{4}"
+            maxLength={4}
+            value={props.lastFour}
+            onChange={(e) =>
+              props.onLastFour(e.target.value.replace(/\D/g, "").slice(0, 4))
+            }
+            placeholder="1234"
+            className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink placeholder:text-ink-quaternary focus:outline-none"
           />
         </label>
         <label className="flex flex-col text-xs text-ink-tertiary">
@@ -374,7 +459,6 @@ function PreviewTile(props: PreviewTileProps) {
         onMultipliers={props.onMultipliers}
         needsManual={props.needsManual}
       />
-
 
       {props.sourceUrls.length > 0 && (
         <div className="mt-3 border-t border-hairline pt-2 text-[0.7rem] text-ink-quaternary">
@@ -565,4 +649,3 @@ function MultipliersEditor(props: {
     </div>
   );
 }
-
