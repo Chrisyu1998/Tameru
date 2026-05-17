@@ -336,6 +336,29 @@ export const ledger = {
   },
 
   /**
+   * Local optimistic add for a newly-confirmed card. Called from the
+   * chat commit path and the offline-drain success hook so the cards
+   * page reflects the new row without waiting for the next /cards
+   * fetch (which today only fires on JWT change at startup). Mirrors
+   * `addTransaction`. Idempotent on row id — a same-id re-add (e.g.
+   * crid-replay returning the existing row) replaces in place rather
+   * than duplicating, which matters for the drain path where the same
+   * row can arrive twice across a reconnect.
+   */
+  addCard(row: CardRow): Card {
+    const card = cardRowToFixture(row);
+    const existingIdx = state.cards.findIndex((c) => c.id === card.id);
+    if (existingIdx >= 0) {
+      const next = [...state.cards];
+      next[existingIdx] = card;
+      setState({ cards: next });
+    } else {
+      setState({ cards: [...state.cards, card] });
+    }
+    return card;
+  },
+
+  /**
    * PATCH /cards/{id} with the supplied delta. Optimistically updates
    * local state with the patch; on success swaps in the server's
    * canonical row; on failure reverts. Mirrors `updateTransaction`.

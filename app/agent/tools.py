@@ -40,7 +40,13 @@ from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.integrations.card_lookup import lookup_card
 from app.integrations.gemini import GeminiError, categorize
-from app.models.cards import CardIssuer, CardNetwork, CardProgram, CardProposal
+from app.models.cards import (
+    CardIssuer,
+    CardLookupResult,
+    CardNetwork,
+    CardProgram,
+    CardProposal,
+)
 from app.models.goals import Goal, GoalPeriod, SetGoalRequest
 from app.models.transactions import (
     DEFAULT_LIMIT,
@@ -1100,7 +1106,16 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         card can render the manual path.
     """
     request = ProposeCardRequest.model_validate(kwargs)
-    result = lookup_card(request.program, user)
+    # Adding a second copy of an existing card (same product, different
+    # last_four) shouldn't surface different multipliers — Claude's
+    # web_search lookup isn't deterministic across calls, and the user
+    # has already seen the first card's numbers. If we already have an
+    # active row with the same name, reuse its lookup-derived fields
+    # instead of burning a redundant Claude+web_search call.
+    reused = _existing_card_template(
+        supabase_for_user(user.jwt), request.program
+    )
+    result = reused if reused is not None else lookup_card(request.program, user)
 
     network: CardNetwork = request.network or result.network or "other"
     issuer: CardIssuer = result.issuer or "other"
@@ -1281,6 +1296,46 @@ def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     about.
     """
     return {k: v for k, v in row.items() if k not in keys}
+
+
+def _existing_card_template(client: Any, program: str) -> CardLookupResult | None:
+    """Reuse a same-name active card's lookup so a second copy matches.
+
+    When the user adds a second copy of a product they already own (same
+    name, different last_four), running a fresh `lookup_card` produces a
+    new proposal whose multipliers / annual_fee / source_urls may drift
+    from the first — Claude's `web_search` answer isn't deterministic
+    across calls. That surfaces as "why do my two Sapphire Reserves earn
+    different points?" in the UI and burns a redundant Claude API call.
+
+    Cards are bounded to ~10 per user lifetime (DESIGN.md §8.1), so an
+    unfiltered scan + Python-side case-insensitive name compare is cheap
+    and dodges `ilike` metacharacter pitfalls on user-supplied strings.
+    Returns None if no same-name active card exists; caller falls back to
+    `lookup_card`.
+    """
+    target = program.strip().lower()
+    if not target:
+        return None
+    resp = (
+        client.table("cards")
+        .select("name, issuer, network, program, multipliers, annual_fee, source_urls")
+        .eq("status", "active")
+        .execute()
+    )
+    for row in resp.data or []:
+        if (row.get("name") or "").strip().lower() != target:
+            continue
+        return CardLookupResult(
+            program=row.get("program"),
+            network=row.get("network"),
+            issuer=row.get("issuer"),
+            multipliers=row.get("multipliers") or {},
+            annual_fee=row.get("annual_fee"),
+            source_urls=row.get("source_urls") or [],
+            needs_manual=False,
+        )
+    return None
 
 
 def _card_belongs_to_user(client: Any, card_id: UUID) -> bool:

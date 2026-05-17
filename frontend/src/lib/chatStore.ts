@@ -433,6 +433,7 @@ export const chatStore = {
 
     try {
       const card = await confirmCard(body);
+      ledger.addCard(card);
       const committedMessages = state.messages.map((m) =>
         m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
           ? { ...m, draft, committedCardId: card.id, pendingSync: false }
@@ -574,6 +575,7 @@ export const chatStore = {
     match: { clientRequestId?: string; messageId?: string },
     card: CardRow,
   ): void {
+    ledger.addCard(card);
     const idx = _findCardParseTarget(
       state.messages,
       match.clientRequestId ?? card.client_request_id,
