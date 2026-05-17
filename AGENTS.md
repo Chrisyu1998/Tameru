@@ -2,6 +2,10 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## Project memory
+
+`memory/decisions.md` and `memory/learnings.md` hold the *history* behind the architectural invariants in this file — why a choice was made, what alternatives were rejected, what was learned while building. Local-only (gitignored). Read them when context for "why is it this way" matters; append to them when a new non-obvious decision lands. This file is for invariants; `memory/` is for narrative.
+
 ## Project
 
 **Tameru** is a mobile-first PWA for spending intelligence. Manual transaction entry + AI-assisted categorization + agentic chat over your spending data + an MCP server. Multi-tenant from day one. **v1 scope: invite-only, ~10 friends and family, free for everyone, no Stripe, no paid tier** (DESIGN.md §3.3). A forward plan for conditional scaling to ~100 users with paid tier via Stripe is documented in DESIGN.md §17 — that plan is not v1 scope and only activates on an explicit later decision. The full design lives in `DESIGN.md` — read it before making non-trivial decisions. This file captures only the invariants future Codex instances will trip on if they don't know.

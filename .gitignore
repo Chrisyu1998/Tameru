@@ -42,3 +42,6 @@ npm-debug.log*
 
 # Eval results (append-only SQLite is commit-worthy, but cache isn't)
 evals/.cache/
+
+# Personal project memory (cowork OS) — local only
+memory/
