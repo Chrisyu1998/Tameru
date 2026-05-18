@@ -57,6 +57,11 @@ export default function MorePage() {
           icon={<SketchIcon kind="repeat" size={18} seed={37} />}
         />
         <RowLink
+          to="/goals"
+          label="goals"
+          icon={<SketchIcon kind="seedling" size={18} seed={47} />}
+        />
+        <RowLink
           to="/memory"
           label="ai memory"
           icon={<SketchIcon kind="sparkle" size={16} seed={53} />}

@@ -13,6 +13,7 @@ const mainItems: Item[] = [
   { to: "/", label: "home", icon: <SketchIcon kind="home" size={18} seed={11} /> },
   { to: "/cards", label: "my cards", icon: <SketchIcon kind="card" size={18} seed={23} /> },
   { to: "/subscriptions", label: "subscriptions", icon: <SketchIcon kind="repeat" size={18} seed={37} /> },
+  { to: "/goals", label: "goals", icon: <SketchIcon kind="seedling" size={18} seed={47} /> },
   { to: "/memory", label: "ai memory", icon: <SketchIcon kind="sparkle" size={18} seed={53} /> },
 ];
 

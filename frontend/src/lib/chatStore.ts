@@ -905,9 +905,10 @@ function _friendlyErrorMessage(err: StreamError): string {
  *
  *   - Each `propose_transaction` becomes its own parse card.
  *   - Read tools (`get_*`, `calculate_total`, `set_goal`) surface as a
- *     `via` attribution chip on the trailing text bubble. If the agent
- *     emitted multiple, the first one wins for the chip — the full list
- *     remains in chat_turn_trace for future Day 16 surfacing.
+ *     `via` attribution chip carrying the raw backend tool name; the
+ *     chip's renderer (MessageBubble.tsx) maps known names to friendly
+ *     labels. If the agent emitted multiple, the first non-renderer
+ *     wins for the chip — the full list remains in chat_turn_trace.
  *   - The final `assistant_text` becomes a text bubble unless it's been
  *     consumed as the preface of a parse card (the common case where the
  *     agent only proposes and says nothing else useful).
@@ -1014,9 +1015,20 @@ function _renderTurn(res: ChatTurnResponse): void {
       preface,
       candidateIds: txs.map((t) => t.id),
       intent: candidateIntent,
-      via: "find_transactions",
+      via: "get_transactions",
     });
   }
+
+  // Pick the underlying data tool the chart was built from so the chip
+  // says "via spending summary" rather than "via chart" — the user cares
+  // where the numbers came from, not that the agent then formatted it.
+  // Falls back to `render_chart` if no data tool ran in the same turn.
+  const chartDataToolName = res.tool_calls.find(
+    (tc) =>
+      tc.name === "get_spending_summary" ||
+      tc.name === "calculate_total" ||
+      tc.name === "get_transactions",
+  )?.name ?? "render_chart";
 
   // Render any render_chart calls. The agent's system prompt says one
   // chart per turn, but we tolerate N defensively — they stack vertically
@@ -1037,7 +1049,7 @@ function _renderTurn(res: ChatTurnResponse): void {
       kind: "rich-chart",
       preface,
       spec,
-      via: "calculate_total",
+      via: chartDataToolName,
     });
   }
 
@@ -1050,7 +1062,7 @@ function _renderTurn(res: ChatTurnResponse): void {
       role: "assistant",
       kind: "text",
       text: res.assistant_text,
-      via: _toolToVia(otherToolName),
+      via: otherToolName,
     });
   }
 
@@ -1391,25 +1403,6 @@ function _toolToChartSpec(call: ChatToolCall): ChartSpec | null {
   if (!title) return null;
   const y_label = typeof r.y_label === "string" ? r.y_label : undefined;
   return { type, x, series, title, y_label };
-}
-
-/**
- * Translate a backend tool name into the local `ToolName` union the
- * MessageBubble `via` attribution chip renders. Tools without a local
- * equivalent fall through to undefined (no chip).
- */
-function _toolToVia(name: string | undefined): ToolName | undefined {
-  // The ToolName union in chat.ts is intentionally narrow (Lovable-era
-  // local tool names). Map closest backend equivalents onto it.
-  switch (name) {
-    case "get_transactions":
-      return "find_transactions";
-    case "calculate_total":
-    case "get_spending_summary":
-      return "calculate_total";
-    default:
-      return undefined;
-  }
 }
 
 /**

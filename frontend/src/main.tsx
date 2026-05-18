@@ -13,6 +13,7 @@ import ChatPage from './pages/chat';
 import CardsPage from './pages/cards';
 import SubscriptionsPage from './pages/subscriptions';
 import MemoryPage from './pages/memory';
+import GoalsPage from './pages/goals';
 import MorePage from './pages/more';
 import SettingsPage from './pages/settings';
 import ConnectionsPage from './pages/connections';
@@ -90,6 +91,7 @@ function App() {
             <Route path="/cards" element={<CardsPage />} />
             <Route path="/subscriptions" element={<SubscriptionsPage />} />
             <Route path="/memory" element={<MemoryPage />} />
+            <Route path="/goals" element={<GoalsPage />} />
             <Route path="/more" element={<MorePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/connections" element={<ConnectionsPage />} />

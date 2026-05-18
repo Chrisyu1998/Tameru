@@ -37,6 +37,14 @@ import {
   listMemory as apiListMemory,
   type MemoryFactRow,
 } from "./memoryApi";
+import {
+  deleteGoal as apiDeleteGoal,
+  listGoals as apiListGoals,
+  patchGoal as apiPatchGoal,
+  type GoalPatch,
+  type GoalPeriod,
+  type GoalWithSpend,
+} from "./goalsApi";
 import { useAppStore } from "../store";
 
 export interface PendingDeleteState {
@@ -79,6 +87,19 @@ interface LedgerState {
    * window still commits because the timer lives at module scope.
    */
   pendingMemoryDeletes: Record<string, PendingDeleteState>;
+  /**
+   * Spending goals with period-to-date spend, loaded lazily by the
+   * /goals page (and the /breakdown progress strip) via
+   * `refreshGoals()`. Not auto-fetched on JWT change — like memory,
+   * unused outside these surfaces.
+   */
+  goals: GoalWithSpend[];
+  /**
+   * Goal rows mid-deletion, keyed by goal id. Same swipe + 5s undo
+   * grace pattern as cards/memory; the row stays in `goals` so the
+   * list can render a countdown progress overlay.
+   */
+  pendingGoalDeletes: Record<string, PendingDeleteState>;
 }
 
 let state: LedgerState = {
@@ -90,6 +111,8 @@ let state: LedgerState = {
   pendingCardDeletes: {},
   memory: [],
   pendingMemoryDeletes: {},
+  goals: [],
+  pendingGoalDeletes: {},
 };
 
 /*
@@ -113,6 +136,12 @@ const cardDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // delete server-side; a future organic re-mention recreates the row
 // with a new id (DESIGN.md §7.6).
 const memoryDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Goals share the same swipe-to-delete-with-undo pattern as cards and
+// memory. Hard delete server-side (no FK from transactions), so the
+// timer-on-fire path simply calls DELETE /goals/{id} and removes the
+// row from local state.
+const goalDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const listeners = new Set<() => void>();
 
@@ -157,6 +186,8 @@ useAppStore.subscribe((s) => {
     cardDeleteTimers.clear();
     for (const timer of memoryDeleteTimers.values()) clearTimeout(timer);
     memoryDeleteTimers.clear();
+    for (const timer of goalDeleteTimers.values()) clearTimeout(timer);
+    goalDeleteTimers.clear();
     setState({
       transactions: [],
       cards: FIXTURE_CARDS,
@@ -166,6 +197,8 @@ useAppStore.subscribe((s) => {
       pendingCardDeletes: {},
       memory: [],
       pendingMemoryDeletes: {},
+      goals: [],
+      pendingGoalDeletes: {},
     });
   }
 });
@@ -192,6 +225,8 @@ export const ledger = {
       pendingCardDeletes: {},
       memory: [],
       pendingMemoryDeletes: {},
+      goals: [],
+      pendingGoalDeletes: {},
     };
   },
 
@@ -589,6 +624,147 @@ export const ledger = {
     if (state.pendingMemoryDeletes[id] !== undefined) {
       const { [id]: _, ...rest } = state.pendingMemoryDeletes;
       setState({ pendingMemoryDeletes: rest });
+    }
+  },
+
+  /* ─── Goals: wired to /goals backend ─────────────────────────── */
+
+  /**
+   * Fetch /goals (with per-goal period-to-date spend) and replace local
+   * state. Not called from the JWT-change subscriber — only the /goals
+   * page and the /breakdown progress strip need this data, so we
+   * lazy-load there. After an edit, callers can re-call this to pick up
+   * the new spend ratio (e.g. after the user logs a transaction in the
+   * same category mid-session).
+   */
+  async refreshGoals(): Promise<void> {
+    const { jwt } = useAppStore.getState();
+    if (!jwt) return;
+    try {
+      const resp = await apiListGoals();
+      setState({ goals: resp.items });
+    } catch (err) {
+      // Don't swallow — the /goals page renders an empty-state when
+      // `goals` is empty, so a silent failure on first mount would
+      // misleadingly say "no budgets yet" instead of surfacing the
+      // network/auth error. Keep the existing list intact (so an
+      // in-session refresh failure doesn't blank an already-populated
+      // page) and rethrow for the caller to render inline.
+      // eslint-disable-next-line no-console
+      console.warn("ledger goals refresh failed", err);
+      throw err;
+    }
+  },
+
+  /**
+   * PATCH /goals/{id} with the supplied amount and/or period.
+   * Optimistically swaps the goal in local state; on success replaces
+   * with the server's canonical row; on failure reverts.
+   *
+   * On an amount-only edit we recompute `progress_ratio` locally so
+   * the /goals + breakdown bars reflect the new budget immediately —
+   * `spent / new_amount`, same math the server runs. A period change
+   * shifts the window itself (different spent), so for that branch
+   * the caller (`EditGoalSheet`) issues a `refreshGoals()` after the
+   * PATCH succeeds rather than us guessing the new window's spend.
+   *
+   * Surfaces the 409 `goal_slot_occupied` error to the caller via the
+   * thrown `ApiError`. The edit sheet catches and renders it inline.
+   */
+  async updateGoal(id: string, patch: GoalPatch): Promise<void> {
+    const prior = state.goals.find((g) => g.goal.id === id);
+    if (!prior) return;
+    const nextAmountStr =
+      patch.amount !== undefined ? patch.amount : prior.goal.amount;
+    const parsedSpent = parseFloat(prior.spent_period_to_date);
+    const parsedNextAmount = parseFloat(nextAmountStr);
+    const nextRatio =
+      Number.isFinite(parsedSpent) &&
+      Number.isFinite(parsedNextAmount) &&
+      parsedNextAmount > 0
+        ? parsedSpent / parsedNextAmount
+        : prior.progress_ratio;
+    const optimistic: GoalWithSpend = {
+      ...prior,
+      goal: {
+        ...prior.goal,
+        ...(patch.amount !== undefined && { amount: patch.amount }),
+        ...(patch.period !== undefined && { period: patch.period as GoalPeriod }),
+      },
+      progress_ratio: nextRatio,
+    };
+    setState({
+      goals: state.goals.map((g) => (g.goal.id === id ? optimistic : g)),
+    });
+    try {
+      const updated = await apiPatchGoal(id, patch);
+      setState({
+        goals: state.goals.map((g) =>
+          g.goal.id === id
+            ? { ...g, goal: updated, progress_ratio: nextRatio }
+            : g,
+        ),
+      });
+    } catch (err) {
+      // Revert and rethrow so the edit sheet can surface 409s inline.
+      setState({
+        goals: state.goals.map((g) => (g.goal.id === id ? prior : g)),
+      });
+      throw err;
+    }
+  },
+
+  /**
+   * Schedule a goal delete with an undo window. The goal STAYS in
+   * `goals` for `durationMs` so the row can render the same countdown
+   * progress overlay as cards/memory; on timer fire we remove locally
+   * and call DELETE. `undoDeleteGoal` before then cancels cleanly.
+   *
+   * Symmetric to `scheduleDeleteCard` and `scheduleDeleteMemory`.
+   * Idempotent — a second call on an already-pending id is a no-op.
+   */
+  scheduleDeleteGoal(id: string, durationMs: number = 5000): void {
+    if (goalDeleteTimers.has(id)) return;
+    const row = state.goals.find((g) => g.goal.id === id);
+    if (!row) return;
+    const scheduledAt = Date.now();
+    setState({
+      pendingGoalDeletes: {
+        ...state.pendingGoalDeletes,
+        [id]: { id, scheduledAt, durationMs },
+      },
+    });
+    const timer = setTimeout(() => {
+      goalDeleteTimers.delete(id);
+      const idx = state.goals.findIndex((g) => g.goal.id === id);
+      const { [id]: _, ...restPending } = state.pendingGoalDeletes;
+      setState({
+        goals: state.goals.filter((g) => g.goal.id !== id),
+        pendingGoalDeletes: restPending,
+      });
+      void apiDeleteGoal(id).catch((err) => {
+        const next = [...state.goals];
+        next.splice(Math.max(0, Math.min(idx, next.length)), 0, row);
+        setState({ goals: next });
+        // eslint-disable-next-line no-console
+        console.warn("ledger goal commit-delete failed; restored", err);
+      });
+    }, durationMs);
+    goalDeleteTimers.set(id, timer);
+  },
+
+  /**
+   * Cancel a pending goal delete. Safe to call on an unknown id.
+   */
+  undoDeleteGoal(id: string): void {
+    const timer = goalDeleteTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      goalDeleteTimers.delete(id);
+    }
+    if (state.pendingGoalDeletes[id] !== undefined) {
+      const { [id]: _, ...rest } = state.pendingGoalDeletes;
+      setState({ pendingGoalDeletes: rest });
     }
   },
 

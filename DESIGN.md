@@ -349,7 +349,7 @@ Dashboards with many charts create a false sense of progress without changing be
 - One AI prompt at the bottom: "Ask me about your spending."
 - No 6-month bar chart. No toggles. No drilling by default. Historical analysis lives in the AI chat.
 
-**Pie chart (secondary view):** accessible via "Breakdown" tab or tap on any category tile. Recharts (SVG only).
+**Pie chart (secondary view):** accessible via "Breakdown" tab or tap on any category tile. Recharts (SVG only). The Breakdown page also renders a "this month vs your budgets" progress strip below the donut for any month-scoped goals on the `goals` table (§8.13); when the user has no month-scoped goals, the strip is absent. Editing budgets lives on the dedicated `/goals` page; only the at-a-glance progress visualization surfaces here, so the dashboard stays clean of always-on budget chrome (invariant #9 — one screen, no scrolling).
 
 #### Entry-Moment Insight — primary behavioral intervention
 
@@ -551,7 +551,7 @@ The agent's analytical surface is a registry of ~7 typed Python functions (`get_
 - `propose_transaction({ merchant, amount, date, card_id?, category?, notes? }) → TransactionProposal`
 - `propose_card({ network, last4, program, alias? }) → CardProposal`
 - `propose_subscription({ name, amount, frequency, start_date, category?, card_id? }) → SubscriptionProposal`
-- `set_goal({ category?, amount, period }) → Goal` — direct write; goals are low-risk, reversible, and not on the transaction ledger.
+- `set_goal({ category?, amount, period }) → Goal` — direct write; goals are low-risk, reversible, and not on the transaction ledger. Creation and amount/period updates flow through this tool (chat is the only create surface, per invariant #8); the `/goals` page reaches the same table via `PATCH /goals/{id}` and `DELETE /goals/{id}` (§8.13) for edits and deletes, which preserves the tool-layer invariant — no *new* direct-write tools beyond `set_goal` itself.
 
 **Why propose-then-confirm instead of a direct-write tool?** Transactions, cards, and subscriptions are visible on the user's ledger. Writing on `tool_use` would mean Claude could create a row from a misread vague message before the user sees what it parsed. The proposal pattern makes the UI the point of commit: no row exists until the user taps a button. It also matches the Intent Preview pattern from 2026 agentic-UX design literature.
 
@@ -1045,9 +1045,17 @@ Per-user spending budgets. One row per `(user, category, period)` slot. Written 
 
 **Latest-wins semantics:** enforced at the schema layer via the constraint + the tool's upsert. Any reader (dashboard, weekly digest, future chat tool) can do `SELECT amount FROM goals WHERE category=? AND period=?` and trust that at most one row matches. The "latest wins" rule lives in one place — the upsert — instead of in every reader.
 
-**RLS shape:** `FOR ALL` on `user_id = auth.uid()` — same pattern as `transactions` and `chat_messages`. The user owns their goals; they can read, set, update via re-set, and delete via a future explicit endpoint.
+**RLS shape:** `FOR ALL` on `user_id = auth.uid()` — same pattern as `transactions` and `chat_messages`. The user owns their goals; they can read, set via `set_goal`, edit via `PATCH`, and delete via `DELETE`.
 
 **Index:** `goals_user_idx ON (user_id)`. Per-user reads are the dominant access pattern; the unique constraint already provides the composite-key index for upsert resolution.
+
+**HTTP surface:** `GET /goals`, `PATCH /goals/{id}`, `DELETE /goals/{id}` (`app/routes/goals.py`).
+
+- `GET` returns each goal joined with `spent_period_to_date` computed over `active_transactions` in a calendar-aligned window (`month` = 1st-to-last, `week` = Mon-to-Sun, `year` = Jan 1-to-Dec 31). Server-side spend computation removes a per-goal round-trip from the frontend and keeps the `active_transactions` semantics (soft-deleted rows excluded) consistent with `calculate_total`.
+- `PATCH` permits `amount` and `period` only; `category` is fixed because the unique key makes a category change indistinguishable from a new goal, so users delete and re-ask chat to "move" a budget. Period collisions surface as `409 goal_slot_occupied` with a structured `detail.code` so the edit sheet renders the conflict inline.
+- `DELETE` is hard delete and idempotent — no FK from `transactions`, so no cascade considerations. RLS makes deleting another user's id a silent no-op.
+
+The `/goals` page (`frontend/src/pages/goals.tsx`, peer to `/cards`, `/subscriptions`, `/memory`) is the management surface — `SwipeableRow`-based list with a 5s pending-delete undo, `EditGoalSheet` `BottomSheet` for amount/period edits. The `/breakdown` page renders a "this month vs your budgets" progress strip below the donut, gated on having month-scoped goals — categories without a goal show nothing, which keeps the dashboard one-screen invariant (#9) intact while still surfacing budget context where it matters. Goal *creation* stays in chat via `set_goal`, preserving invariant #8's "chat is the only user-initiated create surface" rule at the tool layer.
 
 ---
 

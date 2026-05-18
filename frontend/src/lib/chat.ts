@@ -14,11 +14,19 @@ import { FIXTURE_CARDS, type Card, type Transaction } from "./fixtures";
 
 /* ─── Message model ──────────────────────────────────────────────── */
 
-export type ToolName =
-  | "parse_transaction"
-  | "find_transactions"
-  | "compare_categories"
-  | "calculate_total";
+/**
+ * Backend tool name carried on the `via` attribution chip. Kept as a
+ * widened string (rather than a closed union) so any backend tool the
+ * agent calls — current or future — renders correctly without a
+ * frontend release. The chip's renderer (MessageBubble.tsx) applies a
+ * friendly-label map keyed on this string before display.
+ *
+ * Pre-Day-17 this was a four-value union inherited from the Lovable
+ * mock; the mapping in `_toolToVia` lossy-folded backend tools onto it,
+ * which is why every chart turn read "via calculate_total" regardless
+ * of which read tool actually ran.
+ */
+export type ToolName = string;
 
 export interface UserMessage {
   id: string;

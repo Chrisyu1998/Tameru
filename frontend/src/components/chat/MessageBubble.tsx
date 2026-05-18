@@ -51,13 +51,31 @@ export function MessageBubble({
   );
 }
 
+/**
+ * Friendly labels for the `via` chip. Keys are backend tool names exactly
+ * as they appear in `chat_turn_trace.tool_calls[*].name`. An unknown
+ * name falls through to the raw snake_case identifier in monospace —
+ * intentional, so a newly-added backend tool still renders something
+ * useful before the frontend ships an updated label map.
+ */
+const TOOL_LABELS: Record<string, string> = {
+  calculate_total: "total",
+  get_spending_summary: "spending summary",
+  get_transactions: "transactions",
+  get_subscriptions: "subscriptions",
+  get_cards: "cards",
+  render_chart: "chart",
+  set_goal: "goal",
+};
+
 /** Tiny tertiary attribution line shown below an AI message. */
 export function ToolAttribution({ name }: { name: string }) {
+  const label = TOOL_LABELS[name];
   return (
     <div className="mt-1 flex w-full justify-start">
       <span className="inline-flex items-center gap-1.5 px-1 text-[0.7rem] text-ink-tertiary tracking-wide">
         <span aria-hidden className="inline-block h-1 w-1 rounded-full bg-moss" />
-        via <span className="font-mono">{name}</span>
+        via {label ? label : <span className="font-mono">{name}</span>}
       </span>
     </div>
   );
