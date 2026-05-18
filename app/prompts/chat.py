@@ -36,6 +36,13 @@ Version log:
     collects it before commit). Only the card name is required to fire
     the tool. Eliminates the "is that Visa or Mastercard?" friction
     that most users couldn't answer.
+  * chat_v7 (Day 16) — `render_system_prompt`'s dynamic tail (block[1])
+    now appends `render_user_memory(user_jwt)` after the merchants
+    block. block[0] is unchanged so the §11.3 prompt-cache discount
+    survives — the cache shifts breakpoint stays at SYSTEM_PROMPT's
+    end. Bumping the version busts the prompt cache once; the next turn
+    re-warms it. The memory text inside block[1] varies per user and is
+    deliberately outside the cache breakpoint.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -54,9 +61,10 @@ import hashlib
 import json
 from typing import Any
 
+from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v6"
+PROMPT_VERSION = "chat_v7"
 
 
 SYSTEM_PROMPT = """\
@@ -185,11 +193,12 @@ def render_system_prompt(
     line lets Claude resolve "today", "last week", and the date arg on
     propose_transaction; the merchants block teaches canonicalization
     ("KFC" → "Kentucky Fried Chicken" so the user's history doesn't
-    fragment across spelling variants). Both items are deliberately
-    outside the cache: the date changes daily (cache TTL is 5 minutes,
-    so this doesn't matter much in practice), and the merchants list
-    varies per user (which is exactly the invalidation we're avoiding
-    by putting it after the breakpoint).
+    fragment across spelling variants); the memory block (Day 16) lists
+    the user's distilled cross-session facts so Claude grounds answers
+    in what it already knows about them. All three items are deliberately
+    outside the cache: the date changes daily, the merchants list varies
+    per user, and the memory varies per user (each is exactly the
+    invalidation we're avoiding by putting it after the breakpoint).
 
     Anthropic accepts either a string or a list-of-blocks for the
     `system` parameter on messages.create — the loop passes this list
@@ -197,10 +206,24 @@ def render_system_prompt(
     """
     if today is None:
         today = _dt.date.today()
+    # Day 16: memory block lands AFTER the merchants block, both inside
+    # block[1]. Keeping it in the dynamic tail is load-bearing — per-
+    # user memory inside the cached preamble (block[0]) would invalidate
+    # the prefix cache for every user and break the §11.3 cost
+    # projection. `render_user_memory` returns "" on empty / error in
+    # the normal path; the outer try/except below is a defense-in-depth
+    # safety net so a future refactor that drops the inner guard cannot
+    # 500 the chat turn.
+    try:
+        memory_block = render_user_memory(user_jwt)
+    except Exception:  # noqa: BLE001
+        memory_block = ""
     dynamic_tail = (
         f"Today is {today.isoformat()}.\n\n"
         + render_user_merchants(user_jwt)
     )
+    if memory_block:
+        dynamic_tail = dynamic_tail + "\n\n" + memory_block
     return [
         {
             "type": "text",

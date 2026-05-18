@@ -32,6 +32,11 @@ import {
   sanitizeCardId,
   type PatchTransactionBody,
 } from "./transactionsApi";
+import {
+  deleteMemory as apiDeleteMemory,
+  listMemory as apiListMemory,
+  type MemoryFactRow,
+} from "./memoryApi";
 import { useAppStore } from "../store";
 
 export interface PendingDeleteState {
@@ -61,6 +66,19 @@ interface LedgerState {
    * the card row can render the same countdown line.
    */
   pendingCardDeletes: Record<string, PendingDeleteState>;
+  /**
+   * Day 16 memory facts. Loaded lazily by the AI Memory page via
+   * `refreshMemory()`; not auto-fetched on JWT change because the page
+   * is opt-in and the data is otherwise unused.
+   */
+  memory: MemoryFactRow[];
+  /**
+   * Memory rows mid-deletion. Keyed by memory id. The row stays in
+   * `memory` until the timer commits so the page can render a
+   * "deleting · tap to undo" overlay; navigating away during the
+   * window still commits because the timer lives at module scope.
+   */
+  pendingMemoryDeletes: Record<string, PendingDeleteState>;
 }
 
 let state: LedgerState = {
@@ -70,6 +88,8 @@ let state: LedgerState = {
   loaded: false,
   pendingDeletes: {},
   pendingCardDeletes: {},
+  memory: [],
+  pendingMemoryDeletes: {},
 };
 
 /*
@@ -85,6 +105,14 @@ const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // server flips status='deleted'. Symmetric to the transaction pattern;
 // reactivity comes from `state.pendingCardDeletes`.
 const cardDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Day 16 — symmetric timer map for memory-fact deletes. Lifting this to
+// module scope (vs. the UndoToast-on-the-memory-page pattern shipped in
+// the first cut of Day 16) is what makes "navigate away during undo
+// window → delete still commits" hold. DELETE /memory/{id} is a hard
+// delete server-side; a future organic re-mention recreates the row
+// with a new id (DESIGN.md §7.6).
+const memoryDeleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const listeners = new Set<() => void>();
 
@@ -127,6 +155,8 @@ useAppStore.subscribe((s) => {
     pendingTimers.clear();
     for (const timer of cardDeleteTimers.values()) clearTimeout(timer);
     cardDeleteTimers.clear();
+    for (const timer of memoryDeleteTimers.values()) clearTimeout(timer);
+    memoryDeleteTimers.clear();
     setState({
       transactions: [],
       cards: FIXTURE_CARDS,
@@ -134,6 +164,8 @@ useAppStore.subscribe((s) => {
       loaded: false,
       pendingDeletes: {},
       pendingCardDeletes: {},
+      memory: [],
+      pendingMemoryDeletes: {},
     });
   }
 });
@@ -158,6 +190,8 @@ export const ledger = {
       loaded: false,
       pendingDeletes: {},
       pendingCardDeletes: {},
+      memory: [],
+      pendingMemoryDeletes: {},
     };
   },
 
@@ -474,6 +508,87 @@ export const ledger = {
     if (state.pendingCardDeletes[id] !== undefined) {
       const { [id]: _, ...rest } = state.pendingCardDeletes;
       setState({ pendingCardDeletes: rest });
+    }
+  },
+
+  /* ─── Memory: wired to /memory backend (Day 16) ────────────── */
+
+  /**
+   * Fetch /memory and replace local state.
+   *
+   * Not called from the JWT-change subscriber on purpose — memory is
+   * only used on the AI Memory page, so we lazy-load there. Callers
+   * needing a fresh pull (e.g. after a chat turn that's likely to have
+   * distilled new facts) can call this directly.
+   */
+  async refreshMemory(): Promise<void> {
+    const { jwt } = useAppStore.getState();
+    if (!jwt) return;
+    try {
+      const resp = await apiListMemory();
+      setState({ memory: resp.facts });
+    } catch (err) {
+      // Same posture as `refresh()` — don't clobber the existing list
+      // on a transient fetch failure; the page surfaces the error inline.
+      // eslint-disable-next-line no-console
+      console.warn("ledger memory refresh failed", err);
+    }
+  },
+
+  /**
+   * Schedule a memory-fact delete with an undo window. The fact STAYS
+   * in `memory` for `durationMs` (so the row can render a countdown
+   * progress line + "deleting · tap to undo" copy); when the timer
+   * fires we remove it locally and call DELETE. Calling
+   * `undoDeleteMemory` before then cancels the commit cleanly.
+   *
+   * Symmetric to `scheduleDeleteCard`. Idempotent — a second call on
+   * an already-pending id is a no-op. DELETE is hard delete server-
+   * side (DESIGN.md §7.6); restore-on-failure puts the row back at
+   * its original index so the UI doesn't silently lie about state.
+   */
+  scheduleDeleteMemory(id: string, durationMs: number = 5000): void {
+    if (memoryDeleteTimers.has(id)) return;
+    const row = state.memory.find((m) => m.id === id);
+    if (!row) return;
+    const scheduledAt = Date.now();
+    setState({
+      pendingMemoryDeletes: {
+        ...state.pendingMemoryDeletes,
+        [id]: { id, scheduledAt, durationMs },
+      },
+    });
+    const timer = setTimeout(() => {
+      memoryDeleteTimers.delete(id);
+      const idx = state.memory.findIndex((m) => m.id === id);
+      const { [id]: _, ...restPending } = state.pendingMemoryDeletes;
+      setState({
+        memory: state.memory.filter((m) => m.id !== id),
+        pendingMemoryDeletes: restPending,
+      });
+      void apiDeleteMemory(id).catch((err) => {
+        const next = [...state.memory];
+        next.splice(Math.max(0, Math.min(idx, next.length)), 0, row);
+        setState({ memory: next });
+        // eslint-disable-next-line no-console
+        console.warn("ledger memory commit-delete failed; restored", err);
+      });
+    }, durationMs);
+    memoryDeleteTimers.set(id, timer);
+  },
+
+  /**
+   * Cancel a pending memory-fact delete. Safe to call on an unknown id.
+   */
+  undoDeleteMemory(id: string): void {
+    const timer = memoryDeleteTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      memoryDeleteTimers.delete(id);
+    }
+    if (state.pendingMemoryDeletes[id] !== undefined) {
+      const { [id]: _, ...rest } = state.pendingMemoryDeletes;
+      setState({ pendingMemoryDeletes: rest });
     }
   },
 

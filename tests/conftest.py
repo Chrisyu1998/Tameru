@@ -151,6 +151,33 @@ def card_b(user_b) -> str:
     return resp.data[0]["id"]
 
 
+@pytest.fixture
+def clean_memory(user_a):
+    """Wipe user_a's user_memory + conversation_distillation_state rows.
+
+    Day 16 memory tests are session-scoped on `user_a`, so rows leak
+    between tests without a per-test cleanup. Tests opt in via
+    `pytestmark = pytest.mark.usefixtures("clean_memory")` at module
+    level so the cleanup only fires where it's actually needed.
+    """
+    from app.db import supabase_for_user
+
+    client = supabase_for_user(user_a.jwt)
+    # Order matters only loosely (no FKs between these tables); we wipe
+    # conversation_distillation_state first because chat_messages is
+    # what its predicate hangs off. chat_messages and chat_turn_trace
+    # get wiped too — the piggyback predicate reads chat_messages, so
+    # leaving stale rows from a previous test would make a later test's
+    # "no piggyback expected" assertion false.
+    client.table("conversation_distillation_state").delete().eq(
+        "user_id", user_a.id
+    ).execute()
+    client.table("user_memory").delete().eq("user_id", user_a.id).execute()
+    client.table("chat_messages").delete().eq("user_id", user_a.id).execute()
+    client.table("chat_turn_trace").delete().eq("user_id", user_a.id).execute()
+    yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------

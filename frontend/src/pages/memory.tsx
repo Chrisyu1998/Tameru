@@ -3,58 +3,48 @@ import { Link } from "react-router-dom";
 import { Trash2, AlertTriangle, ArrowRight } from "lucide-react";
 import { SketchIcon } from "@/components/SketchIcon";
 import { Pill } from "@/components/Pill";
-import { UndoToast, type PendingDelete } from "@/components/UndoToast";
+import { PendingDeleteProgress } from "@/components/PendingDeleteProgress";
+import { ledger, useLedger } from "@/lib/ledger";
 import {
   MEMORY_CAPACITY,
-  initialMemoryFacts,
-  type MemoryFact,
+  MEMORY_CATEGORY_LABELS,
+  type MemoryCategory,
+  type MemoryFactRow,
 } from "@/lib/memory";
 import { cn } from "@/lib/utils";
 
 const LONG_PRESS_MS = 500;
 
 export default function MemoryPage() {
-  const [facts, setFacts] = useState<MemoryFact[]>(initialMemoryFacts);
+  // Memory state + pending-delete timers live in the ledger store at
+  // module scope. Navigating away during the undo window still commits
+  // the DELETE (parity with cards/transactions). The page itself owns
+  // only ephemeral UI state — the "armed" row for the confirm prompt
+  // and a loading-error message.
+  const { memory, pendingMemoryDeletes } = useLedger();
   const [armedId, setArmedId] = useState<string | null>(null);
-  const [pending, setPending] = useState<PendingDelete | null>(null);
-  // Stash the most recently removed fact so undo can restore it in place.
-  const lastRemovedRef = useRef<{ index: number; fact: MemoryFact } | null>(
-    null
-  );
+  const [error, setError] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
-  const used = facts.length;
-  const ratio = used / MEMORY_CAPACITY;
-  const overEighty = ratio > 0.8;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await ledger.refreshMemory();
+        if (!cancelled) setHasLoaded(true);
+      } catch (err) {
+        if (cancelled) return;
+        setError((err as Error).message);
+        setHasLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  const requestDelete = (fact: MemoryFact) => {
-    const index = facts.findIndex((f) => f.id === fact.id);
-    if (index === -1) return;
-    lastRemovedRef.current = { index, fact };
-    // Remove from list immediately; UndoToast handles 5s commit/undo.
-    setFacts((prev) => prev.filter((f) => f.id !== fact.id));
-    setArmedId(null);
-    setPending({
-      id: fact.id,
-      label: fact.text,
-      // Commit is a no-op for the mock store — removal already happened.
-      commit: () => {
-        lastRemovedRef.current = null;
-      },
-    });
-  };
-
-  const undoDelete = () => {
-    const stash = lastRemovedRef.current;
-    if (stash) {
-      setFacts((prev) => {
-        const next = [...prev];
-        next.splice(stash.index, 0, stash.fact);
-        return next;
-      });
-      lastRemovedRef.current = null;
-    }
-    setPending(null);
-  };
+  const used = memory.length;
+  const overEighty = used / MEMORY_CAPACITY > 0.8;
 
   return (
     <div className="mx-auto w-full max-w-2xl px-5 pt-8 pb-20">
@@ -70,25 +60,41 @@ export default function MemoryPage() {
       {/* Capacity row */}
       <CapacityRow used={used} overEighty={overEighty} />
 
+      {error && (
+        <p className="mt-6 rounded-xl bg-warn-wash px-4 py-3 text-sm text-ink-secondary">
+          {error}
+        </p>
+      )}
+
       {/* Facts grid */}
-      {facts.length === 0 ? (
+      {!hasLoaded ? (
+        <p className="mt-10 text-center text-sm text-ink-tertiary">loading…</p>
+      ) : memory.length === 0 ? (
         <p className="mt-10 text-center text-sm text-ink-tertiary">
           tameru hasn't remembered anything yet — facts get added as you chat.
         </p>
       ) : (
         <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {facts.map((fact) => (
-            <FactTile
-              key={fact.id}
-              fact={fact}
-              armed={armedId === fact.id}
-              dimmed={armedId !== null && armedId !== fact.id}
-              onArm={() => setArmedId(fact.id)}
-              onCancel={() => setArmedId(null)}
-              onConfirmDelete={() => requestDelete(fact)}
-              longPressMs={LONG_PRESS_MS}
-            />
-          ))}
+          {memory.map((fact) => {
+            const pending = pendingMemoryDeletes[fact.id];
+            return (
+              <FactTile
+                key={fact.id}
+                fact={fact}
+                armed={armedId === fact.id && !pending}
+                dimmed={armedId !== null && armedId !== fact.id && !pending}
+                pending={pending}
+                onArm={() => setArmedId(fact.id)}
+                onCancel={() => setArmedId(null)}
+                onConfirmDelete={() => {
+                  setArmedId(null);
+                  ledger.scheduleDeleteMemory(fact.id);
+                }}
+                onUndo={() => ledger.undoDeleteMemory(fact.id)}
+                longPressMs={LONG_PRESS_MS}
+              />
+            );
+          })}
         </ul>
       )}
 
@@ -103,12 +109,6 @@ export default function MemoryPage() {
           <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </div>
-
-      <UndoToast
-        pending={pending}
-        onUndo={undoDelete}
-        onTimeout={() => setPending(null)}
-      />
     </div>
   );
 }
@@ -135,7 +135,7 @@ function CapacityRow({
         <div
           className={cn(
             "h-full rounded-full transition-all",
-            overEighty ? "bg-warn" : "bg-moss"
+            overEighty ? "bg-warn" : "bg-moss",
           )}
           style={{ width: `${pct}%` }}
         />
@@ -153,27 +153,36 @@ function CapacityRow({
   );
 }
 
+interface PendingState {
+  scheduledAt: number;
+  durationMs: number;
+}
+
 function FactTile({
   fact,
   armed,
   dimmed,
+  pending,
   onArm,
   onCancel,
   onConfirmDelete,
+  onUndo,
   longPressMs,
 }: {
-  fact: MemoryFact;
+  fact: MemoryFactRow;
   armed: boolean;
   dimmed: boolean;
+  pending: PendingState | undefined;
   onArm: () => void;
   onCancel: () => void;
   onConfirmDelete: () => void;
+  onUndo: () => void;
   longPressMs: number;
 }) {
   const timerRef = useRef<number | null>(null);
 
   const startLongPress = () => {
-    if (armed) return;
+    if (armed || pending) return;
     timerRef.current = window.setTimeout(() => {
       onArm();
       timerRef.current = null;
@@ -187,22 +196,34 @@ function FactTile({
   };
   useEffect(() => () => cancelLongPress(), []);
 
+  const label = useMemo(
+    () =>
+      MEMORY_CATEGORY_LABELS[fact.category as MemoryCategory] ?? fact.category,
+    [fact.category],
+  );
+  const provenance = useMemo(() => formatProvenance(fact.reinforced_at), [
+    fact.reinforced_at,
+  ]);
+
   return (
     <li
-      onPointerDown={startLongPress}
+      onPointerDown={pending ? undefined : startLongPress}
       onPointerUp={cancelLongPress}
       onPointerLeave={cancelLongPress}
+      onClick={pending ? onUndo : undefined}
       className={cn(
-        "relative rounded-2xl border bg-surface px-4 py-3 transition-all",
+        "relative overflow-hidden rounded-2xl border bg-surface px-4 py-3 transition-all",
         armed
           ? "border-over bg-over-wash"
-          : "border-hairline hover:bg-elevated",
-        dimmed && "opacity-40"
+          : pending
+            ? "border-hairline opacity-55 cursor-pointer"
+            : "border-hairline hover:bg-elevated",
+        dimmed && "opacity-40",
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <Pill tone={armed ? "over" : "moss"}>{fact.category}</Pill>
-        {!armed && (
+        <Pill tone={armed ? "over" : "moss"}>{label}</Pill>
+        {!armed && !pending && (
           <button
             type="button"
             onClick={onArm}
@@ -214,11 +235,24 @@ function FactTile({
         )}
       </div>
 
-      <p className="mt-2 text-[0.95rem] leading-snug text-ink">{fact.text}</p>
+      <p
+        className={cn(
+          "mt-2 text-[0.95rem] leading-snug text-ink",
+          pending && "line-through decoration-1",
+        )}
+      >
+        {fact.fact}
+      </p>
 
-      <p className="mt-2 text-[0.7rem] text-ink-tertiary">{fact.provenance}</p>
+      {pending ? (
+        <p className="mt-2 text-[0.72rem] text-moss-deep tabular">
+          deleting · tap to undo
+        </p>
+      ) : (
+        <p className="mt-2 text-[0.7rem] text-ink-tertiary">{provenance}</p>
+      )}
 
-      {armed && (
+      {armed && !pending && (
         <div className="mt-3 flex items-center gap-3 border-t border-over/30 pt-2 text-[0.8rem]">
           <button
             type="button"
@@ -237,6 +271,29 @@ function FactTile({
           </button>
         </div>
       )}
+
+      {pending && (
+        <PendingDeleteProgress
+          scheduledAt={pending.scheduledAt}
+          durationMs={pending.durationMs}
+        />
+      )}
     </li>
   );
+}
+
+function formatProvenance(reinforcedAt: string): string {
+  const reinforced = new Date(reinforcedAt);
+  if (Number.isNaN(reinforced.getTime())) {
+    return "saved from chat";
+  }
+  const ageMs = Date.now() - reinforced.getTime();
+  const dayMs = 1000 * 60 * 60 * 24;
+  const days = Math.floor(ageMs / dayMs);
+  if (days <= 0) return "reinforced today";
+  if (days === 1) return "reinforced 1 day ago";
+  if (days < 30) return `reinforced ${days} days ago`;
+  const months = Math.floor(days / 30);
+  if (months === 1) return "reinforced 1 month ago";
+  return `reinforced ${months} months ago`;
 }

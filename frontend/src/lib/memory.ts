@@ -1,28 +1,36 @@
 /**
- * In-memory AI fact store. Mock — no backend yet.
- * Capacity is fixed at 60 facts; UI surfaces an amber warning >80% full.
+ * AI memory page — shared types + capacity constant.
+ *
+ * Real data is fetched via `lib/memoryApi.ts` (Day 16). This module
+ * re-exports the wire-shape types from there and adds a UI-friendly
+ * MemoryFact shape so the page can render with provenance copy
+ * without referencing the API shape everywhere.
+ *
+ * Capacity is fixed at 60 facts (DESIGN.md §7.6). The UI surfaces an
+ * amber warning >80% full; the backend's prune cron (Day 17) is what
+ * actually enforces the cap.
  */
 
-export type MemoryCategory =
-  | "card preference"
-  | "goal"
-  | "spending pattern"
-  | "person"
-  | "place"
-  | "rule";
+export type {
+  MemoryCategory,
+  MemoryFactRow,
+  MemoryListResponse,
+} from "./memoryApi";
+export {
+  MEMORY_CATEGORY_LABELS,
+  listMemory,
+  patchMemory,
+  deleteMemory,
+} from "./memoryApi";
+
+import type { MemoryCategory } from "./memoryApi";
 
 export interface MemoryFact {
   id: string;
   category: MemoryCategory;
   text: string;
-  /** Where this fact came from, e.g. "saved apr 12 from chat". */
+  /** Human-readable provenance, e.g. "reinforced 3 days ago". */
   provenance: string;
 }
 
 export const MEMORY_CAPACITY = 60;
-
-// v1 has no /memory backend yet; the AI memory page renders an empty state
-// until a memory feed lands.
-export const seedMemoryFacts: MemoryFact[] = [];
-
-export const initialMemoryFacts: MemoryFact[] = seedMemoryFacts;

@@ -37,17 +37,21 @@ run with the user's JWT (CLAUDE.md invariant 14).
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, Iterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.loop import _clean_block_dict, stream_turn
+from app.agent.memory import distill_session
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -97,6 +101,7 @@ class ChatMessagesResponse(BaseModel):
 @router.post("/turn")
 def chat_turn(
     body: ChatTurnRequest,
+    background_tasks: BackgroundTasks,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> StreamingResponse:
     """Stream one chat turn as Server-Sent Events.
@@ -122,6 +127,18 @@ def chat_turn(
     """
     conversation_id = body.conversation_id or uuid.uuid4()
     history = _load_history(user, conversation_id) if body.conversation_id else []
+
+    # Day 16 piggyback: schedule distillation of the most recently idle
+    # undistilled conversation, if any. The check is the single SQL
+    # predicate inside `find_idle_undistilled_conversation`; failure is
+    # non-fatal — chat must not 500 because a memory side-effect didn't
+    # set up. The BackgroundTask runs after the SSE stream closes; the
+    # JWT closure stays valid for the seconds it takes Haiku to respond.
+    _schedule_idle_distillation(
+        background_tasks=background_tasks,
+        user=user,
+        current_conversation_id=conversation_id,
+    )
 
     def generate() -> Iterator[bytes]:
         """Produce the SSE byte stream for this turn.
@@ -771,6 +788,45 @@ def _card_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
         "annual_fee": row.get("annual_fee"),
         "source_urls": source_urls,
     }
+
+
+def _schedule_idle_distillation(
+    *,
+    background_tasks: BackgroundTasks,
+    user: AuthedUser,
+    current_conversation_id: UUID,
+) -> None:
+    """Probe for an idle, undistilled conversation and schedule its distill.
+
+    Calls the `find_idle_undistilled_conversation` RPC under the user's
+    JWT — the 10-minute idle threshold and the anti-join against
+    `conversation_distillation_state` are both inside that SQL. If a row
+    comes back, queue `distill_session` as a FastAPI BackgroundTask so it
+    runs after the SSE stream closes.
+
+    Any failure is logged and swallowed. The chat turn proceeds normally;
+    the next turn's piggyback firing will retry (we only mark a
+    conversation done when distillation succeeds end-to-end).
+    """
+    try:
+        client = supabase_for_user(user.jwt)
+        resp = client.rpc(
+            "find_idle_undistilled_conversation",
+            {"p_current_conversation_id": str(current_conversation_id)},
+        ).execute()
+        target = resp.data
+        # PostgREST returns either the scalar value or null for a scalar-
+        # returning RPC. supabase-py surfaces the same shape directly.
+        if not target:
+            return
+        if isinstance(target, list):
+            target = target[0] if target else None
+            if not target:
+                return
+        target_id = UUID(str(target))
+        background_tasks.add_task(distill_session, user.jwt, target_id)
+    except Exception:
+        logger.exception("piggyback distillation probe failed; turn continues")
 
 
 def _sse_frame(event: str, data: str) -> bytes:
