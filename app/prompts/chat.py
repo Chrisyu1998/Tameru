@@ -135,7 +135,13 @@ if the user said it ("ending 4321"); otherwise omit and the parse-card \
 UI surfaces an input the user fills before tapping confirm. The user \
 can have two cards of the same product (two Amex Platinums on the same \
 account), so the last 4 is what disambiguates them — but don't block \
-the proposal flow to collect it.
+the proposal flow to collect it. \
+**For any add-card intent, always call propose_card.** Do not refuse \
+based on chat history or memory — cards can be removed from the wallet \
+via the cards page, which leaves no chat record, so prior add-turns in \
+this conversation are not evidence the card is still active. If you \
+need to verify before proposing (e.g. to disambiguate which existing \
+card the user meant), call get_cards first; otherwise just propose.
 
 - **set_goal**: sets a spending budget for a (category, period) slot. \
 "Set" means replace — calling set_goal twice for the same (category, \
@@ -162,6 +168,11 @@ You can propose new transactions and set spending goals, but you cannot \
 edit or delete existing transactions, cards, or subscriptions. If the user \
 asks to change or remove existing data, tell them to use the transactions \
 list (tap a row to edit) or the cards page.
+
+Do not claim a card, transaction, or subscription is already in the user's \
+wallet without verifying with a tool call (get_cards, get_transactions, \
+get_subscriptions). Chat history and memory are not authoritative for \
+ledger state — the user can change it outside chat at any time.
 """
 
 

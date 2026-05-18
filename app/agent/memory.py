@@ -56,7 +56,7 @@ ALLOWED_CATEGORIES = frozenset(
 # ai_call_log.prompt_version for the distillation system prompt. Bump
 # when DISTILL_SYSTEM_PROMPT changes in a way that could affect what
 # Haiku extracts — eval / cost-curve bucketing relies on it.
-PROMPT_VERSION = "memory_distill_v1"
+PROMPT_VERSION = "memory_distill_v2"
 
 _DEFAULT_MODEL = "claude-haiku-4-5"
 
@@ -73,6 +73,16 @@ or generic financial knowledge.
 without seeing this conversation.
   * One claim per fact. Compound facts ("user likes X and dislikes Y") \
 must be split.
+
+Do NOT extract live-ledger state. Specifically, do not extract:
+  * Which cards the user currently owns (e.g. "User has Amex Platinum \
+1007"). Cards can be deleted via the cards page; the live database \
+(via the get_cards tool) is the source of truth.
+  * Which subscriptions are active, or any specific transaction. These \
+are queried live via get_subscriptions / get_transactions and can \
+change outside chat.
+Card and subscription HABITS are fine ("User puts Costco runs on CSR"). \
+Ownership/inventory is not.
 
 Category vocabulary (use exactly these strings):
   * spending_pattern  — recurring habits, e.g. "User eats out 3x/week \
