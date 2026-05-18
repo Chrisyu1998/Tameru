@@ -10,7 +10,7 @@ import { ParseCard } from "@/components/chat/ParseCard";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { chatStore, useChatStore } from "@/lib/chatStore";
 import { useLedger } from "@/lib/ledger";
-import type { Transaction } from "@/lib/fixtures";
+import type { Card, Transaction } from "@/lib/fixtures";
 import type { ChatMessage } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 
@@ -118,6 +118,7 @@ export function ChatDrawer() {
               key={m.id}
               msg={m}
               transactions={transactions}
+              cards={cards}
               onSelectCandidate={(tx) => setEditingTx(tx)}
             />
           ))}
@@ -177,10 +178,12 @@ export function ChatDrawer() {
 function MessageRow({
   msg,
   transactions,
+  cards,
   onSelectCandidate,
 }: {
   msg: ChatMessage;
   transactions: Transaction[];
+  cards: Card[];
   onSelectCandidate: (tx: Transaction) => void;
 }) {
   if (msg.role === "user") {
@@ -227,6 +230,7 @@ function MessageRow({
         <ParseCard
           preface={msg.preface}
           draft={msg.draft}
+          cards={cards}
           committed={!!msg.committedTxId}
           committedState={msg.committedState}
           frozen={msg.frozen}
@@ -265,6 +269,7 @@ function MessageRow({
           <CandidateCards
             preface={msg.preface}
             candidates={candidates}
+            cards={cards}
             onSelect={onSelectCandidate}
           />
         </div>

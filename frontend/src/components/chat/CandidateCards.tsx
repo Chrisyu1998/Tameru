@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { AutoLoggedBadge } from "@/components/AutoLoggedBadge";
 import { cardLabel } from "@/lib/chat";
-import { type Transaction } from "@/lib/fixtures";
+import { type Card, type Transaction } from "@/lib/fixtures";
 import { formatMoney, formatShortDate } from "@/lib/format";
 
 interface CandidateCardsProps {
   preface: string;
   candidates: Transaction[];
+  /** Live cards from `useLedger()` — used to resolve each candidate's cardId. */
+  cards: Card[];
   /** Caller decides what selection means (open edit sheet / confirm delete). */
   onSelect: (tx: Transaction) => void;
 }
@@ -16,6 +18,7 @@ const COLLAPSED_VISIBLE = 5;
 export function CandidateCards({
   preface,
   candidates,
+  cards,
   onSelect,
 }: CandidateCardsProps) {
   const [expanded, setExpanded] = useState(false);
@@ -37,7 +40,7 @@ export function CandidateCards({
       ) : (
         <ul className="overflow-hidden rounded-2xl border border-hairline bg-surface divide-y divide-hairline">
           {visible.map((tx) => {
-            const card = cardLabel(tx.cardId);
+            const card = cardLabel(tx.cardId, cards);
             return (
               <li key={tx.id}>
                 <button

@@ -7,6 +7,7 @@
  *     surface that flows into chatStore.commitDraft → /transactions/confirm)
  *   - "let me fix it" preserves unedited fields (it just opens the sheet —
  *     no mutation should happen on the draft from a fix tap)
+ *   - card-label resolution uses the live `cards` prop, not a hardcoded fixture
  */
 
 import { describe, expect, test, vi } from 'vitest';
@@ -14,6 +15,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ParseCard } from '@/components/chat/ParseCard';
 import type { ParseDraft } from '@/lib/chat';
+import type { Card } from '@/lib/fixtures';
 
 function makeDraft(overrides: Partial<ParseDraft> = {}): ParseDraft {
   return {
@@ -36,12 +38,26 @@ function makeDraft(overrides: Partial<ParseDraft> = {}): ParseDraft {
   };
 }
 
+function makeCard(overrides: Partial<Card> = {}): Card {
+  return {
+    id: 'card-1',
+    name: 'Amex Platinum',
+    last4: '1007',
+    issuer: 'amex',
+    program: 'MR',
+    multipliers: [],
+    annualFee: '695',
+    ...overrides,
+  };
+}
+
 describe('ParseCard', () => {
   test('renders merchant, amount, category, and confirm/fix buttons', () => {
     render(
       <ParseCard
         preface="got it. does this look right?"
         draft={makeDraft()}
+        cards={[]}
         committed={false}
         onConfirm={() => {}}
         onFix={() => {}}
@@ -69,6 +85,7 @@ describe('ParseCard', () => {
     render(
       <ParseCard
         draft={draft}
+        cards={[]}
         committed={false}
         onConfirm={onConfirm}
         onFix={onFix}
@@ -96,6 +113,7 @@ describe('ParseCard', () => {
     render(
       <ParseCard
         draft={draft}
+        cards={[]}
         committed={false}
         onConfirm={onConfirm}
         onFix={onFix}
@@ -117,6 +135,7 @@ describe('ParseCard', () => {
     render(
       <ParseCard
         draft={makeDraft()}
+        cards={[]}
         committed
         onConfirm={() => {}}
         onFix={() => {}}
@@ -130,5 +149,36 @@ describe('ParseCard', () => {
     expect(
       screen.queryByRole('button', { name: /let me fix it/i }),
     ).not.toBeInTheDocument();
+  });
+
+  test('resolves card name + last4 from the live cards prop', () => {
+    // Regression: previously rendered "Other" because the card row was
+    // looked up against an empty FIXTURE_CARDS instead of the live ledger.
+    render(
+      <ParseCard
+        draft={makeDraft({ cardId: 'card-1' })}
+        cards={[makeCard({ id: 'card-1', name: 'Amex Platinum', last4: '1007' })]}
+        committed={false}
+        onConfirm={() => {}}
+        onFix={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(/Amex Platinum · 1007/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Other$/)).not.toBeInTheDocument();
+  });
+
+  test('renders "Other" when cardId is empty', () => {
+    render(
+      <ParseCard
+        draft={makeDraft({ cardId: '' })}
+        cards={[makeCard()]}
+        committed={false}
+        onConfirm={() => {}}
+        onFix={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('Other')).toBeInTheDocument();
   });
 });

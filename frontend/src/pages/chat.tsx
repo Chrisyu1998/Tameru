@@ -19,7 +19,7 @@ import {
   type ChatMessage,
 } from "@/lib/chat";
 import { chatStore, useChatStore } from "@/lib/chatStore";
-import type { Transaction } from "@/lib/fixtures";
+import type { Card, Transaction } from "@/lib/fixtures";
 import { cn } from "@/lib/utils";
 
 const SILENCE_WINDOW_MS = 1500;
@@ -232,6 +232,7 @@ export default function ChatPage() {
               key={m.id}
               msg={m}
               transactions={transactions}
+              cards={cards}
               onConfirmDraft={(draft) => commitDraft(m.id, draft)}
               onFixDraft={() => fixDraft(m.id)}
               onSelectCandidate={handleSelectCandidate}
@@ -304,12 +305,14 @@ export default function ChatPage() {
 function MessageRow({
   msg,
   transactions,
+  cards,
   onConfirmDraft,
   onFixDraft,
   onSelectCandidate,
 }: {
   msg: ChatMessage;
   transactions: Transaction[];
+  cards: Card[];
   onConfirmDraft: (draft: ReturnType<typeof parseTransaction>) => void;
   onFixDraft: () => void;
   onSelectCandidate: (tx: Transaction) => void;
@@ -363,6 +366,7 @@ function MessageRow({
         <ParseCard
           preface={msg.preface}
           draft={msg.draft}
+          cards={cards}
           committed={!!msg.committedTxId}
           committedState={msg.committedState}
           frozen={msg.frozen}
@@ -401,6 +405,7 @@ function MessageRow({
           <CandidateCards
             preface={msg.preface}
             candidates={candidates}
+            cards={cards}
             onSelect={onSelectCandidate}
           />
         </div>

@@ -36,6 +36,7 @@ describe('CandidateCards', () => {
       <CandidateCards
         preface="here are matches:"
         candidates={candidates}
+        cards={[]}
         onSelect={() => {}}
       />,
     );
@@ -51,6 +52,7 @@ describe('CandidateCards', () => {
       <CandidateCards
         preface="found these:"
         candidates={candidates}
+        cards={[]}
         onSelect={onSelect}
       />,
     );
@@ -69,6 +71,7 @@ describe('CandidateCards', () => {
       <CandidateCards
         preface="searched for that"
         candidates={[]}
+        cards={[]}
         onSelect={() => {}}
       />,
     );
@@ -88,6 +91,7 @@ describe('CandidateCards', () => {
       <CandidateCards
         preface="many matches"
         candidates={many}
+        cards={[]}
         onSelect={() => {}}
       />,
     );

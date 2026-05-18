@@ -10,7 +10,7 @@ import type {
   CardProgram,
 } from "./cardsApi";
 import { CATEGORIES, type Category } from "./categories";
-import { FIXTURE_CARDS, type Transaction } from "./fixtures";
+import { FIXTURE_CARDS, type Card, type Transaction } from "./fixtures";
 
 /* ─── Message model ──────────────────────────────────────────────── */
 
@@ -470,8 +470,11 @@ export function compareCategories(
 
 /* ─── Card name lookup helper ────────────────────────────────────── */
 
-export function cardLabel(cardId: string): { name: string; last4: string } {
-  const card = FIXTURE_CARDS.find((c) => c.id === cardId);
+export function cardLabel(
+  cardId: string,
+  cards: Card[],
+): { name: string; last4: string } {
+  const card = cards.find((c) => c.id === cardId);
   if (!card) return { name: "Other", last4: "—" };
   return { name: card.name, last4: card.last4 };
 }
