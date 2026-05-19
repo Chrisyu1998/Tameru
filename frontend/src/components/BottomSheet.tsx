@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -44,8 +45,12 @@ export function BottomSheet({
   if (!open) return null;
 
   // ── Desktop "side" variant: right-side panel, no scrim ──────────────
+  // Portal to body so the fixed positioning is anchored to the viewport
+  // regardless of any ancestor `transform`/`filter`/`will-change` (which
+  // would otherwise become the containing block — animate-fade-up on
+  // page wrappers was clipping the sheet and breaking internal scroll).
   if (desktopVariant === "side") {
-    return (
+    return createPortal(
       <>
         {/* Mobile (<md) keeps the bottom sheet treatment */}
         <MobileBottomSheet
@@ -77,16 +82,17 @@ export function BottomSheet({
               <X className="h-4 w-4" />
             </button>
           )}
-          <div className={cn("flex-1 overflow-y-auto px-6 pt-12 pb-8", className)}>
+          <div className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pt-12 pb-8", className)}>
             {children}
           </div>
         </aside>
-      </>
+      </>,
+      document.body
     );
   }
 
   // ── Default: bottom sheet on mobile, centered dialog on md+ ──────────
-  return (
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -140,7 +146,8 @@ export function BottomSheet({
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
