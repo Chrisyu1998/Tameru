@@ -19,7 +19,8 @@ row with a new `card_id`. Old transactions stay linked to the old row.
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
@@ -141,7 +142,14 @@ def post_card_confirm(
     if crid_lookup.data:
         return CardRow.model_validate(crid_lookup.data[0])
 
-    insert_row: dict[str, object] = {
+    # Build the cards payload as jsonb for the SECURITY DEFINER RPC.
+    # Supabase Python has no cross-table transaction primitive, so when
+    # the AF dual-write fires we route through `insert_card_with_af`
+    # (Day 19b — migration 20260519130000) so both inserts commit or
+    # neither does. Same pattern as Day 19's `soft_delete_card`. Even
+    # the no-AF case goes through the RPC for a single code path —
+    # `p_af = NULL` makes it a single-table insert under the hood.
+    p_card: dict[str, object] = {
         "user_id": str(user.user_id),
         "name": proposal.name,
         "issuer": proposal.issuer,
@@ -151,17 +159,27 @@ def post_card_confirm(
         "last_four": proposal.last_four,
         "source_urls": proposal.source_urls,
         "client_request_id": str(proposal.client_request_id),
-        # `status` defaults to 'active' and `created_at` to now(); do not
-        # set them here so a future default change doesn't silently
-        # diverge from the migration.
     }
     if proposal.annual_fee is not None:
-        insert_row["annual_fee"] = str(proposal.annual_fee)
+        p_card["annual_fee"] = str(proposal.annual_fee)
     if proposal.color is not None:
-        insert_row["color"] = proposal.color
+        p_card["color"] = proposal.color
+
+    p_af: dict[str, object] | None = None
+    if (
+        proposal.next_annual_fee_date is not None
+        and proposal.annual_fee is not None
+        and proposal.annual_fee > 0
+    ):
+        p_af = {
+            "next_annual_fee_date": proposal.next_annual_fee_date.isoformat(),
+        }
 
     try:
-        resp = client.table("cards").insert(insert_row).execute()
+        resp = client.rpc(
+            "insert_card_with_af",
+            {"p_card": p_card, "p_af": p_af},
+        ).execute()
     except Exception as exc:
         # Unique-violation taxonomy: two partial indexes can fire here.
         # `cards_active_identity_uniq` is the natural-key dedup (same
@@ -170,7 +188,10 @@ def post_card_confirm(
         # `cards_active_client_request_id_unique` should never fire
         # because the crid short-circuit above caught the only legitimate
         # replay path; if it does fire, treat it the same as a crid
-        # replay (return the existing row).
+        # replay (return the existing row). The RPC raises inside a
+        # transaction so a unique-violation on either index aborts both
+        # the cards and (if attempted) subscriptions inserts — no
+        # orphan-card window.
         message = str(exc)
         if "cards_active_client_request_id_unique" in message:
             replay = (
@@ -188,26 +209,15 @@ def post_card_confirm(
             raise _collision_409(client, proposal.issuer, proposal.last_four) from exc
         raise
 
-    new_card = CardRow.model_validate(resp.data[0])
-
-    # Day 19b — AF dual-write. When the user supplied a renewal date AND
-    # the card has a non-zero annual fee, create a companion subscriptions
-    # row so the pg_cron auto-logger logs the AF on each anniversary.
-    # The subscription has a freshly minted server-side `client_request_id`
-    # so the partial unique index on `subscriptions (user_id,
-    # client_request_id)` makes a retry of `/cards/confirm` (e.g. network
-    # blip after the cards INSERT succeeded but before the response
-    # reached the client) a no-op rather than racy. The cards crid
-    # short-circuit above is the primary retry guard; this is
-    # defense-in-depth.
-    if (
-        proposal.next_annual_fee_date is not None
-        and proposal.annual_fee is not None
-        and proposal.annual_fee > 0
-    ):
-        _insert_af_subscription(client, user, new_card, proposal)
-
-    return new_card
+    # The RPC returns the inserted cards row. PostgREST surfaces a
+    # function returning a composite type as a single-row JSON object
+    # (or a single-element list for `RETURNS SETOF`); normalise both.
+    row = resp.data
+    if isinstance(row, list):
+        if not row:
+            raise HTTPException(status_code=500, detail="insert_card_with_af returned no row")
+        row = row[0]
+    return CardRow.model_validate(row)
 
 
 @router.get("", response_model=CardListResponse)
@@ -247,11 +257,21 @@ def patch_card(
     patch: CardPatchRequest,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> CardRow:
-    """Edit a card's name, program, multipliers, annual_fee, or color.
+    """Edit a card's name, program, multipliers, annual_fee, color, or AF date.
 
     Identity fields (`network`, `last_four`, `issuer`) are NOT patchable —
     those represent who the card *is*. To "change" identity, the user
     deletes the card and re-adds it via chat (new propose → new confirm).
+
+    AF-touching patches (`annual_fee` and/or `next_annual_fee_date`)
+    cascade to the companion AF subscription atomically via the
+    `update_card_af` RPC (Day 19b — migration 20260519130100). The cron
+    auto-log always charges the current `cards.annual_fee`, so the
+    cascade keeps the subscription's `amount` in sync the moment the
+    user edits the AF on the card. `next_annual_fee_date = null` stops
+    AF tracking (cancels the companion subscription); a non-null date
+    on a card whose AF tracking was previously cancelled re-enables it.
+    DESIGN.md §6.5.
     """
     client = supabase_for_user(user.jwt)
 
@@ -265,6 +285,67 @@ def patch_card(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     provided = patch.model_fields_set
+
+    af_patch = "annual_fee" in provided or "next_annual_fee_date" in provided
+    if af_patch:
+        # Pre-check: tracking can't be re-enabled / continued on a no-fee
+        # card. effective_annual_fee is whatever the row will look like
+        # after this patch — patched value if supplied, current value
+        # otherwise.
+        if "annual_fee" in provided:
+            effective_annual_fee = patch.annual_fee
+        else:
+            current_fee = current_resp.data[0].get("annual_fee")
+            effective_annual_fee = (
+                Decimal(current_fee) if current_fee is not None else None
+            )
+        if (
+            "next_annual_fee_date" in provided
+            and patch.next_annual_fee_date is not None
+            and (effective_annual_fee is None or effective_annual_fee <= 0)
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "af_requires_nonzero_fee",
+                    "message": (
+                        "next_annual_fee_date requires annual_fee > 0; "
+                        "set or patch annual_fee first"
+                    ),
+                },
+            )
+
+        rpc_resp = client.rpc(
+            "update_card_af",
+            {
+                "p_card_id": str(card_id),
+                "p_annual_fee": (
+                    str(patch.annual_fee)
+                    if "annual_fee" in provided and patch.annual_fee is not None
+                    else None
+                ),
+                "p_set_annual_fee": "annual_fee" in provided,
+                "p_next_annual_fee_date": (
+                    patch.next_annual_fee_date.isoformat()
+                    if "next_annual_fee_date" in provided
+                    and patch.next_annual_fee_date is not None
+                    else None
+                ),
+                "p_set_next_date": "next_annual_fee_date" in provided,
+            },
+        ).execute()
+        rpc_row = rpc_resp.data
+        if isinstance(rpc_row, list):
+            rpc_row = rpc_row[0] if rpc_row else None
+        if rpc_row is None or rpc_row.get("id") is None:
+            # The function returned a NULL row — card doesn't exist for
+            # this user (or was soft-deleted).
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    # Non-AF fields (name, program, multipliers, color) hit the cards
+    # row directly. These don't touch subscriptions so a separate
+    # PostgREST UPDATE after the RPC is fine — atomicity with the AF
+    # cascade is not required.
     update: dict[str, object | None] = {}
     if "name" in provided:
         update["name"] = patch.name
@@ -272,15 +353,21 @@ def patch_card(
         update["program"] = patch.program
     if "multipliers" in provided:
         update["multipliers"] = patch.multipliers
-    if "annual_fee" in provided:
-        update["annual_fee"] = (
-            str(patch.annual_fee) if patch.annual_fee is not None else None
-        )
     if "color" in provided:
         update["color"] = patch.color
 
     if not update:
-        return CardRow.model_validate(current_resp.data[0])
+        # Either nothing to patch, or only AF fields (already applied
+        # above). Re-read so the response reflects the post-cascade row.
+        final = (
+            client.table("cards")
+            .select("*")
+            .eq("id", str(card_id))
+            .execute()
+        )
+        if not final.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        return CardRow.model_validate(final.data[0])
 
     resp = (
         client.table("cards")
@@ -346,58 +433,6 @@ def delete_card(
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
-
-
-def _insert_af_subscription(
-    client, user: AuthedUser, new_card: CardRow, proposal: CardConfirmRequest
-) -> None:
-    """Insert the companion AF subscription alongside a card confirm.
-
-    Day 19b. Called only when `next_annual_fee_date` is set and
-    `annual_fee > 0`. The subscription's shape matches what the Day 19
-    soft-delete cascade looks for to flip it to 'cancelled':
-
-      - `name = '{card_name} annual fee'`
-      - `category = 'Memberships'`
-      - `frequency = 'annual'`
-
-    `start_date` and `next_billing_date` both land on the user-supplied
-    renewal date; pg_cron's autolog_subscriptions() handles the rest on
-    the anniversary. A fresh server-side `client_request_id` makes the
-    insert idempotent under the subscriptions partial unique index — a
-    `/cards/confirm` retry that re-enters this branch with a different
-    `client_request_id` would create a duplicate, but the cards crid
-    short-circuit on the caller side prevents that path from ever firing
-    in normal flow.
-
-    Best-effort: a unique-violation here (extremely unlikely — would
-    require a race that bypassed the cards crid short-circuit) is
-    swallowed so the card itself still surfaces to the user. The user
-    can re-enter the AF date via chat if it didn't take.
-    """
-    try:
-        client.table("subscriptions").insert(
-            {
-                "user_id": str(user.user_id),
-                "card_id": str(new_card.id),
-                "name": f"{proposal.name} annual fee",
-                "amount": str(proposal.annual_fee),
-                "frequency": "annual",
-                "start_date": proposal.next_annual_fee_date.isoformat(),
-                "next_billing_date": proposal.next_annual_fee_date.isoformat(),
-                "category": "Memberships",
-                "status": "active",
-                "client_request_id": str(uuid4()),
-            }
-        ).execute()
-    except Exception as exc:
-        # Same-crid-replay impossible (fresh UUID). A legitimate failure
-        # path here is the user re-confirming the same card after a
-        # network blip — but the cards crid short-circuit at the top of
-        # `post_card_confirm` already returned the prior CardRow before
-        # we got here, so this branch only fires on truly unexpected
-        # errors. Swallow rather than 500-ing on the card create.
-        _ = exc  # explicit no-op; future log site if needed
 
 
 def _collision_409(

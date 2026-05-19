@@ -322,9 +322,20 @@ class CardPatchRequest(BaseModel):
     """Partial update body for `PATCH /cards/{id}`.
 
     Editable fields: `name`, `alias` (via name), `multipliers`, `annual_fee`,
-    `color`, `program`. `network`, `last_four`, `issuer`, `status`, and
-    `deleted_at` are NOT patchable — those represent card identity, which
-    the soft-delete-then-re-add flow handles (DESIGN.md §8.1).
+    `color`, `program`, `next_annual_fee_date`. `network`, `last_four`,
+    `issuer`, `status`, and `deleted_at` are NOT patchable — those represent
+    card identity, which the soft-delete-then-re-add flow handles
+    (DESIGN.md §8.1).
+
+    `next_annual_fee_date` is a *virtual* field — it doesn't write to a
+    column on `cards` (the renewal date lives on the companion AF
+    subscription's `next_billing_date`). When present in the patch, the
+    route routes through the `update_card_af` SECURITY DEFINER RPC,
+    which atomically updates `cards.annual_fee` (if also patched) and
+    the companion AF subscription's `amount` / `next_billing_date`.
+    Setting `next_annual_fee_date = null` cancels the companion AF
+    subscription (stop tracking); the cards row keeps its
+    `annual_fee` snapshot. DESIGN.md §6.5.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -334,6 +345,7 @@ class CardPatchRequest(BaseModel):
     multipliers: dict[str, float] | None = None
     annual_fee: Decimal | None = None
     color: str | None = None
+    next_annual_fee_date: _dt.date | None = None
 
     @field_validator("name")
     @classmethod
@@ -352,6 +364,24 @@ class CardPatchRequest(BaseModel):
         """Reject non-null negative annual_fee patches."""
         if v is not None and v < 0:
             raise ValueError(f"annual_fee must be >= 0 (got {v})")
+        return v
+
+    @field_validator("next_annual_fee_date")
+    @classmethod
+    def _vp_next_annual_fee_date(
+        cls, v: _dt.date | None
+    ) -> _dt.date | None:
+        """Reject strictly-past renewal-date patches. Null is legal (stop tracking).
+
+        Same `>= today` rule as `CardProposal._v_next_annual_fee_date` —
+        past dates would make pg_cron auto-log immediately on the next
+        run. Explicit `null` means "stop tracking the AF" and bypasses
+        the date check.
+        """
+        if v is not None and v < _dt.date.today():
+            raise ValueError(
+                f"next_annual_fee_date must be today or later (got {v})"
+            )
         return v
 
 

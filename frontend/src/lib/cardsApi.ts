@@ -169,15 +169,28 @@ export async function listCards(opts?: { includeInactive?: boolean }): Promise<C
   return apiJson<CardListResponse>(`/cards${qs}`, { method: 'GET' });
 }
 
+/**
+ * `next_annual_fee_date` is a virtual patch field — there's no
+ * `cards.next_annual_fee_date` column. When present, the backend's
+ * `PATCH /cards/{id}` routes through the `update_card_af` RPC and
+ * cascades to the companion AF subscription's `next_billing_date`
+ * (Day 19b, DESIGN.md §6.5). Set to `null` to stop AF tracking
+ * (cancels the companion subscription); the cards row's `annual_fee`
+ * snapshot is preserved. Set to a date on a card whose AF tracking
+ * was previously cancelled to re-enable.
+ */
+export interface CardPatchBody {
+  name?: string;
+  program?: CardProgram;
+  multipliers?: Record<string, number>;
+  annual_fee?: string | null;
+  color?: string | null;
+  next_annual_fee_date?: string | null;
+}
+
 export async function patchCard(
   cardId: string,
-  patch: Partial<{
-    name: string;
-    program: CardProgram;
-    multipliers: Record<string, number>;
-    annual_fee: string | null;
-    color: string | null;
-  }>,
+  patch: CardPatchBody,
 ): Promise<CardRow> {
   return apiJson<CardRow>(`/cards/${cardId}`, {
     method: 'PATCH',

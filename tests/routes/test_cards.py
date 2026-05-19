@@ -809,6 +809,433 @@ def test_soft_delete_cascades_af_to_cancelled_regular_to_paused(
 
 
 # ---------------------------------------------------------------------------
+# Day 19b — PATCH /cards/{id} AF cascade via update_card_af RPC
+# ---------------------------------------------------------------------------
+
+
+def test_patch_annual_fee_cascades_to_af_subscription(client, user_a, stub_lookup):  # noqa: ARG001
+    """PATCH `annual_fee` cascades onto the AF subscription's amount.
+
+    Day 19b — `cards.annual_fee` is the canonical source; the AF
+    subscription's `amount` mirrors it via `update_card_af`. The cron
+    next year must charge the new amount.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="0")
+
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"annual_fee": "795"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert Decimal(resp.json()["annual_fee"]) == Decimal("795")
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    updated_af = next(s for s in subs if s["id"] == af["id"])
+    assert Decimal(updated_af["amount"]) == Decimal("795")
+    assert updated_af["status"] == "active"
+
+
+def test_patch_next_annual_fee_date_updates_subscription(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """PATCH `next_annual_fee_date` updates the AF sub's `next_billing_date`.
+
+    `start_date` stays immutable per §8.3 — only `next_billing_date`
+    moves. `cards.annual_fee` is unchanged.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="1")
+    new_renewal = (date.today() + timedelta(days=60)).isoformat()
+
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"next_annual_fee_date": new_renewal},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # cards.annual_fee untouched
+    assert Decimal(resp.json()["annual_fee"]) == Decimal(card["annual_fee"])
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    updated_af = next(s for s in subs if s["id"] == af["id"])
+    assert updated_af["next_billing_date"] == new_renewal
+    assert updated_af["start_date"] == af["start_date"], (
+        "start_date is immutable per §8.3"
+    )
+
+
+def test_patch_clear_next_annual_fee_date_cancels_af(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """PATCH `next_annual_fee_date=null` flips the AF subscription to cancelled.
+
+    Stop-tracking path. `cards.annual_fee` retains the snapshot — the
+    column is the at-cancel value, not zeroed.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="2")
+
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"next_annual_fee_date": None},
+    )
+    assert resp.status_code == 200, resp.text
+    # Snapshot preserved
+    assert Decimal(resp.json()["annual_fee"]) == Decimal(card["annual_fee"])
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    cancelled_af = next(s for s in subs if s["id"] == af["id"])
+    assert cancelled_af["status"] == "cancelled"
+
+
+def test_patch_re_enables_af_on_card_with_cancelled_sub(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """Setting a renewal date on a card with no active AF sub inserts one.
+
+    Re-enable path. Setup: cancel an existing AF via the stop-tracking
+    path; then PATCH a new renewal date. A fresh AF subscription is
+    created with the current `cards.annual_fee` as the amount.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="3")
+
+    # Cancel first.
+    client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"next_annual_fee_date": None},
+    )
+
+    # Re-enable with a fresh date.
+    new_renewal = (date.today() + timedelta(days=90)).isoformat()
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"next_annual_fee_date": new_renewal},
+    )
+    assert resp.status_code == 200, resp.text
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    afs_for_card = [s for s in subs if s["card_id"] == card["id"]]
+    # Original AF still present as cancelled; new AF active.
+    cancelled = [s for s in afs_for_card if s["id"] == af["id"]]
+    assert cancelled and cancelled[0]["status"] == "cancelled"
+    active = [s for s in afs_for_card if s["status"] == "active"]
+    assert len(active) == 1
+    fresh = active[0]
+    assert fresh["next_billing_date"] == new_renewal
+    assert Decimal(fresh["amount"]) == Decimal(card["annual_fee"])
+
+
+def test_patch_rejects_af_date_on_zero_fee_card(client, user_a, stub_lookup):  # noqa: ARG001
+    """422 when a date is patched on a card with `annual_fee=0`.
+
+    Pre-RPC guard — can't track AF on a no-fee card. The user must
+    PATCH `annual_fee > 0` first (or in the same call).
+    """
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "4"),
+        name=f"NoFee-{tag}",
+        issuer="chase",
+        annual_fee="0",
+    )
+    card_resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert card_resp.status_code == 200
+    card_id = card_resp.json()["id"]
+
+    resp = client.patch(
+        f"/cards/{card_id}",
+        headers=_auth(user_a),
+        json={
+            "next_annual_fee_date": (
+                date.today() + timedelta(days=30)
+            ).isoformat()
+        },
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    if isinstance(detail, dict):
+        assert detail.get("code") == "af_requires_nonzero_fee"
+
+
+def test_patch_af_and_non_af_fields_in_one_call(client, user_a, stub_lookup):  # noqa: ARG001
+    """A single PATCH can mix AF cascade with regular field updates."""
+    card, af = _create_card_with_af(client, user_a, suffix="5")
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"annual_fee": "695", "name": "Renamed-Card"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["name"] == "Renamed-Card"
+    assert Decimal(body["annual_fee"]) == Decimal("695")
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    updated_af = next(s for s in subs if s["id"] == af["id"])
+    assert Decimal(updated_af["amount"]) == Decimal("695")
+
+
+def test_patch_annual_fee_on_card_without_af_sub_is_noop_on_subscriptions(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """PATCH `annual_fee` on a card with no AF sub updates only `cards`.
+
+    A user can hold a card with a non-zero AF without tracking it (the
+    AF date was never supplied). Patching the amount in that case
+    shouldn't conjure a phantom AF subscription.
+    """
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "6"),
+        name=f"AmountOnly-{tag}",
+        issuer="chase",
+        annual_fee="95",
+        # no next_annual_fee_date — no AF subscription created
+    )
+    card_resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert card_resp.status_code == 200
+    card_id = card_resp.json()["id"]
+
+    resp = client.patch(
+        f"/cards/{card_id}",
+        headers=_auth(user_a),
+        json={"annual_fee": "150"},
+    )
+    assert resp.status_code == 200
+    assert Decimal(resp.json()["annual_fee"]) == Decimal("150")
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    af_for_card = [s for s in subs if s["card_id"] == card_id]
+    assert af_for_card == []
+
+
+def test_patch_rejects_past_next_annual_fee_date(client, user_a, stub_lookup):  # noqa: ARG001
+    """Past renewal date on PATCH → 422. Mirrors the confirm validator."""
+    card, _ = _create_card_with_af(client, user_a, suffix="7")
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={
+            "next_annual_fee_date": (
+                date.today() - timedelta(days=1)
+            ).isoformat()
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_annual_fee_to_zero_cancels_active_af_sub(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """PATCH `annual_fee=0` on a card with an active AF sub cancels the sub.
+
+    Day 19b follow-up — codex review caught the original behavior
+    (writing 0 into subscriptions.amount) as still letting pg_cron
+    auto-log $0 transactions forever. Cleaner outcome: a zero AF
+    means no tracking. cards.annual_fee still reflects the patched
+    value (0), so the snapshot is preserved.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="9")
+
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"annual_fee": "0"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert Decimal(resp.json()["annual_fee"]) == Decimal("0")
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    cancelled_af = next(s for s in subs if s["id"] == af["id"])
+    assert cancelled_af["status"] == "cancelled"
+
+
+def test_patch_annual_fee_to_null_cancels_active_af_sub(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """PATCH `annual_fee=null` on a card with an active AF sub cancels the sub.
+
+    The NOT NULL constraint on `subscriptions.amount` would otherwise
+    raise a database error and roll back the entire patch — making
+    "clear the annual fee" silently fail from the user's POV. Cancel
+    is the right behavior: no fee → no tracking.
+    """
+    # Random tag in _create_card_with_af keeps last_four distinct from
+    # other tests using suffix "0" — only the per-call digit matters
+    # within a test, not across tests.
+    card, af = _create_card_with_af(client, user_a, suffix="0")
+
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"annual_fee": None},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["annual_fee"] is None
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    cancelled_af = next(s for s in subs if s["id"] == af["id"])
+    assert cancelled_af["status"] == "cancelled"
+
+
+def test_patch_card_name_cascades_to_af_subscription_name(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """A card rename updates the companion AF sub's denormalized name.
+
+    Day 19b follow-up — the AF sub's name is stored as
+    '{card_name} annual fee' and used by autolog_subscriptions() as
+    the transaction merchant. Without the sync trigger, a rename
+    would surface the old name on every future auto-logged AF
+    transaction. Trigger: `cards_sync_af_subscription_name`
+    (migration 20260519130200).
+
+    Doesn't apply to regular subscriptions — those have user-typed
+    names. Only AF subs derive their name from the card.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="1")
+    assert af["name"].endswith(" annual fee")
+
+    new_name = f"Renamed-{_tag()}"
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"name": new_name},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == new_name
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    updated_af = next(s for s in subs if s["id"] == af["id"])
+    assert updated_af["name"] == f"{new_name} annual fee"
+
+
+def test_patch_card_name_does_not_touch_cancelled_af_subs(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """Trigger filters by status='active' — cancelled AF rows are historical.
+
+    Cancelling AF tracking and then renaming the card should leave the
+    cancelled sub's name as-is (it's a historical record of the
+    pre-cancel state). The trigger's `status='active'` filter
+    guarantees this.
+    """
+    card, af = _create_card_with_af(client, user_a, suffix="2")
+
+    # Cancel AF tracking.
+    client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"next_annual_fee_date": None},
+    )
+
+    # Rename the card.
+    new_name = f"PostCancel-{_tag()}"
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_a),
+        json={"name": new_name},
+    )
+    assert resp.status_code == 200
+
+    # The cancelled AF sub keeps its old name.
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    historical_af = next(s for s in subs if s["id"] == af["id"])
+    assert historical_af["status"] == "cancelled"
+    assert historical_af["name"] == af["name"], (
+        "cancelled AF row is historical — trigger must not rewrite it"
+    )
+
+
+def test_patch_card_name_noop_when_no_af_sub(
+    client, user_a, stub_lookup,  # noqa: ARG001
+):
+    """Renaming a card without an AF sub is just a cards-row UPDATE.
+
+    The trigger fires regardless but matches zero rows; no error, no
+    side effect, no extra round-trips visible to the user.
+    """
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "3"),
+        name=f"NoAfRename-{tag}",
+        issuer="chase",
+        annual_fee="95",
+    )
+    card_resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert card_resp.status_code == 200
+    card_id = card_resp.json()["id"]
+
+    resp = client.patch(
+        f"/cards/{card_id}",
+        headers=_auth(user_a),
+        json={"name": "RenameMe"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "RenameMe"
+
+
+def test_patch_af_rls_other_user(client, user_a, user_b, stub_lookup):  # noqa: ARG001
+    """User B PATCHing user A's card AF returns 404. RPC's auth.uid()
+    filter matches zero rows, so the route surfaces a 404 the same way
+    a non-existent card id would.
+    """
+    card, _ = _create_card_with_af(client, user_a, suffix="8")
+    resp = client.patch(
+        f"/cards/{card['id']}",
+        headers=_auth(user_b),
+        json={"annual_fee": "999"},
+    )
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Helpers — mirror tests/routes/test_transactions.py conventions.
 # ---------------------------------------------------------------------------
 
@@ -838,6 +1265,36 @@ def _last_four(tag: str, suffix_digit: str) -> str:
     digits = "".join(c for c in tag if c.isdigit())
     digits = (digits + "000")[:3]
     return f"{digits}{suffix_digit}"
+
+
+def _create_card_with_af(client, user_a, *, suffix: str, fee: str = "550"):
+    """Helper: create a card with an AF subscription tracked. Returns the
+    card row dict and the companion AF subscription dict. Day 19b PATCH
+    cascade tests use this so the AF context is one line of setup.
+    """
+    from uuid import uuid4
+
+    tag = _tag()
+    renewal = (date.today() + timedelta(days=30)).isoformat()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, suffix),
+        name=f"PatchAF-{tag}",
+        issuer="capital_one",
+        annual_fee=fee,
+        next_annual_fee_date=renewal,
+        client_request_id=str(uuid4()),
+    )
+    resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert resp.status_code == 200, resp.text
+    card = resp.json()
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    af = next(s for s in subs if s["card_id"] == card["id"])
+    return card, af
 
 
 def _proposal(

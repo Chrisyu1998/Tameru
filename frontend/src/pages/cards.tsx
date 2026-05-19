@@ -1,22 +1,76 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, RefreshCw } from "lucide-react";
 import { Pill } from "@/components/Pill";
 import { SwipeableRow } from "@/components/SwipeableRow";
 import { SketchIcon } from "@/components/SketchIcon";
 import { SketchIllustration } from "@/components/SketchIllustration";
 import { PendingDeleteProgress } from "@/components/PendingDeleteProgress";
 import { EditCardSheet } from "@/components/EditCardSheet";
+import { EditCardAfSheet } from "@/components/EditCardAfSheet";
 import { ledger, useLedger } from "@/lib/ledger";
 import { setChatSeed } from "@/lib/chatSeed";
 import { ISSUER_LABELS } from "@/lib/cardsApi";
+import { listSubscriptions, type SubscriptionRow } from "@/lib/subscriptionsApi";
 import { cn } from "@/lib/utils";
 import type { Card } from "@/lib/fixtures";
+
+/**
+ * Recognition triple for card annual-fee subscriptions (Day 19b,
+ * DESIGN.md §6.5). Matches what `insert_card_with_af` /
+ * `update_card_af` / `soft_delete_card` write and look for. Kept in
+ * the cards page (not subscriptionsApi.ts) because this is the only
+ * surface that fetches `include_card_af=true` and needs to filter
+ * client-side.
+ */
+function isCardAfSubscription(sub: SubscriptionRow): boolean {
+  return (
+    sub.category === "Memberships" &&
+    sub.frequency === "annual" &&
+    sub.name.endsWith(" annual fee")
+  );
+}
+
+/**
+ * True when the card has a positive annual fee that the user could
+ * start tracking. The cards-list tile renders a "track AF" affordance
+ * for these when no active AF subscription exists yet — covers users
+ * who skipped the renewal date at create time or hit "stop tracking
+ * this AF" and want to re-enable.
+ */
+function hasTrackableFee(card: Card): boolean {
+  const fee = parseFloat(card.annualFee ?? "");
+  return Number.isFinite(fee) && fee > 0;
+}
 
 export default function CardsPage() {
   const navigate = useNavigate();
   const { cards, pendingCardDeletes } = useLedger();
   const [editing, setEditing] = useState<Card | null>(null);
+  const [editingAf, setEditingAf] = useState<Card | null>(null);
+  const [afByCardId, setAfByCardId] = useState<Record<string, SubscriptionRow>>(
+    {},
+  );
+
+  const refreshAfs = useCallback(async () => {
+    try {
+      const resp = await listSubscriptions("active", { includeCardAf: true });
+      const byCard: Record<string, SubscriptionRow> = {};
+      for (const sub of resp.items) {
+        if (sub.card_id && isCardAfSubscription(sub)) {
+          byCard[sub.card_id] = sub;
+        }
+      }
+      setAfByCardId(byCard);
+    } catch {
+      // Non-fatal: the chip just won't render. The cards page itself
+      // remains usable.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAfs();
+  }, [refreshAfs]);
 
   const askToAddCard = () => {
     setChatSeed("Add a new card:");
@@ -46,6 +100,7 @@ export default function CardsPage() {
         <ul className="mt-6 flex flex-col gap-3">
           {cards.map((card) => {
             const pending = pendingCardDeletes[card.id];
+            const af = afByCardId[card.id] ?? null;
             return (
               <li key={card.id}>
                 <SwipeableRow
@@ -64,7 +119,12 @@ export default function CardsPage() {
                       pending && "opacity-55",
                     )}
                   >
-                    <CardTile card={card} pending={!!pending} />
+                    <CardTile
+                      card={card}
+                      pending={!!pending}
+                      af={af}
+                      onAfTap={() => setEditingAf(card)}
+                    />
                   </button>
                   {pending && (
                     <PendingDeleteProgress
@@ -93,11 +153,32 @@ export default function CardsPage() {
           ledger.scheduleDeleteCard(card.id);
         }}
       />
+
+      <EditCardAfSheet
+        open={editingAf !== null}
+        card={editingAf}
+        afNextDate={editingAf ? afByCardId[editingAf.id]?.next_billing_date ?? null : null}
+        afAmount={editingAf ? afByCardId[editingAf.id]?.amount ?? null : null}
+        onClose={() => setEditingAf(null)}
+        onSaved={() => {
+          void refreshAfs();
+        }}
+      />
     </div>
   );
 }
 
-function CardTile({ card, pending }: { card: Card; pending: boolean }) {
+function CardTile({
+  card,
+  pending,
+  af,
+  onAfTap,
+}: {
+  card: Card;
+  pending: boolean;
+  af: SubscriptionRow | null;
+  onAfTap: () => void;
+}) {
   const stripe = card.color ?? "#8A8377";
   return (
     <div className="relative flex items-stretch overflow-hidden">
@@ -125,25 +206,93 @@ function CardTile({ card, pending }: { card: Card; pending: boolean }) {
             deleting · tap to undo
           </p>
         ) : (
-          (card.issuer ||
-            card.program ||
-            (card.multipliers && card.multipliers.length > 0)) && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {card.issuer && (
-                <Pill tone="ink">{ISSUER_LABELS[card.issuer]}</Pill>
-              )}
-              {card.program && <Pill tone="ink">{card.program}</Pill>}
-              {card.multipliers?.map((m) => (
-                <Pill key={`${m.label}-${m.factor}`} tone="moss">
-                  {m.factor}× {m.label}
-                </Pill>
-              ))}
-            </div>
-          )
+          <>
+            {(card.issuer ||
+              card.program ||
+              (card.multipliers && card.multipliers.length > 0)) && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {card.issuer && (
+                  <Pill tone="ink">{ISSUER_LABELS[card.issuer]}</Pill>
+                )}
+                {card.program && <Pill tone="ink">{card.program}</Pill>}
+                {card.multipliers?.map((m) => (
+                  <Pill key={`${m.label}-${m.factor}`} tone="moss">
+                    {m.factor}× {m.label}
+                  </Pill>
+                ))}
+              </div>
+            )}
+            {af ? (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAfTap();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onAfTap();
+                  }
+                }}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[0.72rem] text-ink-tertiary hover:bg-elevated cursor-pointer"
+                aria-label="edit annual fee tracking"
+              >
+                <RefreshCw className="h-3 w-3" />
+                <span className="tabular">${formatAfAmount(af.amount)}</span>
+                <span>·</span>
+                <span>next {formatAfDate(af.next_billing_date)}</span>
+              </div>
+            ) : (
+              hasTrackableFee(card) && (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAfTap();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onAfTap();
+                    }
+                  }}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-dashed border-hairline px-2 py-0.5 text-[0.72rem] text-ink-quaternary hover:bg-elevated cursor-pointer"
+                  aria-label="track annual fee"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>track ${formatAfAmount(card.annualFee ?? "")} AF</span>
+                </div>
+              )
+            )}
+          </>
         )}
       </div>
     </div>
   );
+}
+
+function formatAfAmount(amount: string): string {
+  // Trim trailing ".00" so "$550" reads cleaner than "$550.00" on the chip.
+  const parsed = parseFloat(amount);
+  if (!Number.isFinite(parsed)) return amount;
+  return parsed % 1 === 0 ? parsed.toFixed(0) : parsed.toFixed(2);
+}
+
+function formatAfDate(iso: string): string {
+  // "2027-03-15" → "Mar 15, 2027". Wide enough on mobile; the chip is
+  // a single line.
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function EmptyCards({ onAsk }: { onAsk: () => void }) {
