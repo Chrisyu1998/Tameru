@@ -652,8 +652,17 @@ The user describes a transaction by typing or speaking **in the chat surface**. 
 - Tap mic in the chat input → Web Speech API (`window.SpeechRecognition` / `webkitSpeechRecognition`) starts on-device speech recognition.
 - Browser shows a live transcript as the user speaks. Stop button or 1.5s of silence ends recording.
 - Final transcript auto-submits into the chat — identical to typed input from that point on. Same Claude turn, same `propose_transaction` path, same parse card (UX frame 15).
-- Web Speech API (not Gemini audio input) because: it's free, runs on-device (audio never leaves the user's phone — privacy bonus), works in iOS Safari 14.5+ and all major desktop browsers, and the audio quality of short transaction utterances is well within its capability.
+- Web Speech API (not Gemini audio input) because: it's free, on-device on Safari (macOS 14+ / iOS 14.5+) and routed through the browser's Web Speech sandbox on Chrome, works in all major browsers, and the audio quality of short transaction utterances is well within its capability.
 - If `SpeechRecognition` is unavailable (rare in 2026, but possible on older browsers), the mic button is hidden and the user is told voice isn't supported in their browser. No silent failures.
+
+**Supported languages (v1):** `en-US`, `zh-TW` (Taiwan Mandarin), `ja-JP`. Chosen to match the v1 user base (English-default, Taiwan family, Japan family). Initial language resolves from `navigator.language` with prefix-fallback to the closest supported (`en-*` → `en-US`, `zh-*` → `zh-TW`, `ja-*` → `ja-JP`); user override is persisted per-device in `localStorage`. A small chip in the Voice Active overlay (UX frame 14) lets the user switch in one tap (`en` / `中` / `日`). `zh-CN` is intentionally excluded for now — adding both Chinese variants doubles the eval surface for no v1-scale benefit; revisit if a CN user shows up.
+
+**Multilingual downstream behavior:** the transcript is submitted to `/chat/turn` verbatim — there is no in-browser translation. Claude Haiku handles `tool_use` argument extraction across these three languages natively. Known limitation: the merchant canonicalization pass (§7.4, Day 9c `render_user_merchants()`) is English-centric and will not deduplicate `"ローソン"` against `"Lawson"` or `"全家"` against `"FamilyMart"`. Acceptable at v1 scale; the post-launch merchant-merge job (§5.5) is the long-term answer. The chat eval harness (§7.10, `multi_hop.yaml`) should include a small number of `zh-TW` and `ja-JP` rows so a Haiku model bump doesn't silently regress multilingual extraction.
+
+**Offline and permission failures:**
+
+- The mic button remains visible and enabled when the user is offline or has previously denied mic permission — hiding it would mask the affordance. Tapping while `!navigator.onLine` surfaces an inline `network` error in the overlay without starting recognition; Chrome will also fire `network` mid-recognition because it routes audio to Google's servers. Safari runs on-device and works offline.
+- Every `not-allowed` event shows the same inline instructional error ("voice access denied. enable mic for this site in your browser settings, then try again."). We do not differentiate first-time vs persistent denial — browsers provide no reliable signal, and the right user action is the same. This matches the pattern Discord, ChatGPT, and Google Meet use.
 
 **Cost:** voice transcription is free (browser-native). Downstream token cost is the same Claude chat turn a typed message would trigger — voice adds no incremental LLM cost over typed input.
 

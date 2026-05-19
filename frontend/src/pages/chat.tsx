@@ -10,7 +10,8 @@ import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble"
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
 import { ParseCard } from "@/components/chat/ParseCard";
 import { ServiceBanner } from "@/components/chat/ServiceBanner";
-import { VoiceOverlay, useMockVoice } from "@/components/chat/VoiceOverlay";
+import { VoiceOverlay } from "@/components/chat/VoiceOverlay";
+import { isVoiceSupported, useVoice } from "@/lib/voice";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { ledger, useLedger } from "@/lib/ledger";
 import { consumeChatSeed } from "@/lib/chatSeed";
@@ -146,7 +147,7 @@ export default function ChatPage() {
 
   /* ─── Voice ─────────────────────────────────────────────────── */
 
-  const voice = useMockVoice({
+  const voice = useVoice({
     silenceWindowMs: SILENCE_WINDOW_MS,
     onCommit: (text) => {
       setVoiceMode(false);
@@ -263,6 +264,10 @@ export default function ChatPage() {
           transcript={voice.transcript}
           silenceMsLeft={voice.silenceMsLeft}
           silenceWindowMs={SILENCE_WINDOW_MS}
+          lang={voice.lang}
+          onChangeLang={voice.setLang}
+          error={voice.error}
+          onRetry={voice.start}
           onSubmitNow={voice.submitNow}
           onStop={stopVoice}
         />
@@ -281,6 +286,7 @@ export default function ChatPage() {
             onChange={setInput}
             onSend={() => handleSend(input)}
             onMic={startVoice}
+            micSupported={isVoiceSupported()}
             offline={!online}
             busy={busy}
           />
@@ -513,6 +519,7 @@ function InputRow({
   onChange,
   onSend,
   onMic,
+  micSupported,
   offline,
   busy,
 }: {
@@ -520,6 +527,7 @@ function InputRow({
   onChange: (v: string) => void;
   onSend: () => void;
   onMic: () => void;
+  micSupported: boolean;
   offline: boolean;
   busy: boolean;
 }) {
@@ -556,15 +564,17 @@ function InputRow({
             className="block max-h-32 w-full resize-none bg-transparent text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:outline-none disabled:opacity-60"
           />
         </div>
-        <button
-          type="button"
-          onClick={onMic}
-          aria-label="record voice"
-          disabled={busy}
-          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-hairline bg-surface text-ink-secondary transition-colors hover:bg-elevated hover:text-ink disabled:opacity-50"
-        >
-          <Mic className="h-4 w-4" />
-        </button>
+        {micSupported && (
+          <button
+            type="button"
+            onClick={onMic}
+            aria-label="record voice"
+            disabled={busy}
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-hairline bg-surface text-ink-secondary transition-colors hover:bg-elevated hover:text-ink disabled:opacity-50"
+          >
+            <Mic className="h-4 w-4" />
+          </button>
+        )}
         <button
           type="button"
           onClick={onSend}
