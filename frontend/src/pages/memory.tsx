@@ -45,6 +45,14 @@ export default function MemoryPage() {
 
   const used = memory.length;
   const overEighty = used / MEMORY_CAPACITY > 0.8;
+  // Oldest reinforced timestamp drives the "reinforced N days ago" line in
+  // CapacityRow — the user-facing signal that Day 17's 90-day decay sweep
+  // will start trimming soon. Computed here from the rows already in the
+  // ledger so no extra API call is needed.
+  const oldestReinforcedAt = memory.reduce<string | null>((oldest, fact) => {
+    if (oldest === null || fact.reinforced_at < oldest) return fact.reinforced_at;
+    return oldest;
+  }, null);
 
   return (
     <div className="mx-auto w-full max-w-2xl px-5 pt-8 pb-20">
@@ -58,7 +66,11 @@ export default function MemoryPage() {
       </header>
 
       {/* Capacity row */}
-      <CapacityRow used={used} overEighty={overEighty} />
+      <CapacityRow
+        used={used}
+        overEighty={overEighty}
+        oldestReinforcedAt={oldestReinforcedAt}
+      />
 
       {error && (
         <p className="mt-6 rounded-xl bg-warn-wash px-4 py-3 text-sm text-ink-secondary">
@@ -116,11 +128,15 @@ export default function MemoryPage() {
 function CapacityRow({
   used,
   overEighty,
+  oldestReinforcedAt,
 }: {
   used: number;
   overEighty: boolean;
+  oldestReinforcedAt: string | null;
 }) {
   const pct = Math.min(100, (used / MEMORY_CAPACITY) * 100);
+  const oldestDaysAgo =
+    oldestReinforcedAt === null ? null : daysSince(oldestReinforcedAt);
   return (
     <div className="mt-6 rounded-2xl border border-hairline bg-surface px-4 py-3">
       <div className="flex items-center justify-between">
@@ -140,6 +156,11 @@ function CapacityRow({
           style={{ width: `${pct}%` }}
         />
       </div>
+      {oldestDaysAgo !== null && (
+        <div className="mt-2 text-[0.75rem] text-ink-tertiary">
+          oldest fact reinforced {formatDaysAgo(oldestDaysAgo)}
+        </div>
+      )}
       {overEighty && (
         <div className="mt-2 flex items-start gap-2 rounded-xl bg-warn-wash px-3 py-2 text-[0.78rem] text-ink-secondary">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-warn" />
@@ -283,17 +304,31 @@ function FactTile({
 }
 
 function formatProvenance(reinforcedAt: string): string {
-  const reinforced = new Date(reinforcedAt);
-  if (Number.isNaN(reinforced.getTime())) {
-    return "saved from chat";
-  }
-  const ageMs = Date.now() - reinforced.getTime();
+  const days = daysSince(reinforcedAt);
+  if (days === null) return "saved from chat";
+  return `reinforced ${formatDaysAgo(days)}`;
+}
+
+// Whole-day count from an ISO timestamp to "now". Negative ages clamp to
+// 0 — a clock-skew reinforced_at in the future would otherwise show as
+// "-3 days ago." Returns null when the timestamp is unparseable so the
+// caller can fall back to a non-time string.
+function daysSince(iso: string): number | null {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
   const dayMs = 1000 * 60 * 60 * 24;
-  const days = Math.floor(ageMs / dayMs);
-  if (days <= 0) return "reinforced today";
-  if (days === 1) return "reinforced 1 day ago";
-  if (days < 30) return `reinforced ${days} days ago`;
+  return Math.max(0, Math.floor((Date.now() - t) / dayMs));
+}
+
+// Shared age formatter — drops the "reinforced" prefix so the caller can
+// compose it ("reinforced N days ago" vs "oldest fact reinforced N days
+// ago"). Months threshold (30) matches the recency-decay constant in the
+// pg_cron prune scoring (DESIGN.md §7.6).
+function formatDaysAgo(days: number): string {
+  if (days <= 0) return "today";
+  if (days === 1) return "1 day ago";
+  if (days < 30) return `${days} days ago`;
   const months = Math.floor(days / 30);
-  if (months === 1) return "reinforced 1 month ago";
-  return `reinforced ${months} months ago`;
+  if (months === 1) return "1 month ago";
+  return `${months} months ago`;
 }

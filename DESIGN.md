@@ -630,7 +630,7 @@ Categories: `spending_pattern | preference | active_context | card_preference | 
 **Memory cleanup:**
 
 - Time decay: facts older than 90 days that haven't been reinforced are pruned.
-- Capacity cap: hard limit of 60 facts. Claude Haiku scores each fact by recency × relevance and drops the lowest-scoring when over capacity.
+- Capacity cap: soft limit of 60 facts, enforced by a nightly `pg_cron` sweep (Day 17, 03:00 UTC). Prune order is `relevance_score / (1 + days_since_reinforced / 30.0)` ascending — a pure-SQL recency × relevance ranking where day 0 = full score, day 30 = ½, day 60 = ⅓, day 90 = ¼ (then time decay deletes it anyway). Ties are broken by `reinforced_at ASC` so the oldest of equal-ranked rows goes first. Claude Haiku is not called during pruning — `relevance_score` was set at distillation time (§7.6 layer 2), and an extra LLM tiebreaker would re-run the same scoring it already did. Distillation may briefly push a user over the cap; `render_user_memory` already applies `LIMIT 60` so the over-cap rows are invisible to the agent until the next sweep trims them. The Settings memory page lists by lex order (relevance DESC, reinforced_at DESC) and is the one surface where an over-cap row is briefly visible — a tolerable inconsistency given the 24-hour bound.
 - User control: "Show what you remember about me" lists all stored facts. "Forget that I'm planning a trip to Japan" deletes one. Full panel in Settings.
 
 **Why not a vector DB:** at most 60 structured facts. A JSON array in Postgres is faster, simpler, and more debuggable than a vector store. Add a vector DB only if cross-session retrieval ever needs semantic search over long transcripts.
