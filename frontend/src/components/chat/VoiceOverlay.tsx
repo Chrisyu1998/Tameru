@@ -111,10 +111,11 @@ export function VoiceOverlay({
         <button
           type="button"
           onClick={onStop}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-hairline bg-surface text-ink-secondary transition-colors hover:bg-sunken/60"
-          aria-label="stop"
+          className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-surface px-3 py-1.5 text-[0.78rem] text-ink-secondary transition-colors hover:bg-sunken/60 hover:text-ink"
+          aria-label="cancel voice input"
         >
-          <Square className="h-4 w-4" />
+          <Square className="h-3 w-3" />
+          cancel
         </button>
         <button
           type="button"

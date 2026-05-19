@@ -85,11 +85,11 @@ describe("VoiceOverlay — errors", () => {
 });
 
 describe("VoiceOverlay — controls", () => {
-  test("stop button calls onStop", async () => {
+  test("cancel button calls onStop", async () => {
     const onStop = vi.fn();
     const user = userEvent.setup();
     renderOverlay({ onStop });
-    await user.click(screen.getByLabelText("stop"));
+    await user.click(screen.getByLabelText("cancel voice input"));
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 

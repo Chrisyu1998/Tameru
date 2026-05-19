@@ -39,6 +39,14 @@ export interface VoiceError {
 
 interface UseVoiceOptions {
   silenceWindowMs: number;
+  /**
+   * How long to wait for the user to begin speaking before giving up with
+   * a `no-speech` error. Users need much longer to start than they do
+   * between phrases (read the screen, think, then talk). Defaults to
+   * 4 × silenceWindowMs. During this phase `silenceMsLeft` stays 0 so the
+   * countdown ring doesn't visually rush the user.
+   */
+  preSpeechWindowMs?: number;
   onCommit: (finalText: string) => void;
 }
 
@@ -150,8 +158,10 @@ let unsupportedTracked = false;
 
 export function useVoice({
   silenceWindowMs,
+  preSpeechWindowMs,
   onCommit,
 }: UseVoiceOptions): UseVoiceReturn {
+  const preSpeechMs = preSpeechWindowMs ?? silenceWindowMs * 4;
   const [transcript, setTranscript] = useState("");
   const [silenceMsLeft, setSilenceMsLeft] = useState(0);
   const [lang, setLangState] = useState<VoiceLang>(() => resolveInitialLang());
@@ -165,6 +175,9 @@ export function useVoice({
   // Tracks whether we've already committed/stopped so that the trailing
   // `onend` callback doesn't double-commit when the user taps submit-now.
   const settledRef = useRef(false);
+  // False until the first interim/final result arrives. While false we use
+  // the longer pre-speech window and suppress the visible countdown.
+  const hasSpokenRef = useRef(false);
 
   const clearSilenceTimer = () => {
     if (silenceIntervalRef.current !== null) {
@@ -217,8 +230,12 @@ export function useVoice({
 
   const beginSilenceCountdown = useCallback(() => {
     clearSilenceTimer();
-    let remaining = silenceWindowMs;
-    setSilenceMsLeft(remaining);
+    const totalMs = hasSpokenRef.current ? silenceWindowMs : preSpeechMs;
+    let remaining = totalMs;
+    // Only show the countdown ring once the user has actually said
+    // something — otherwise the ring rushes a user who's still reading
+    // the screen.
+    setSilenceMsLeft(hasSpokenRef.current ? remaining : 0);
     silenceIntervalRef.current = window.setInterval(() => {
       remaining -= 100;
       if (remaining <= 0) {
@@ -227,15 +244,16 @@ export function useVoice({
           finalTranscriptRef.current.trim() ||
           interimTranscriptRef.current.trim();
         commit(finalText);
-      } else {
+      } else if (hasSpokenRef.current) {
         setSilenceMsLeft(remaining);
       }
     }, 100);
-  }, [silenceWindowMs, commit]);
+  }, [silenceWindowMs, preSpeechMs, commit]);
 
   const start = useCallback(() => {
     setError(null);
     settledRef.current = false;
+    hasSpokenRef.current = false;
     finalTranscriptRef.current = "";
     interimTranscriptRef.current = "";
     setTranscript("");
@@ -281,7 +299,9 @@ export function useVoice({
       finalTranscriptRef.current = final;
       interimTranscriptRef.current = interim;
       setTranscript((final + interim).trim());
-      // Reset the silence timer on every fresh result.
+      // First audio: flip to the shorter post-speech window and start
+      // showing the visible countdown ring.
+      hasSpokenRef.current = true;
       beginSilenceCountdown();
     };
 

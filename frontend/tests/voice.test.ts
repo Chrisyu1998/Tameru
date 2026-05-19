@@ -186,12 +186,16 @@ describe("useVoice — lifecycle", () => {
   test("silence with no transcript surfaces no-speech instead of stalling", () => {
     const onCommit = vi.fn();
     const { result } = renderHook(() =>
-      useVoice({ silenceWindowMs: 1500, onCommit }),
+      useVoice({
+        silenceWindowMs: 1500,
+        preSpeechWindowMs: 1500,
+        onCommit,
+      }),
     );
 
     act(() => result.current.start());
     // Recognition started but the user said nothing — onstart kicks off the
-    // silence countdown. After it elapses, the hook must surface an error
+    // pre-speech countdown. After it elapses, the hook must surface an error
     // (not silently abort), or the overlay sits open with no recovery path.
     act(() => {
       vi.advanceTimersByTime(1500);
@@ -200,6 +204,48 @@ describe("useVoice — lifecycle", () => {
     expect(onCommit).not.toHaveBeenCalled();
     expect(result.current.error?.code).toBe("no-speech");
     expect(track).toHaveBeenCalledWith("error_shown", { code: "voice_no_speech" });
+  });
+
+  test("pre-speech window is longer than the post-speech window by default", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() =>
+      useVoice({ silenceWindowMs: 1500, onCommit }),
+    );
+
+    act(() => result.current.start());
+    // The post-speech window (1500ms) must not fire while the user is
+    // still gathering their thoughts. The default pre-speech window is
+    // 4× silenceWindowMs (6000ms), so 1500ms in we should still be live.
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(result.current.error).toBeNull();
+    expect(onCommit).not.toHaveBeenCalled();
+
+    // Advance the rest of the pre-speech window to confirm no-speech still
+    // eventually fires as a safety net.
+    act(() => {
+      vi.advanceTimersByTime(4500);
+    });
+    expect(result.current.error?.code).toBe("no-speech");
+  });
+
+  test("silenceMsLeft countdown is suppressed until the first audio result", () => {
+    const onCommit = vi.fn();
+    const { result } = renderHook(() =>
+      useVoice({ silenceWindowMs: 1500, onCommit }),
+    );
+
+    act(() => result.current.start());
+    // Pre-speech: countdown ring stays at 0 so the user isn't rushed.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(result.current.silenceMsLeft).toBe(0);
+
+    // First interim result flips to the visible post-speech countdown.
+    act(() => fakeInstances[0].emitInterim("coffee"));
+    expect(result.current.silenceMsLeft).toBeGreaterThan(0);
   });
 
   test("submitNow with no transcript also surfaces no-speech", () => {

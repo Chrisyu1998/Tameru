@@ -131,8 +131,8 @@ describe("ChatPage — voice flow", () => {
     const user = userEvent.setup();
     renderChat();
     await user.click(screen.getByLabelText("record voice"));
-    // The overlay is identified by its stop button.
-    expect(screen.getByLabelText("stop")).toBeInTheDocument();
+    // The overlay is identified by its cancel button.
+    expect(screen.getByLabelText("cancel voice input")).toBeInTheDocument();
   });
 
   test("voice commit invokes chatStore.send with the transcript", async () => {
