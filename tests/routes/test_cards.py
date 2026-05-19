@@ -29,6 +29,7 @@ canonical lowercase identifiers (`chase`, `amex`, `capital_one`, …).
 from __future__ import annotations
 
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -613,6 +614,201 @@ def test_ai_call_log_records_card_lookup_invocation(client, user_a, stub_lookup)
 
 
 # ---------------------------------------------------------------------------
+# Day 19b — AF dual-write + split-cascade on soft-delete
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_with_af_date_creates_companion_subscription(
+    client, user_a, stub_lookup  # noqa: ARG001 — lookup stub keeps `lookup_card` silent
+):
+    """`next_annual_fee_date` + non-zero `annual_fee` creates a companion sub.
+
+    Day 19b. The companion subscription has `frequency='annual'`,
+    `category='Subscriptions'`, name '{card_name} annual fee', a fresh
+    server-side `client_request_id`, and `start_date` / `next_billing_date`
+    both equal to the supplied renewal date.
+    """
+    from uuid import uuid4
+
+    tag = _tag()
+    renewal = (date.today() + timedelta(days=30)).isoformat()
+    card_name = f"AF-{tag}"
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "1"),
+        name=card_name,
+        issuer="capital_one",
+        annual_fee="550",
+        next_annual_fee_date=renewal,
+        client_request_id=str(uuid4()),
+    )
+    resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert resp.status_code == 200, resp.text
+    card_id = resp.json()["id"]
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    af = [s for s in subs if s["card_id"] == card_id]
+    assert len(af) == 1, "expected exactly one companion AF subscription"
+    sub = af[0]
+    assert sub["name"] == f"{card_name} annual fee"
+    assert sub["category"] == "Subscriptions"
+    assert sub["frequency"] == "annual"
+    assert sub["next_billing_date"] == renewal
+    assert sub["start_date"] == renewal
+    assert sub["client_request_id"] is not None
+
+
+def test_confirm_without_af_date_creates_no_subscription(
+    client, user_a, stub_lookup  # noqa: ARG001
+):
+    """No `next_annual_fee_date` → no companion subscription created."""
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "2"),
+        name=f"NoAF-{tag}",
+        issuer="chase",
+        annual_fee="95",
+    )
+    resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert resp.status_code == 200
+    card_id = resp.json()["id"]
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    af = [s for s in subs if s["card_id"] == card_id]
+    assert af == []
+
+
+def test_confirm_with_zero_af_creates_no_subscription(
+    client, user_a, stub_lookup  # noqa: ARG001
+):
+    """`annual_fee=0` → no companion subscription, even with a date."""
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "3"),
+        name=f"ZeroAF-{tag}",
+        issuer="capital_one",
+        annual_fee="0",
+        next_annual_fee_date=(date.today() + timedelta(days=30)).isoformat(),
+    )
+    resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert resp.status_code == 200
+    card_id = resp.json()["id"]
+
+    subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    af = [s for s in subs if s["card_id"] == card_id]
+    assert af == []
+
+
+def test_confirm_rejects_past_af_renewal_date(
+    client, user_a, stub_lookup  # noqa: ARG001
+):
+    """`next_annual_fee_date < today` → 422 from the CardProposal validator.
+
+    Day 19b. Strictly past dates would make pg_cron auto-log immediately
+    on the next run, which is confusing UX. Same-day is legitimate (the
+    card might charge the AF today) and accepted.
+    """
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "4"),
+        name=f"PastAF-{tag}",
+        issuer="capital_one",
+        annual_fee="550",
+        next_annual_fee_date=(date.today() - timedelta(days=1)).isoformat(),
+    )
+    resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert resp.status_code == 422
+
+
+def test_soft_delete_cascades_af_to_cancelled_regular_to_paused(
+    client, user_a, stub_lookup  # noqa: ARG001
+):
+    """The Day 19 split-cascade fires on `DELETE /cards/{id}`.
+
+    Setup: one card with an AF subscription, plus a regular Netflix
+    subscription on the same card. Soft-delete the card.
+
+    Expected (DESIGN.md §8.3):
+      - AF subscription flips to `status='cancelled'` (the fee is bound
+        to this physical card; there is no reassignment path).
+      - Regular subscription flips to `status='paused'` (the user picks
+        a new card via PATCH to resume).
+    """
+    from uuid import uuid4
+
+    tag = _tag()
+    renewal = (date.today() + timedelta(days=30)).isoformat()
+    card_name = f"Cascade-{tag}"
+    # Create the card with an AF (dual-writes the companion subscription).
+    card = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "5"),
+        name=card_name,
+        issuer="capital_one",
+        annual_fee="550",
+        next_annual_fee_date=renewal,
+        client_request_id=str(uuid4()),
+    )
+    card_resp = client.post("/cards/confirm", headers=_auth(user_a), json=card)
+    assert card_resp.status_code == 200
+    card_id = card_resp.json()["id"]
+
+    # Add a regular Netflix subscription on the same card.
+    regular_proposal = {
+        "name": f"Netflix-{tag}",
+        "amount": "15.99",
+        "frequency": "monthly",
+        "start_date": date.today().isoformat(),
+        "next_billing_date": (date.today() + timedelta(days=30)).isoformat(),
+        "category": "Streaming",
+        "card_id": card_id,
+        "client_request_id": str(uuid4()),
+    }
+    regular_resp = client.post(
+        "/subscriptions/confirm",
+        headers=_auth(user_a),
+        json=regular_proposal,
+    )
+    assert regular_resp.status_code == 200
+    regular_id = regular_resp.json()["id"]
+
+    # Soft-delete the card.
+    delete_resp = client.delete(f"/cards/{card_id}", headers=_auth(user_a))
+    assert delete_resp.status_code == 204
+
+    # Read every subscription (including cancelled / paused) for user_a.
+    all_subs = client.get(
+        "/subscriptions",
+        headers=_auth(user_a),
+        params={"status": "all", "include_card_af": "true"},
+    ).json()["items"]
+    af = next(
+        s for s in all_subs if s["card_id"] == card_id and "annual fee" in s["name"]
+    )
+    regular = next(s for s in all_subs if s["id"] == regular_id)
+
+    assert af["status"] == "cancelled", f"AF should be cancelled, got {af['status']}"
+    assert regular["status"] == "paused", (
+        f"regular sub should be paused, got {regular['status']}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers — mirror tests/routes/test_transactions.py conventions.
 # ---------------------------------------------------------------------------
 
@@ -653,6 +849,7 @@ def _proposal(
     program: str = "Other",
     multipliers: dict[str, float] | None = None,
     annual_fee: str | None = None,
+    next_annual_fee_date: str | None = None,
     source_urls: list[str] | None = None,
     alias: str | None = None,
     needs_manual: bool = False,
@@ -663,6 +860,9 @@ def _proposal(
     `client_request_id` defaults to a fresh UUID per call so tests
     aren't forced to thread one in for every case. Tests that want to
     drive crid-replay behavior pass an explicit value.
+
+    `next_annual_fee_date` (Day 19b) drives the companion-AF-subscription
+    dual-write when set alongside a non-zero `annual_fee`.
     """
     from uuid import uuid4
 
@@ -679,6 +879,8 @@ def _proposal(
     }
     if annual_fee is not None:
         body["annual_fee"] = annual_fee
+    if next_annual_fee_date is not None:
+        body["next_annual_fee_date"] = next_annual_fee_date
     if alias is not None:
         body["alias"] = alias
     return body

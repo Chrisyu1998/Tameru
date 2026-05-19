@@ -16,7 +16,7 @@ A Playwright suite covers the golden path. PWA Lighthouse score holds ≥ 90. Pr
   - Test 3 — **Edit a transaction via the list:** tap Breakdown → tap "Dining" → tap "see all dining" → tap a row → edit sheet opens → change amount → Save → list reflects the change.
   - Test 4 — **CSV import:** upload a fixture CSV → preview → confirm → progress events stream → final count matches.
   - Test 5 — **Ask AI chat one question:** type "how much did I spend on groceries last week?" → see streaming → see answer with the right number → assert no console errors.
-  - Test 6 — **Add subscription via chat, run cron, see auto-logged transaction:** in chat, say "add my Netflix subscription, $15/month, starts today" → confirm parse card → manually invoke `autolog_subscriptions()` via a test endpoint → assert new transaction with 🔄 badge.
+  - Test 6 — **Add subscription via chat, run cron, see auto-logged transaction:** in chat, say "add my Netflix subscription, $15/month, starts today" → confirm parse card → assert the `subscriptions` row exists with `next_billing_date = today + 1 month` (per the §8.3 forward-only rule — past cycles are never backfilled, so a fresh subscription will not auto-log on the same day). Then fast-forward via a test endpoint that sets `next_billing_date = today` on that row, manually invoke `autolog_subscriptions()`, and assert one new transaction with 🔄 badge.
   - Test 7 — **Sign out:** click sign out → land on `/signin` → reload → still signed out.
 - `.github/workflows/e2e.yml`:
   - On push to `main`, after deploy to Railway, runs Playwright against the deployed URL.

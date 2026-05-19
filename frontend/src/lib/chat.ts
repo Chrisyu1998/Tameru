@@ -205,6 +205,62 @@ export interface AssistantCardParseMessage {
   pendingSync?: boolean;
 }
 
+/**
+ * Subscription parse-card draft — Day 19. Editable slice of a
+ * `propose_subscription` tool result. The user can tweak `amount`,
+ * `category`, `cardId`, and `name` before tapping "looks right";
+ * `frequency` and `startDate` render read-only because they're
+ * immutable post-commit (DESIGN.md §8.3) — to change either, the user
+ * cancels and re-adds. `nextBillingDate` is computed by the backend's
+ * forward-only rule and shown to set expectations ("first auto-log on
+ * {date}; today's charge isn't backfilled").
+ *
+ * `cardId` is `string | null`: omit for bank-ACH bills like rent or
+ * utilities (the backend allows `subscriptions.card_id = NULL` since
+ * Day 19's nullable migration).
+ */
+export interface SubscriptionParseDraft {
+  name: string;
+  /** Decimal string (matches the wire shape on `/subscriptions/confirm`). */
+  amount: string;
+  frequency: "monthly" | "quarterly" | "annual" | "weekly";
+  /** ISO date YYYY-MM-DD. */
+  startDate: string;
+  /** ISO date YYYY-MM-DD — forward-only-clamped by the backend. */
+  nextBillingDate: string;
+  category: Category;
+  /** `null` for cardless ACH subscriptions. */
+  cardId: string | null;
+  /**
+   * Stable per-proposal join key from `propose_subscription`. Posted
+   * back at `/subscriptions/confirm`; persists on the row. Drives the
+   * chat-rehydrate annotation's 1:1 join and the offline-queue drain's
+   * in-memory match priority (crid → messageId).
+   */
+  clientRequestId?: string;
+}
+
+export interface AssistantSubscriptionParseMessage {
+  id: string;
+  role: "assistant";
+  kind: "subscription-parse";
+  preface?: string;
+  draft: SubscriptionParseDraft;
+  /** Set after the user successfully commits this draft. */
+  committedSubscriptionId?: string;
+  /**
+   * Lifecycle of the committed subscription, sourced from the
+   * rehydrate annotation. `'active'` / `'paused'` mean the sub is
+   * still tracked; `'cancelled'` is terminal (cancel-then-re-add
+   * doctrine per §8.3). Drives the badge text on the parse card.
+   */
+  committedState?: "active" | "paused" | "cancelled";
+  /** `true` for rehydrated read-only history. Mirrors the other parses. */
+  frozen?: boolean;
+  /** `true` between offline tap and drain. Mirrors the other parses. */
+  pendingSync?: boolean;
+}
+
 export type ChatMessage =
   | UserMessage
   | AssistantTextMessage
@@ -213,7 +269,8 @@ export type ChatMessage =
   | AssistantChartMessage
   | AssistantRichChartMessage
   | AssistantInsightMessage
-  | AssistantCardParseMessage;
+  | AssistantCardParseMessage
+  | AssistantSubscriptionParseMessage;
 
 /* ─── Parse draft (the commit surface) ───────────────────────────── */
 

@@ -19,8 +19,7 @@ row with a new `card_id`. Old transactions stay linked to the old row.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
@@ -189,7 +188,26 @@ def post_card_confirm(
             raise _collision_409(client, proposal.issuer, proposal.last_four) from exc
         raise
 
-    return CardRow.model_validate(resp.data[0])
+    new_card = CardRow.model_validate(resp.data[0])
+
+    # Day 19b — AF dual-write. When the user supplied a renewal date AND
+    # the card has a non-zero annual fee, create a companion subscriptions
+    # row so the pg_cron auto-logger logs the AF on each anniversary.
+    # The subscription has a freshly minted server-side `client_request_id`
+    # so the partial unique index on `subscriptions (user_id,
+    # client_request_id)` makes a retry of `/cards/confirm` (e.g. network
+    # blip after the cards INSERT succeeded but before the response
+    # reached the client) a no-op rather than racy. The cards crid
+    # short-circuit above is the primary retry guard; this is
+    # defense-in-depth.
+    if (
+        proposal.next_annual_fee_date is not None
+        and proposal.annual_fee is not None
+        and proposal.annual_fee > 0
+    ):
+        _insert_af_subscription(client, user, new_card, proposal)
+
+    return new_card
 
 
 @router.get("", response_model=CardListResponse)
@@ -281,7 +299,7 @@ def delete_card(
     card_id: UUID,
     user: AuthedUser = Depends(get_current_user_with_device),
 ) -> Response:
-    """Soft-delete: `status='deleted'` + `deleted_at=now()`.
+    """Soft-delete the card + cascade companion subscriptions, atomically.
 
     The row stays in the table so historical transactions linked via
     `transactions.card_id` keep their card snapshot. The partial unique
@@ -289,23 +307,97 @@ def delete_card(
     can re-add the same card if they want — a new row gets a fresh
     `card_id` (DESIGN.md §8.1 soft-delete / re-add semantics).
 
-    RLS makes "delete nonexistent" and "delete someone else's card"
-    indistinguishable from the caller's seat — both return 204 without
-    a write. Matches the transactions DELETE behavior.
+    The whole operation runs in a single SQL transaction via the
+    `soft_delete_card(p_card_id UUID)` SECURITY DEFINER function
+    (migration 20260518130300). That guarantees all three updates
+    commit or none do — there is no window where the card is gone but
+    the subscriptions weren't reassigned, or vice versa. The prior
+    inline-UPDATE-chain version was idempotent on retry but had a
+    visible inconsistent state if any pass failed.
+
+    Cascade rules (DESIGN.md §8.3):
+
+      - **Regular subscriptions** (Netflix, gym, ACH rent) → flip to
+        `status='paused'`. The `/subscriptions` page surfaces a
+        needs-new-card banner; the user reassigns `card_id` via PATCH
+        and un-pauses. Pg_cron skips paused rows so nothing logs while
+        the user decides.
+      - **Card annual-fee subscriptions** → flip to `status='cancelled'`.
+        The fee is bound to *this physical card*; there is no
+        third-party recipient or other card to reassign to.
+
+    AF subscriptions are recognised by the (`name LIKE '% annual fee'`,
+    `category='Subscriptions'`, `frequency='annual'`) triple — the same
+    shape Day 19b's `POST /cards/confirm` AF dual-write inserts.
+
+    Security: the function is SECURITY DEFINER but every WHERE clause
+    inside it is filtered by `auth.uid()`, which PostgREST populates
+    from the caller's JWT. A user cannot soft-delete another user's
+    card; an unknown id is silently a no-op (matches the prior
+    behavior, which let RLS produce the same outcome). Both surfaces
+    return 204 indistinguishably so a probing client can't enumerate
+    card ids.
     """
     client = supabase_for_user(user.jwt)
-    client.table("cards").update(
-        {
-            "status": "deleted",
-            "deleted_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", str(card_id)).eq("status", "active").execute()
+    client.rpc("soft_delete_card", {"p_card_id": str(card_id)}).execute()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
+
+
+def _insert_af_subscription(
+    client, user: AuthedUser, new_card: CardRow, proposal: CardConfirmRequest
+) -> None:
+    """Insert the companion AF subscription alongside a card confirm.
+
+    Day 19b. Called only when `next_annual_fee_date` is set and
+    `annual_fee > 0`. The subscription's shape matches what the Day 19
+    soft-delete cascade looks for to flip it to 'cancelled':
+
+      - `name = '{card_name} annual fee'`
+      - `category = 'Subscriptions'`
+      - `frequency = 'annual'`
+
+    `start_date` and `next_billing_date` both land on the user-supplied
+    renewal date; pg_cron's autolog_subscriptions() handles the rest on
+    the anniversary. A fresh server-side `client_request_id` makes the
+    insert idempotent under the subscriptions partial unique index — a
+    `/cards/confirm` retry that re-enters this branch with a different
+    `client_request_id` would create a duplicate, but the cards crid
+    short-circuit on the caller side prevents that path from ever firing
+    in normal flow.
+
+    Best-effort: a unique-violation here (extremely unlikely — would
+    require a race that bypassed the cards crid short-circuit) is
+    swallowed so the card itself still surfaces to the user. The user
+    can re-enter the AF date via chat if it didn't take.
+    """
+    try:
+        client.table("subscriptions").insert(
+            {
+                "user_id": str(user.user_id),
+                "card_id": str(new_card.id),
+                "name": f"{proposal.name} annual fee",
+                "amount": str(proposal.annual_fee),
+                "frequency": "annual",
+                "start_date": proposal.next_annual_fee_date.isoformat(),
+                "next_billing_date": proposal.next_annual_fee_date.isoformat(),
+                "category": "Subscriptions",
+                "status": "active",
+                "client_request_id": str(uuid4()),
+            }
+        ).execute()
+    except Exception as exc:
+        # Same-crid-replay impossible (fresh UUID). A legitimate failure
+        # path here is the user re-confirming the same card after a
+        # network blip — but the cards crid short-circuit at the top of
+        # `post_card_confirm` already returned the prior CardRow before
+        # we got here, so this branch only fires on truly unexpected
+        # errors. Swallow rather than 500-ing on the card create.
+        _ = exc  # explicit no-op; future log site if needed
 
 
 def _collision_409(

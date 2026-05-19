@@ -11,6 +11,7 @@ from app.routes import chat as chat_routes
 from app.routes import dashboard as dashboard_routes
 from app.routes import goals as goals_routes
 from app.routes import memory as memory_routes
+from app.routes import subscriptions as subscriptions_routes
 from app.routes import transactions as transactions_routes
 
 app = FastAPI(title="Tameru")
@@ -84,3 +85,4 @@ app.include_router(dashboard_routes.router)
 app.include_router(cards_routes.router)
 app.include_router(memory_routes.router)
 app.include_router(goals_routes.router)
+app.include_router(subscriptions_routes.router)

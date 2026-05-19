@@ -8,3 +8,8 @@ dist-ssr
 .DS_Store
 .vite
 *.tsbuildinfo
+
+# Playwright (Day 19 e2e)
+test-results/
+playwright-report/
+.playwright-cache/

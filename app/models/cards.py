@@ -159,6 +159,15 @@ class CardProposal(BaseModel):
     program: CardProgram = "Other"
     multipliers: dict[str, float] = Field(default_factory=dict)
     annual_fee: Decimal | None = None
+    # Day 19b — optional renewal date for card annual-fee tracking. When
+    # set alongside `annual_fee > 0`, `POST /cards/confirm` creates a
+    # companion `subscriptions` row (frequency='annual', category=
+    # 'Subscriptions', name='{card_name} annual fee') so the pg_cron
+    # auto-logger logs the AF on each anniversary. Optional — users who
+    # don't know the date skip it; the card still saves and AF tracking
+    # is just unavailable. Cannot be inferred from web_search (per-user
+    # fact). DESIGN.md §6.5, §8.1.
+    next_annual_fee_date: _dt.date | None = None
     source_urls: list[str] = Field(default_factory=list)
     color: str | None = None
     alias: str | None = None
@@ -195,6 +204,22 @@ class CardProposal(BaseModel):
         """Reject negative annual fees. Zero is legal (no-fee cards)."""
         if value is not None and value < 0:
             raise ValueError(f"annual_fee must be >= 0 (got {value})")
+        return value
+
+    @field_validator("next_annual_fee_date")
+    @classmethod
+    def _v_next_annual_fee_date(cls, value: _dt.date | None) -> _dt.date | None:
+        """Reject strictly-past renewal dates. Same-day is legitimate.
+
+        Past-date rejection prevents the pg_cron auto-logger from
+        immediately firing on a date the user typed by mistake. Same-day
+        renewals are legitimate (the card might charge the AF today).
+        DESIGN.md §6.5 forward-only rule.
+        """
+        if value is not None and value < _dt.date.today():
+            raise ValueError(
+                f"next_annual_fee_date must be today or later (got {value})"
+            )
         return value
 
 

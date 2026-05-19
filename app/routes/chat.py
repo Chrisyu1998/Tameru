@@ -377,7 +377,11 @@ def _persist_turn(
     augmented_blocks = list(assistant_blocks)
     for tc in tool_calls:
         name = tc.get("name")
-        if name not in ("propose_transaction", "propose_card"):
+        if name not in (
+            "propose_transaction",
+            "propose_card",
+            "propose_subscription",
+        ):
             continue
         result = tc.get("result")
         # Skip is_error tool results — _renderTurn on the client never
@@ -533,7 +537,11 @@ def _extract_proposals_from_trace(
             if block.get("type") != "tool_use":
                 continue
             name = block.get("name")
-            if name not in ("propose_transaction", "propose_card"):
+            if name not in (
+                "propose_transaction",
+                "propose_card",
+                "propose_subscription",
+            ):
                 continue
             tool_use_id = block.get("id")
             result = results_by_id.get(tool_use_id) if isinstance(tool_use_id, str) else None
@@ -593,6 +601,7 @@ def _annotate_committed_proposals(
     crid_set: set[str] = set()
     card_crid_set: set[str] = set()
     card_name_set: set[str] = set()
+    sub_crid_set: set[str] = set()
     for row in rows:
         if row.get("role") != "assistant":
             continue
@@ -618,6 +627,14 @@ def _annotate_committed_proposals(
                     name = result.get("name")
                     if isinstance(name, str) and name:
                         card_name_set.add(name)
+            elif tool_name == "propose_subscription":
+                # Subscriptions are crid-only — propose_subscription always
+                # mints a fresh UUID (Day 19) and there's no legacy
+                # name-only path because the tool wasn't shipped before
+                # the crid column existed.
+                sub_crid = result.get("client_request_id")
+                if isinstance(sub_crid, str) and sub_crid:
+                    sub_crid_set.add(sub_crid)
 
     # `committed_txs` maps crid → full row dict. Same shape for cards
     # (keyed by `name`). The full row is kept so we can stitch
@@ -700,7 +717,45 @@ def _annotate_committed_proposals(
             if prior is None or (prior_status != "active" and row_status == "active"):
                 committed_cards_by_name[name] = r
 
-    if not committed_txs and not committed_cards_by_crid and not committed_cards_by_name:
+    # Subscriptions — Day 19. Crid-only join (no legacy name-fallback
+    # path because `propose_subscription` didn't ship pre-crid). Same
+    # active-wins / first-deleted-wins picking logic as transactions and
+    # cards. Subscriptions have three lifecycle states; for the rehydrate
+    # badge we collapse the picking rule to "active or paused wins over
+    # cancelled" so the parse card distinguishes `tracking.` / `paused.`
+    # from `cancelled.` correctly.
+    _sub_select = (
+        "id, name, amount, frequency, start_date, next_billing_date, "
+        "category, card_id, status, client_request_id"
+    )
+    committed_subs_by_crid: dict[str, dict[str, Any]] = {}
+    if sub_crid_set:
+        sub_resp = (
+            client.table("subscriptions")
+            .select(_sub_select)
+            .in_("client_request_id", list(sub_crid_set))
+            .execute()
+        )
+        for r in sub_resp.data or []:
+            row_crid = r.get("client_request_id")
+            sub_id = r.get("id")
+            row_status = r.get("status") or "active"
+            if not (isinstance(row_crid, str) and isinstance(sub_id, str)):
+                continue
+            prior = committed_subs_by_crid.get(row_crid)
+            prior_status = (prior or {}).get("status") if prior else None
+            # Non-cancelled rows win; among same-status the first wins.
+            if prior is None or (
+                prior_status == "cancelled" and row_status != "cancelled"
+            ):
+                committed_subs_by_crid[row_crid] = r
+
+    if (
+        not committed_txs
+        and not committed_cards_by_crid
+        and not committed_cards_by_name
+        and not committed_subs_by_crid
+    ):
         return
 
     for row in rows:
@@ -736,6 +791,17 @@ def _annotate_committed_proposals(
                     block["committed_id"] = matched["id"]
                     block["committed_state"] = matched.get("status") or "active"
                     block["committed_payload"] = _card_committed_payload(matched)
+            elif tool_name == "propose_subscription":
+                # Crid-only join (Day 19 shipped post-crid; no legacy
+                # name fallback). Returns the row's current `status` so
+                # the frontend can render `tracking.` / `paused.` /
+                # `cancelled.` correctly on rehydrate.
+                sub_crid = result.get("client_request_id")
+                if isinstance(sub_crid, str) and sub_crid in committed_subs_by_crid:
+                    matched = committed_subs_by_crid[sub_crid]
+                    block["committed_id"] = matched["id"]
+                    block["committed_state"] = matched.get("status") or "active"
+                    block["committed_payload"] = _sub_committed_payload(matched)
 
 
 def _tx_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -756,6 +822,26 @@ def _tx_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
         "card_id": row.get("card_id"),
         "category": row.get("category"),
         "notes": row.get("notes"),
+    }
+
+
+def _sub_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a subscriptions row into the `committed_payload` projection.
+
+    Mirrors the fields the frontend `_proposalToSubscriptionDraft` builds
+    a `SubscriptionParseDraft` from. The chat-side draft and the wire
+    SubscriptionProposal share the same snake_case names, so this is a
+    direct passthrough of the editable / displayed columns.
+    """
+    return {
+        "client_request_id": row.get("client_request_id"),
+        "name": row.get("name"),
+        "amount": row.get("amount"),
+        "frequency": row.get("frequency"),
+        "start_date": row.get("start_date"),
+        "next_billing_date": row.get("next_billing_date"),
+        "category": row.get("category"),
+        "card_id": row.get("card_id"),
     }
 
 

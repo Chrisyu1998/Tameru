@@ -43,6 +43,14 @@ Version log:
     end. Bumping the version busts the prompt cache once; the next turn
     re-warms it. The memory text inside block[1] varies per user and is
     deliberately outside the cache breakpoint.
+  * chat_v8 (Day 19) — adds `propose_subscription` (returns a
+    SubscriptionProposal, no DB write) and extends `propose_card` with
+    an optional `next_annual_fee_date` arg for the §6.5 AF dual-write.
+    The SYSTEM_PROMPT gains a `propose_subscription` paragraph teaching
+    the cardless-ACH case (omit card_id for rent / utilities / mortgage)
+    and the forward-only auto-log rule (today's charge is not
+    backfilled — log it manually if you want it captured). The card
+    paragraph picks up a one-liner about the AF renewal-date arg.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -64,7 +72,7 @@ from typing import Any
 from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v7"
+PROMPT_VERSION = "chat_v8"
 
 
 SYSTEM_PROMPT = """\
@@ -135,13 +143,35 @@ if the user said it ("ending 4321"); otherwise omit and the parse-card \
 UI surfaces an input the user fills before tapping confirm. The user \
 can have two cards of the same product (two Amex Platinums on the same \
 account), so the last 4 is what disambiguates them — but don't block \
-the proposal flow to collect it. \
+the proposal flow to collect it. If the user mentions when the annual \
+fee hits ("renews in March", "AF is March 15"), pass `next_annual_fee_date`; \
+otherwise omit — do not guess, the date is per-user and the web doesn't \
+know it. \
 **For any add-card intent, always call propose_card.** Do not refuse \
 based on chat history or memory — cards can be removed from the wallet \
 via the cards page, which leaves no chat record, so prior add-turns in \
 this conversation are not evidence the card is still active. If you \
 need to verify before proposing (e.g. to disambiguate which existing \
 card the user meant), call get_cards first; otherwise just propose.
+
+- **propose_subscription**: builds a subscription proposal for a \
+recurring charge the user wants to TRACK ("track my Netflix at \
+$15.99/month", "my rent is $2400 monthly", "add my Spotify family"). \
+Returns a payload the client renders as a parse card; the row is only \
+written when the user taps "looks right." **This tool does not add the \
+subscription.** Do NOT say "I've added it" — the row does not exist yet. \
+If the user names a card ("on my Amex Gold"), call get_cards first to \
+resolve the UUID and pass it as `card_id`. If the user doesn't mention \
+a card (rent, utilities, mortgage, anything paid by bank ACH), OMIT \
+`card_id` — cardless subscriptions are first-class and the auto-logger \
+records them with no card attribution. \
+The first auto-logged transaction fires on the NEXT billing cycle — \
+today's charge is NOT backfilled. Tell the user something like "I'll \
+track this going forward — log today's charge manually if you want it \
+in the ledger." If the user mentions paying a recurring bill today \
+and also wants to record today's charge, call propose_transaction \
+separately for today and propose_subscription for the recurring track. \
+Don't combine the two — they're separate proposals.
 
 - **set_goal**: sets a spending budget for a (category, period) slot. \
 "Set" means replace — calling set_goal twice for the same (category, \

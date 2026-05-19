@@ -72,7 +72,7 @@ def authed_user_b(user_b) -> AuthedUser:
 def test_registry_contains_expected_surface():
     """Verify the registry holds reads + the propose surface + set_goal + render_chart.
 
-    Cumulative as of Day 14:
+    Cumulative as of Day 19:
       * Day 9a — read tools (`calculate_total`, `get_transactions`,
         `get_subscriptions`, `get_spending_summary`, `get_cards`).
       * Day 9b — `propose_transaction` (propose-then-confirm) and
@@ -81,10 +81,10 @@ def test_registry_contains_expected_surface():
         charts; see app/agent/tools.py:render_chart).
       * Day 14 — `propose_card` (returns a CardProposal; the row commits
         via `POST /cards/confirm` after the user taps "looks right").
-
-    `propose_subscription` remains out — it lands on Day 19 alongside its
-    confirm endpoint. If it slips in early, this test fails as the
-    structural alarm.
+      * Day 19 — `propose_subscription` (returns a SubscriptionProposal;
+        the row commits via `POST /subscriptions/confirm` after the
+        user taps "looks right"). Both cardful and cardless (bank-ACH)
+        proposals are supported — DESIGN.md §8.3.
     """
     expected = {
         "calculate_total",
@@ -94,14 +94,13 @@ def test_registry_contains_expected_surface():
         "get_cards",
         "propose_transaction",
         "propose_card",
+        "propose_subscription",
         "set_goal",
         "render_chart",
     }
     assert set(TOOL_REGISTRY) == expected, (
-        "Reads + propose_transaction + propose_card + set_goal + "
-        "render_chart are the expected v1 surface. propose_subscription "
-        "belongs to Day 19; if it landed early, this test failing is "
-        "the alarm."
+        "Reads + propose_transaction + propose_card + propose_subscription "
+        "+ set_goal + render_chart are the expected v1 surface."
     )
 
 
@@ -755,6 +754,18 @@ def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
             "network": "visa",
             "last_four": "0000",
             "program": "Dispatch Test Card",
+        },
+        # propose_subscription: a minimal cardless proposal — the dispatch
+        # smoke test exercises the ProposeSubscriptionRequest validation +
+        # the compute_next_billing_date forward-only path. No DB write
+        # happens (the tool returns a proposal; commit goes through the
+        # confirm endpoint).
+        "propose_subscription": {
+            "name": "Dispatch Sub",
+            "amount": 1,
+            "frequency": "monthly",
+            "start_date": "2026-05-13",
+            "category": "Subscriptions",
         },
         # `Drugstores`/`year` is unused by other set_goal tests in this
         # file so this smoke test won't race with their assertions on a

@@ -27,6 +27,7 @@ import {
   type ChartSpec,
   type ChatMessage,
   type ParseDraft,
+  type SubscriptionParseDraft,
   type ToolName,
 } from "./chat";
 import { ledger } from "./ledger";
@@ -62,6 +63,13 @@ import type {
   CardRow,
 } from "./cardsApi";
 import type { PersistedQueueEntry } from "./offline_queue";
+import { addSubscriptionLocal } from "./subscriptions";
+import {
+  confirmSubscription,
+  type Frequency as SubFrequency,
+  type SubscriptionProposal,
+  type SubscriptionRow,
+} from "./subscriptionsApi";
 
 type Listener = () => void;
 
@@ -504,6 +512,108 @@ export const chatStore = {
     }
   },
 
+  /**
+   * Commit a subscription parse draft to the backend — Day 19.
+   *
+   * Shape mirrors `commitDraft` / `commitCardDraft`: validate the
+   * draft, build the SubscriptionProposal body, POST, flip the
+   * parse card to committed. On a thrown `ApiError` we surface a
+   * user-facing message; on a network failure (non-ApiError) we
+   * enqueue under `kind: "subscription"` so the offline queue
+   * drains it on reconnect. The crid-based idempotency on the
+   * server side makes a drain retry of an already-committed proposal
+   * return the existing row rather than 23505.
+   */
+  async commitSubscriptionDraft(
+    msgId: string,
+    draft: SubscriptionParseDraft | null,
+  ) {
+    if (!draft) return;
+    if (!draft.clientRequestId) {
+      // Defensive — the backend annotation join would be impossible.
+      appendAssistantText(
+        "this subscription draft is missing its proposal id — try asking again.",
+      );
+      return;
+    }
+    if (!/^\d+(?:\.\d{1,2})?$/.test(draft.amount.trim())) {
+      appendAssistantText(
+        "amount has to be a positive number with up to two decimals.",
+      );
+      return;
+    }
+
+    const body: SubscriptionProposal = {
+      name: draft.name,
+      amount: draft.amount,
+      frequency: draft.frequency,
+      start_date: draft.startDate,
+      next_billing_date: draft.nextBillingDate,
+      category: draft.category,
+      card_id: draft.cardId,
+      client_request_id: draft.clientRequestId,
+    };
+
+    try {
+      const sub = await confirmSubscription(body);
+      addSubscriptionLocal(sub);
+      const committedMessages = state.messages.map((m) =>
+        m.id === msgId &&
+        m.role === "assistant" &&
+        m.kind === "subscription-parse"
+          ? {
+              ...m,
+              draft,
+              committedSubscriptionId: sub.id,
+              committedState: sub.status,
+              pendingSync: false,
+            }
+          : m,
+      );
+      setState({ messages: committedMessages });
+    } catch (err) {
+      if (!(err instanceof ApiError)) {
+        const ownerUserId = useAppStore.getState().user?.id;
+        if (!ownerUserId) {
+          // eslint-disable-next-line no-console
+          console.error(
+            "commitSubscriptionDraft: cannot enqueue, not signed in",
+            err,
+          );
+          appendAssistantText(
+            "you need to be signed in to track subscriptions.",
+          );
+          return;
+        }
+        const { enqueue } = await import("./offline_queue");
+        await enqueue({
+          ownerUserId,
+          kind: "subscription",
+          payload: body,
+          messageId: msgId,
+        });
+        setState({
+          messages: state.messages.map((m) =>
+            m.id === msgId &&
+            m.role === "assistant" &&
+            m.kind === "subscription-parse"
+              ? { ...m, draft, pendingSync: true }
+              : m,
+          ),
+        });
+        return;
+      }
+      // eslint-disable-next-line no-console
+      console.error(
+        "commitSubscriptionDraft → /subscriptions/confirm failed",
+        err,
+      );
+      appendAssistantText(
+        "couldn't track that subscription. try again in a moment.",
+      );
+    }
+  },
+
   /* ─── Offline drain hooks (called from offline_queue.ts) ───────── */
 
   /**
@@ -600,6 +710,44 @@ export const chatStore = {
   },
 
   /**
+   * Drain handler for a 2xx `POST /subscriptions/confirm` from a queued
+   * entry (Day 19). Lands the new row in the subscriptions store for
+   * immediate render on `/subscriptions`, and flips any matching
+   * in-memory subscription-parse card to its committed state — same
+   * shape as the transaction success hook.
+   *
+   * Match priority mirrors the cards path: crid first (rehydrate-stable
+   * join key), messageId second (legacy same-session fallback). No
+   * analog of the card 409 path: subscriptions dedup via
+   * `client_request_id` (a replay returns the existing row with 2xx,
+   * not 409), so a successful drain is the only terminal-success
+   * outcome.
+   */
+  applyDrainSubscriptionSuccess(
+    match: { clientRequestId: string; messageId?: string },
+    subscription: SubscriptionRow,
+  ): void {
+    addSubscriptionLocal(subscription);
+    const next = state.messages.map((m) => {
+      if (m.role !== "assistant" || m.kind !== "subscription-parse") return m;
+      const isMatch =
+        (!!m.draft.clientRequestId &&
+          m.draft.clientRequestId === match.clientRequestId) ||
+        (!!match.messageId && m.id === match.messageId);
+      if (!isMatch) return m;
+      return {
+        ...m,
+        draft: _subscriptionRowToDraft(subscription, m.draft),
+        committedSubscriptionId: subscription.id,
+        committedState: subscription.status,
+        pendingSync: false,
+        frozen: false,
+      };
+    });
+    setState({ messages: next });
+  },
+
+  /**
    * Drain handler for a 409 `active_card_exists` on a queued card
    * confirm. The card is already in the wallet (a prior drain attempt
    * landed, or a separate session committed it). Silent dequeue — flip
@@ -670,6 +818,18 @@ export const chatStore = {
             m.draft.clientRequestId === entry.payload.client_request_id) ||
           (!!entry.messageId && m.id === entry.messageId);
         if (!isMatch) return m;
+        matched = true;
+        return { ...m, pendingSync: false, frozen: false };
+      }
+      if (entry.kind === "subscription") {
+        if (m.role !== "assistant" || m.kind !== "subscription-parse") {
+          return m;
+        }
+        const cridMatch =
+          !!m.draft.clientRequestId &&
+          m.draft.clientRequestId === entry.payload.client_request_id;
+        const idMatch = !cridMatch && !!entry.messageId && m.id === entry.messageId;
+        if (!(cridMatch || idMatch)) return m;
         matched = true;
         return { ...m, pendingSync: false, frozen: false };
       }
@@ -924,6 +1084,9 @@ function _renderTurn(res: ChatTurnResponse): void {
   const proposeCardCalls = res.tool_calls.filter(
     (tc) => tc.name === "propose_card",
   );
+  const proposeSubCalls = res.tool_calls.filter(
+    (tc) => tc.name === "propose_subscription",
+  );
   const getTransactionsCalls = res.tool_calls.filter(
     (tc) => tc.name === "get_transactions",
   );
@@ -937,6 +1100,7 @@ function _renderTurn(res: ChatTurnResponse): void {
     (tc) =>
       tc.name !== "propose_transaction" &&
       tc.name !== "propose_card" &&
+      tc.name !== "propose_subscription" &&
       tc.name !== "get_transactions" &&
       tc.name !== "render_chart",
   )?.name;
@@ -974,6 +1138,26 @@ function _renderTurn(res: ChatTurnResponse): void {
       id: newId("ai"),
       role: "assistant",
       kind: "card-parse",
+      preface:
+        i === 0 && !textConsumed
+          ? res.assistant_text || "got it. does this look right?"
+          : undefined,
+      draft,
+    });
+    if (i === 0 && !textConsumed) textConsumed = true;
+  }
+
+  // Subscription proposals — same preface-consumes-text shape as the
+  // others, deferring to any earlier propose_* call for the assistant
+  // text. Subscriptions don't multi-call in a single turn under the v1
+  // prompt either; N is tolerated.
+  for (let i = 0; i < proposeSubCalls.length; i++) {
+    const draft = _proposalToSubscriptionDraft(proposeSubCalls[i]);
+    if (!draft) continue;
+    drafted.push({
+      id: newId("ai"),
+      role: "assistant",
+      kind: "subscription-parse",
       preface:
         i === 0 && !textConsumed
           ? res.assistant_text || "got it. does this look right?"
@@ -1265,6 +1449,61 @@ function _proposalToCardDraft(
 }
 
 /**
+ * Map a propose_subscription tool result (SubscriptionProposal-shaped
+ * dict — see app/models/subscriptions.py) into the local
+ * SubscriptionParseDraft the UI renders. `frequency` and `start_date`
+ * carry the values the tool computed (forward-only-clamped
+ * `next_billing_date` lives alongside `start_date`) so the parse card
+ * can surface "first auto-log on {date} — today's charge isn't
+ * backfilled" to set user expectations.
+ *
+ * Day 19: when `committedPayload` is present (live `subscriptions`
+ * row), prefer its values over the proposal's — same shape as the
+ * propose_card path. Returns null on missing load-bearing fields
+ * (name + amount + frequency + client_request_id all required).
+ */
+interface SubscriptionProposalWire {
+  name: string;
+  amount: string | number;
+  frequency: SubFrequency;
+  start_date: string;
+  next_billing_date: string;
+  category: Category;
+  card_id: string | null;
+  client_request_id: string;
+}
+
+function _proposalToSubscriptionDraft(
+  call: ChatToolCall,
+  committedPayload?: unknown,
+): SubscriptionParseDraft | null {
+  const committed =
+    committedPayload && typeof committedPayload === "object"
+      ? (committedPayload as Record<string, unknown>)
+      : null;
+  const merged = {
+    ...((call.result as Record<string, unknown>) ?? {}),
+    ...(committed ?? {}),
+  };
+  const r = merged as unknown as SubscriptionProposalWire;
+  if (!r || typeof r !== "object") return null;
+  if (typeof r.name !== "string" || !r.name) return null;
+  if (typeof r.client_request_id !== "string") return null;
+  const amount =
+    typeof r.amount === "string" ? r.amount : String(r.amount ?? "");
+  return {
+    name: r.name,
+    amount,
+    frequency: r.frequency,
+    startDate: r.start_date,
+    nextBillingDate: r.next_billing_date,
+    category: r.category,
+    cardId: typeof r.card_id === "string" ? r.card_id : null,
+    clientRequestId: r.client_request_id,
+  };
+}
+
+/**
  * Project a freshly-committed transaction row into the local ParseDraft
  * shape, preserving wire-payload bookkeeping fields from the original
  * draft (`clientRequestId`, `notes`, `geminiSuggestion`) that the row
@@ -1273,6 +1512,33 @@ function _proposalToCardDraft(
  * the edit-before-tap case (user changed $40 → $42 offline; the row is
  * now $42, the rehydrated draft must show $42).
  */
+/**
+ * Project a freshly-committed subscription row into the local
+ * SubscriptionParseDraft, preserving the draft's `clientRequestId`
+ * (which the row also carries — they should match — but the spread
+ * keeps it explicit). Mirrors `_txToDraft` for transactions.
+ */
+function _subscriptionRowToDraft(
+  sub: SubscriptionRow,
+  base: SubscriptionParseDraft,
+): SubscriptionParseDraft {
+  // The server-side category is enforced against ALLOWED_CATEGORIES, so
+  // it always coerces to the local Category union. If we ever loosen
+  // that enforcement (we won't), this cast becomes the documented spot
+  // to validate.
+  return {
+    ...base,
+    name: sub.name,
+    amount: sub.amount,
+    frequency: sub.frequency,
+    startDate: sub.start_date,
+    nextBillingDate: sub.next_billing_date,
+    category: sub.category as Category,
+    cardId: sub.card_id,
+    clientRequestId: sub.client_request_id ?? base.clientRequestId,
+  };
+}
+
 function _txToDraft(tx: Transaction, base: ParseDraft): ParseDraft {
   return {
     ...base,
@@ -1520,6 +1786,32 @@ function _wireMessageToLocal(m: ChatMessageWire): ChatMessage[] {
         draft,
         committedCardId: committedId,
         committedState,
+        frozen: true,
+      });
+      prefaceClaimed = true;
+    } else if (synthetic.name === "propose_subscription") {
+      const draft = _proposalToSubscriptionDraft(
+        synthetic,
+        p.committed_payload,
+      );
+      if (!draft) continue;
+      // Subscriptions have three lifecycle states (active/paused/
+      // cancelled), not just active/deleted. Validate against the
+      // wider enum here.
+      const subState =
+        p.committed_state === "active" ||
+        p.committed_state === "paused" ||
+        p.committed_state === "cancelled"
+          ? p.committed_state
+          : undefined;
+      out.push({
+        id: newId("ai"),
+        role: "assistant",
+        kind: "subscription-parse",
+        preface: !prefaceClaimed && text ? text : undefined,
+        draft,
+        committedSubscriptionId: committedId,
+        committedState: subState,
         frozen: true,
       });
       prefaceClaimed = true;

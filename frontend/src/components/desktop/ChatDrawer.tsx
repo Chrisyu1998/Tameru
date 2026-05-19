@@ -7,6 +7,7 @@ import { EntryInsightBubble } from "@/components/chat/EntryInsightBubble";
 import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble";
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
 import { ParseCard } from "@/components/chat/ParseCard";
+import { SubscriptionParseCard } from "@/components/chat/SubscriptionParseCard";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { chatStore, useChatStore } from "@/lib/chatStore";
 import { useLedger } from "@/lib/ledger";
@@ -254,6 +255,25 @@ function MessageRow({
           frozen={msg.frozen}
           pendingSync={msg.pendingSync}
           onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
+        />
+      </div>
+    );
+  }
+
+  if (msg.kind === "subscription-parse") {
+    return (
+      <div className="flex w-full justify-start">
+        <SubscriptionParseCard
+          preface={msg.preface}
+          draft={msg.draft}
+          cards={cards}
+          committed={!!msg.committedSubscriptionId}
+          committedState={msg.committedState}
+          frozen={msg.frozen}
+          pendingSync={msg.pendingSync}
+          onConfirm={(draft) =>
+            chatStore.commitSubscriptionDraft(msg.id, draft)
+          }
         />
       </div>
     );

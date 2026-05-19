@@ -34,6 +34,24 @@ vi.mock("@/lib/cardsApi", async () => {
   return { ...actual, confirmCard: vi.fn() };
 });
 
+vi.mock("@/lib/subscriptionsApi", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/subscriptionsApi")>(
+      "@/lib/subscriptionsApi",
+    );
+  return { ...actual, confirmSubscription: vi.fn() };
+});
+
+vi.mock("@/lib/subscriptions", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/subscriptions")>(
+    "@/lib/subscriptions",
+  );
+  return {
+    ...actual,
+    addSubscriptionLocal: vi.fn(),
+  };
+});
+
 vi.mock("@/lib/ledger", async () => {
   const actual = await vi.importActual<typeof import("@/lib/ledger")>(
     "@/lib/ledger",
@@ -55,6 +73,12 @@ import type {
 } from "@/lib/transactionsApi";
 import { confirmCard } from "@/lib/cardsApi";
 import type { CardProposal, CardRow } from "@/lib/cardsApi";
+import { confirmSubscription } from "@/lib/subscriptionsApi";
+import type {
+  SubscriptionProposal,
+  SubscriptionRow,
+} from "@/lib/subscriptionsApi";
+import { addSubscriptionLocal } from "@/lib/subscriptions";
 import { useAppStore } from "../src/store";
 import { chatStore } from "@/lib/chatStore";
 import {
@@ -76,6 +100,8 @@ import type { Transaction } from "@/lib/fixtures";
 
 const confirmTxMock = vi.mocked(confirmTransaction);
 const confirmCardMock = vi.mocked(confirmCard);
+const confirmSubMock = vi.mocked(confirmSubscription);
+const addSubMock = vi.mocked(addSubscriptionLocal);
 
 const USER_A = { id: "user-a-uuid", email: "a@example.com" };
 const USER_B = { id: "user-b-uuid", email: "b@example.com" };
@@ -222,6 +248,8 @@ beforeEach(async () => {
   chatStore.newChat();
   confirmTxMock.mockReset();
   confirmCardMock.mockReset();
+  confirmSubMock.mockReset();
+  addSubMock.mockReset();
   signIn(USER_A);
 });
 
@@ -671,5 +699,101 @@ describe("offline_queue — persistence", () => {
     const entries = await listForUser(USER_A.id);
     expect(entries).toHaveLength(1);
     expect(entries[0].payload.client_request_id).toBe(CRID_1);
+  });
+});
+
+/* ─── Day 19 — subscription drain branch ─────────────────────────── */
+
+const SUB_CRID = "00000000-0000-0000-0000-0000000000d1";
+
+function subProposal(
+  overrides: Partial<SubscriptionProposal> = {},
+): SubscriptionProposal {
+  return {
+    name: "Netflix",
+    amount: "15.99",
+    frequency: "monthly",
+    start_date: "2026-05-18",
+    next_billing_date: "2026-06-18",
+    category: "Streaming",
+    card_id: null,
+    client_request_id: SUB_CRID,
+    ...overrides,
+  };
+}
+
+function subRow(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
+  return {
+    id: "sub-server-1",
+    user_id: USER_A.id,
+    card_id: null,
+    name: "Netflix",
+    amount: "15.99",
+    frequency: "monthly",
+    start_date: "2026-05-18",
+    next_billing_date: "2026-06-18",
+    category: "Streaming",
+    status: "active",
+    client_request_id: SUB_CRID,
+    created_at: "2026-05-18T00:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("offline_queue — subscription kind (Day 19)", () => {
+  test("queued subscription confirm drains, POST fires once, queue empties, store updates", async () => {
+    confirmSubMock.mockResolvedValueOnce(subRow());
+
+    await enqueue({
+      ownerUserId: USER_A.id,
+      kind: "subscription",
+      payload: subProposal(),
+    });
+    expect(getPendingCount()).toBe(1);
+
+    await drainQueue();
+
+    expect(confirmSubMock).toHaveBeenCalledTimes(1);
+    // Server-returned row lands in the subscriptions store via the
+    // chatStore drain hook.
+    expect(addSubMock).toHaveBeenCalledTimes(1);
+    expect(addSubMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "sub-server-1" }),
+    );
+    expect(await listForUser(USER_A.id)).toHaveLength(0);
+    expect(getPendingCount()).toBe(0);
+  });
+
+  test("same-crid replay is idempotent at the API layer (server returns existing row)", async () => {
+    // Day 19 spec: a same-client_request_id replay returns the existing
+    // row with 2xx. The drain treats it identically to a fresh commit —
+    // dequeue, patch the store. There's no subscription analog of the
+    // card 409 path because subscriptions use crid for dedup, not a
+    // natural key.
+    confirmSubMock.mockResolvedValueOnce(subRow());
+
+    await enqueue({
+      ownerUserId: USER_A.id,
+      kind: "subscription",
+      payload: subProposal(),
+    });
+    await drainQueue();
+
+    // Replay the same crid in a second enqueue/drain cycle.
+    confirmSubMock.mockResolvedValueOnce(subRow());
+    await enqueue({
+      ownerUserId: USER_A.id,
+      kind: "subscription",
+      payload: subProposal(),
+    });
+    await drainQueue();
+
+    expect(confirmSubMock).toHaveBeenCalledTimes(2);
+    // Both calls used the same client_request_id.
+    const calls = confirmSubMock.mock.calls.map(
+      (c) => (c[0] as SubscriptionProposal).client_request_id,
+    );
+    expect(calls).toEqual([SUB_CRID, SUB_CRID]);
+    expect(await listForUser(USER_A.id)).toHaveLength(0);
   });
 });

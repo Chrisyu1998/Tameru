@@ -10,6 +10,7 @@ import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble"
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
 import { ParseCard } from "@/components/chat/ParseCard";
 import { ServiceBanner } from "@/components/chat/ServiceBanner";
+import { SubscriptionParseCard } from "@/components/chat/SubscriptionParseCard";
 import { VoiceOverlay } from "@/components/chat/VoiceOverlay";
 import { isVoiceSupported, useVoice } from "@/lib/voice";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
@@ -395,6 +396,25 @@ function MessageRow({
           frozen={msg.frozen}
           pendingSync={msg.pendingSync}
           onConfirm={(draft) => chatStore.commitCardDraft(msg.id, draft)}
+        />
+      </div>
+    );
+  }
+
+  if (msg.kind === "subscription-parse") {
+    return (
+      <div className="flex w-full justify-start">
+        <SubscriptionParseCard
+          preface={msg.preface}
+          draft={msg.draft}
+          cards={cards}
+          committed={!!msg.committedSubscriptionId}
+          committedState={msg.committedState}
+          frozen={msg.frozen}
+          pendingSync={msg.pendingSync}
+          onConfirm={(draft) =>
+            chatStore.commitSubscriptionDraft(msg.id, draft)
+          }
         />
       </div>
     );

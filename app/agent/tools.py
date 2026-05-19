@@ -48,6 +48,11 @@ from app.models.cards import (
     CardProposal,
 )
 from app.models.goals import Goal, GoalPeriod, SetGoalRequest
+from app.models.subscriptions import (
+    Frequency,
+    SubscriptionProposal,
+    compute_next_billing_date,
+)
 from app.models.transactions import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
@@ -702,6 +707,102 @@ PROPOSE_CARD_TOOL: dict[str, Any] = {
                     "separate column — included for forward-compat."
                 ),
             },
+            "next_annual_fee_date": {
+                "type": "string",
+                "format": "date",
+                "description": (
+                    "OPTIONAL. Next renewal date for the card's annual fee, "
+                    "YYYY-MM-DD. Pass ONLY when the user mentioned when "
+                    "the AF hits ('renews in March', 'my AF is March 15'). "
+                    "Do NOT guess — the date is per-user and the web "
+                    "doesn't know it. When set alongside a non-zero "
+                    "annual_fee, the confirm endpoint creates a companion "
+                    "subscription so the auto-logger logs the AF on each "
+                    "anniversary."
+                ),
+            },
+        },
+    },
+}
+
+
+PROPOSE_SUBSCRIPTION_TOOL: dict[str, Any] = {
+    "name": "propose_subscription",
+    "description": (
+        "Build a recurring-subscription proposal from a user-described "
+        "recurring charge. Use when the user wants to TRACK a recurring "
+        "bill — Netflix monthly, rent monthly, gym, software subscriptions. "
+        "Returns a SubscriptionProposal — it does NOT write a row. The "
+        "client renders the proposal as a parse card; the row is only "
+        "created when the user taps the confirm button (which triggers "
+        "POST /subscriptions/confirm). "
+        "If the user names a card ('on my Amex Gold'), call get_cards "
+        "first to resolve the UUID and pass it as card_id. If the user "
+        "doesn't name a card (e.g. 'track my rent' — usually bank ACH), "
+        "OMIT card_id; the subscription saves as cardless and pg_cron "
+        "auto-logs cardless transactions. "
+        "Do not say 'I added it' after calling this tool — the row does "
+        "not exist yet. Mention that future auto-logged charges will "
+        "show up in the ledger; the first charge is NOT backfilled — "
+        "the user logs today's charge manually if they want it captured."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["name", "amount", "frequency", "start_date", "category"],
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": (
+                    "Subscription name as the user wrote it, e.g. 'Netflix', "
+                    "'Rent', 'Spotify family'."
+                ),
+            },
+            "amount": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Recurring amount per period, in home currency.",
+            },
+            "frequency": {
+                "type": "string",
+                "enum": ["weekly", "monthly", "quarterly", "annual"],
+                "description": (
+                    "Billing cadence. Most subscriptions are monthly; annual "
+                    "is common for software and AmazonPrime; quarterly and "
+                    "weekly are rare."
+                ),
+            },
+            "start_date": {
+                "type": "string",
+                "format": "date",
+                "description": (
+                    "When the subscription started (YYYY-MM-DD). Used by the "
+                    "forward-only rule to compute the next billing date: if "
+                    "start_date is today or in the past, the first auto-log "
+                    "is start_date + 1 period; past cycles are NOT backfilled."
+                ),
+            },
+            "category": {
+                "type": "string",
+                "enum": list(ALLOWED_CATEGORIES),
+                "description": (
+                    "Closed-enum category. 'Streaming' for Netflix/Spotify/"
+                    "Apple Music; 'Subscriptions' for non-streaming "
+                    "recurring (software, gym, news, Patreon); 'Home' for "
+                    "rent/mortgage/HOA; 'Utilities' for phone/internet/"
+                    "electric. If unclear, ask the user."
+                ),
+            },
+            "card_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": (
+                    "OPTIONAL. Card UUID resolved from get_cards. Pass when "
+                    "the user named a card. OMIT for bank-ACH bills (rent, "
+                    "utilities, mortgage) — the subscription saves as "
+                    "cardless and pg_cron auto-logs with no card attribution."
+                ),
+            },
         },
     },
 }
@@ -1060,6 +1161,10 @@ class ProposeCardRequest(BaseModel):
     )
     program: str
     alias: str | None = None
+    # Day 19b — optional AF renewal date. Validated at the CardProposal
+    # layer (must be >= today). When set alongside a non-zero annual_fee,
+    # the confirm endpoint creates a companion subscription.
+    next_annual_fee_date: _dt.date | None = None
 
     @field_validator("program")
     @classmethod
@@ -1136,6 +1241,7 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         program=program_enum,
         multipliers=result.multipliers,
         annual_fee=result.annual_fee,
+        next_annual_fee_date=request.next_annual_fee_date,
         source_urls=result.source_urls,
         alias=request.alias,
         needs_manual=needs_manual,
@@ -1146,6 +1252,120 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         # commit, so `_annotate_committed_proposals` can join 1:1 even
         # when two cards share a `name` (different last_four). Mirrors
         # the propose_transaction lifecycle for the same id field.
+        client_request_id=uuid4(),
+    )
+    return proposal.model_dump(mode="json")
+
+
+class ProposeSubscriptionRequest(BaseModel):
+    """Tool input for `propose_subscription`.
+
+    Validates the agent's arguments before the tool runs. `card_id` is
+    optional — cardless subscriptions (bank ACH bills like rent or
+    utilities) are first-class. `category` is required; the agent picks
+    from `ALLOWED_CATEGORIES` or asks the user if unclear.
+
+    Example request (cardful):
+        {"name": "Netflix", "amount": 15.99, "frequency": "monthly",
+         "start_date": "2026-05-18", "category": "Streaming",
+         "card_id": "f1e2d3c4-..."}
+
+    Example request (cardless):
+        {"name": "Rent", "amount": 2400, "frequency": "monthly",
+         "start_date": "2026-05-01", "category": "Home"}
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    amount: Decimal
+    frequency: Frequency
+    start_date: _dt.date
+    category: str
+    card_id: UUID | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _v_name(cls, value: str) -> str:
+        """Strip and reject empty subscription names."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name cannot be empty or whitespace-only")
+        return stripped
+
+    @field_validator("amount")
+    @classmethod
+    def _v_amount(cls, value: Decimal) -> Decimal:
+        """Reject non-positive subscription amounts."""
+        if value <= 0:
+            raise ValueError(f"amount must be > 0 (got {value})")
+        return value
+
+    @field_validator("category")
+    @classmethod
+    def _v_category(cls, value: str) -> str:
+        """Reject categories outside Tameru's closed enum."""
+        if value not in ALLOWED_CATEGORIES:
+            raise ValueError(
+                f"category {value!r} is not in the closed enum"
+            )
+        return value
+
+
+def propose_subscription(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
+    """Build a SubscriptionProposal from a chat-described recurring charge.
+
+    Request:
+        {"name": "Netflix", "amount": 15.99, "frequency": "monthly",
+         "start_date": "2026-05-18", "category": "Streaming",
+         "card_id": "f1e2d3c4-..."}   # card_id optional (cardless ACH)
+
+    Response:
+        SubscriptionProposal-shaped dict; see app/models/subscriptions.py.
+
+    The tool does NOT write to `subscriptions`. The structural test in
+    tests/contracts/test_tool_write_invariant.py enforces this — if a
+    refactor here ever calls `.insert(` / `.upsert(` / `.update(` /
+    `.delete(` / `.rpc(`, the test fails.
+
+    Behavior contract:
+      * `next_billing_date` is computed by `compute_next_billing_date` —
+        forward-only (DESIGN.md §8.3). If `start_date <= today`, the
+        first auto-log fires on `today + 1 period`; past cycles are NOT
+        backfilled. If `start_date > today`, `next_billing_date = start_date`.
+      * `client_request_id` is freshly minted (`uuid4()`) — same shape
+        as `propose_transaction` and `propose_card`. The Day 15 offline
+        queue carries it opaquely across drain retries; the partial
+        unique index on `subscriptions (user_id, client_request_id)`
+        makes a same-crid replay a no-op at confirm time.
+      * `card_id` supplied → verify it resolves to the user's active
+        cards via RLS-scoped SELECT. Hallucinated UUIDs, deleted cards,
+        and cross-user UUIDs all return False; drop card_id to None in
+        those cases so the parse card surfaces a picker instead of
+        failing at commit on `_assert_card_owned`.
+      * `card_id` omitted → cardless subscription (bank ACH); the
+        confirm endpoint allows this and pg_cron auto-logs with
+        `transactions.card_id = NULL`.
+    """
+    request = ProposeSubscriptionRequest.model_validate(kwargs)
+
+    client = supabase_for_user(user.jwt)
+    card_id = request.card_id
+    if card_id is not None and not _card_belongs_to_user(client, card_id):
+        card_id = None
+
+    next_billing_date = compute_next_billing_date(
+        request.start_date, request.frequency
+    )
+
+    proposal = SubscriptionProposal(
+        name=request.name,
+        amount=request.amount,
+        frequency=request.frequency,
+        start_date=request.start_date,
+        next_billing_date=next_billing_date,
+        category=request.category,
+        card_id=card_id,
         client_request_id=uuid4(),
     )
     return proposal.model_dump(mode="json")
@@ -1234,6 +1454,10 @@ TOOL_REGISTRY: dict[str, tuple[dict[str, Any], Callable[..., Any]]] = {
     GET_CARDS_TOOL["name"]: (GET_CARDS_TOOL, get_cards),
     PROPOSE_TRANSACTION_TOOL["name"]: (PROPOSE_TRANSACTION_TOOL, propose_transaction),
     PROPOSE_CARD_TOOL["name"]: (PROPOSE_CARD_TOOL, propose_card),
+    PROPOSE_SUBSCRIPTION_TOOL["name"]: (
+        PROPOSE_SUBSCRIPTION_TOOL,
+        propose_subscription,
+    ),
     SET_GOAL_TOOL["name"]: (SET_GOAL_TOOL, set_goal),
     RENDER_CHART_TOOL["name"]: (RENDER_CHART_TOOL, render_chart),
 }

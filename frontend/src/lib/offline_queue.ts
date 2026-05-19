@@ -51,6 +51,11 @@ import {
   type CardProposal,
   type CardRow,
 } from "./cardsApi";
+import {
+  confirmSubscription,
+  type SubscriptionProposal,
+  type SubscriptionRow,
+} from "./subscriptionsApi";
 
 const DB_NAME = "tameru-offline-queue";
 const DB_VERSION = 1;
@@ -71,12 +76,16 @@ interface OfflineQueueSchema extends DBSchema {
 }
 
 /**
- * Wire shape stored in IndexedDB. `kind` discriminates the payload union;
- * deliberately omits `"subscription"` until Day 19 ships
- * `POST /subscriptions/confirm` — shipping the branch earlier would let
- * the drain POST to a 404.
+ * Wire shape stored in IndexedDB. `kind` discriminates the payload union.
+ * Day 19 adds the `subscription` branch alongside transactions and cards;
+ * the schema upgrade is additive (existing entries keep working) and no
+ * IDB migration is needed because IndexedDB is schemaless at the
+ * application level.
  */
-export type PersistedQueueEntry = TxQueueEntry | CardQueueEntry;
+export type PersistedQueueEntry =
+  | TxQueueEntry
+  | CardQueueEntry
+  | SubscriptionQueueEntry;
 
 export interface TxQueueEntry {
   id: string;
@@ -100,6 +109,20 @@ export interface CardQueueEntry {
   kind: "card";
   payload: CardProposal;
   /** See TxQueueEntry.messageId; cards have no crid fallback. */
+  messageId?: string;
+  queuedAt: string;
+}
+
+export interface SubscriptionQueueEntry {
+  id: string;
+  ownerUserId: string;
+  kind: "subscription";
+  payload: SubscriptionProposal;
+  /**
+   * See TxQueueEntry.messageId. Subscriptions carry `client_request_id`
+   * on the payload (like transactions), so the in-memory patch can use
+   * either the messageId or the crid to locate the right parse card.
+   */
   messageId?: string;
   queuedAt: string;
 }
@@ -133,6 +156,18 @@ export interface DrainHooks {
       existing_card_name: string;
       existing_card_last_four: string | null;
     },
+  ): void;
+  /**
+   * Day 19 — subscription confirm drained successfully. Same shape as
+   * the card-success hook: clientRequestId/messageId locate the parse
+   * card; the server-returned row is the source of truth for the
+   * committed state. No analog of the card 409 path because
+   * subscriptions dedup via `client_request_id` (a replay returns the
+   * existing row with 2xx, not a 409).
+   */
+  applyDrainSubscriptionSuccess(
+    match: { clientRequestId: string; messageId?: string },
+    subscription: SubscriptionRow,
   ): void;
   applyDrainPermanentFailure(
     entry: PersistedQueueEntry,
@@ -206,7 +241,8 @@ async function refreshCount(ownerUserId: string | null): Promise<void> {
 export async function enqueue(
   entry:
     | Omit<TxQueueEntry, "id" | "queuedAt">
-    | Omit<CardQueueEntry, "id" | "queuedAt">,
+    | Omit<CardQueueEntry, "id" | "queuedAt">
+    | Omit<SubscriptionQueueEntry, "id" | "queuedAt">,
 ): Promise<PersistedQueueEntry> {
   const full: PersistedQueueEntry = {
     ...entry,
@@ -322,6 +358,18 @@ async function _drainOne(
           messageId: entry.messageId,
         },
         result,
+      );
+      await deleteEntry(entry.id);
+      return "completed";
+    }
+    if (entry.kind === "subscription") {
+      const subscription = await confirmSubscription(entry.payload);
+      chatStore.applyDrainSubscriptionSuccess(
+        {
+          clientRequestId: entry.payload.client_request_id,
+          messageId: entry.messageId,
+        },
+        subscription,
       );
       await deleteEntry(entry.id);
       return "completed";

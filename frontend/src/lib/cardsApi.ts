@@ -81,6 +81,13 @@ export interface CardProposal {
   program: CardProgram;
   multipliers: Record<string, number>;
   annual_fee?: string | null;
+  /**
+   * Day 19b — optional renewal date for AF tracking. When set alongside
+   * a non-zero `annual_fee`, `POST /cards/confirm` creates a companion
+   * subscriptions row so the pg_cron auto-logger logs the AF on each
+   * anniversary. ISO date (YYYY-MM-DD) or null. Must be >= today.
+   */
+  next_annual_fee_date?: string | null;
   source_urls: string[];
   color?: string | null;
   alias?: string | null;

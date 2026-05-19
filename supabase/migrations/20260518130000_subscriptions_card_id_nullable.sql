@@ -1,0 +1,21 @@
+-- subscriptions.card_id → nullable — Day 19 design decision (DESIGN.md §8.3)
+--
+-- The most common recurring charges for many users aren't card-funded.
+-- Rent and mortgage are almost always bank ACH, utilities and phone bills
+-- often are, gym memberships frequently come from checking. The original
+-- `card_id NOT NULL` constraint silently excluded these from the
+-- subscription auto-logger and forced the user to log them manually every
+-- month — exactly the friction the auto-logger exists to remove.
+--
+-- Asymmetry with transactions: `transactions.card_id` has been nullable
+-- since Day 2 (cash, bank transfer, etc.). Aligning subscriptions to the
+-- same shape lets the pg_cron auto-logger pass `card_id = NULL` through
+-- to the auto-logged transaction with no special-case code.
+--
+-- The FK + `ON DELETE CASCADE` clause is preserved for the card-backed
+-- case; a soft-deleted card does not fire the cascade (it requires a
+-- true SQL DELETE), so the soft-delete handler in app/routes/cards.py
+-- flips affected subscriptions explicitly per the §8.3 split-cascade
+-- rule (regular → paused, AF → cancelled).
+
+ALTER TABLE subscriptions ALTER COLUMN card_id DROP NOT NULL;
