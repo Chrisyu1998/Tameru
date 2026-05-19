@@ -6,10 +6,9 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 `memory/decisions.md` and `memory/learnings.md` hold the *history* behind the architectural invariants in this file — why a choice was made, what alternatives were rejected, what was learned while building. Local-only (gitignored, missing for collaborators — that's fine). This file is for invariants; `memory/` is for narrative.
 
-<!-- The @-imports below auto-load project memory at session start.
-     Both files are gitignored; missing imports are silently skipped. -->
-@memory/decisions.md
-@memory/learnings.md
+<!-- Memory auto-loads at session start. Single file with two H2 sections
+     (## Decisions, ## Learnings). Gitignored; missing import is silently skipped. -->
+@memory.md
 
 ## Project
 

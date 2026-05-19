@@ -44,4 +44,4 @@ npm-debug.log*
 evals/.cache/
 
 # Personal project memory (cowork OS) — local only
-memory/
+memory.md
