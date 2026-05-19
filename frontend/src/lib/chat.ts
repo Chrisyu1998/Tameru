@@ -166,6 +166,19 @@ export interface CardParseDraft {
   /** Optional alias the user supplied via chat ("travel card"). */
   alias?: string | null;
   /**
+   * Day 19b — optional next annual-fee renewal date (ISO YYYY-MM-DD)
+   * captured on the parse card. When set alongside a non-zero
+   * `annualFee`, `POST /cards/confirm` creates a companion AF
+   * subscription atomically (via `insert_card_with_af`) so the
+   * pg_cron auto-logger logs the fee on each anniversary. Null/unset
+   * means the user skipped tracking — they can enable it later from
+   * the cards page (EditCardAfSheet's "track AF" affordance). Cannot
+   * be inferred from web_search (per-user fact); Claude may extract
+   * it from the user's mention ("AF renews March 15") via the
+   * `propose_card` tool arg of the same name.
+   */
+  nextAnnualFeeDate?: string | null;
+  /**
    * Stable per-proposal join key from `propose_card`. Posted back at
    * `/cards/confirm`; persists on the row. Drives the chat-rehydrate
    * annotation's 1:1 join and the offline-queue drain's in-memory

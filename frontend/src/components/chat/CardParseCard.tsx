@@ -176,6 +176,52 @@ export function CardParseCard({
               </label>
             </div>
 
+            {/* Day 19b — next AF renewal date. Only when the card has a
+                non-zero annual fee (no fee = nothing to auto-log).
+                Optional; an empty value means "don't track for now,"
+                and the user can enable it later from the cards-page
+                "track AF" chip. When set, `POST /cards/confirm` fires
+                the atomic dual-write via `insert_card_with_af`. */}
+            {hasPositiveAnnualFee(local.annualFee) && (
+              <div className="mt-3">
+                <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
+                  next renewal (optional)
+                  <div className="mt-1 flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={local.nextAnnualFeeDate ?? ""}
+                      min={todayIso()}
+                      placeholder={defaultRenewalIso()}
+                      onChange={(e) =>
+                        setLocal({
+                          ...local,
+                          nextAnnualFeeDate: e.target.value || null,
+                        })
+                      }
+                      className="flex-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm tabular text-ink placeholder:text-ink-quaternary focus:outline-none"
+                    />
+                    {local.nextAnnualFeeDate && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLocal({ ...local, nextAnnualFeeDate: null })
+                        }
+                        aria-label="clear renewal date"
+                        className="rounded-md px-1.5 py-1 text-ink-tertiary hover:bg-elevated"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  {local.nextAnnualFeeDate && (
+                    <p className="mt-1 text-[0.65rem] normal-case text-ink-quaternary">
+                      we'll auto-log it when it hits.
+                    </p>
+                  )}
+                </label>
+              </div>
+            )}
+
             {(issuerUnresolved || networkUnresolved || local.needsManual) && (
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
@@ -329,4 +375,34 @@ function _safeHostname(url: string): string {
   } catch {
     return url;
   }
+}
+
+/**
+ * True when the parse card's `annualFee` field is a positive number.
+ * Day 19b gates the "next renewal" row on this — a $0 / null fee
+ * means there's nothing for the cron to auto-log, so capturing a
+ * renewal date would be pointless and the confirm endpoint would
+ * 422 anyway.
+ */
+function hasPositiveAnnualFee(value: string | null): boolean {
+  if (value === null || value === "") return false;
+  const parsed = parseFloat(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+/** Today as YYYY-MM-DD — `min` attribute on the renewal date input. */
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Default suggestion = today + 365 days as YYYY-MM-DD. Used as a
+ * placeholder hint, not as an auto-fill — the user has to actively
+ * pick a date for AF tracking to engage (the server intentionally
+ * does NOT auto-default; see Day 19b prompt's "Design decisions").
+ */
+function defaultRenewalIso(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 365);
+  return d.toISOString().slice(0, 10);
 }

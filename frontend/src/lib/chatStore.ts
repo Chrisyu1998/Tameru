@@ -433,6 +433,11 @@ export const chatStore = {
       program: draft.program,
       multipliers: draft.multipliers,
       annual_fee: draft.annualFee,
+      // Day 19b — when present alongside a non-zero annual_fee, the
+      // confirm route's `insert_card_with_af` RPC creates a companion
+      // AF subscription atomically. Null/undefined means no AF
+      // tracking is set up at create time.
+      next_annual_fee_date: draft.nextAnnualFeeDate ?? null,
       source_urls: draft.sourceUrls,
       alias: draft.alias ?? null,
       needs_manual: draft.needsManual,
@@ -1388,6 +1393,7 @@ interface CardProposalWire {
   multipliers: Record<string, number>;
   client_request_id?: string;
   annual_fee: string | number | null;
+  next_annual_fee_date?: string | null;
   source_urls: string[];
   alias: string | null;
   needs_manual: boolean;
@@ -1443,6 +1449,14 @@ function _proposalToCardDraft(
     lastFour: typeof r.last_four === "string" ? r.last_four : "",
     needsManual: r.needs_manual === true,
     alias: typeof r.alias === "string" ? r.alias : null,
+    // Day 19b — propagate any date Claude extracted from the user's
+    // mention (e.g. "AF renews March 15"). Null when neither the agent
+    // nor a committed_payload supplied one; the parse card lets the
+    // user set or clear it before confirming.
+    nextAnnualFeeDate:
+      typeof r.next_annual_fee_date === "string"
+        ? r.next_annual_fee_date
+        : null,
     clientRequestId:
       typeof r.client_request_id === "string" ? r.client_request_id : undefined,
   };
@@ -1615,6 +1629,11 @@ function _findCardParseTarget(
  * committed card by definition has its identity fields resolved.
  */
 function _cardRowToDraft(card: CardRow): CardParseDraft {
+  // `next_annual_fee_date` lives on the companion AF subscription's
+  // `next_billing_date`, not on `cards`. The rehydrated chat parse
+  // card doesn't surface it — the user inspects/edits the AF date on
+  // the cards-page chip + EditCardAfSheet post-commit. Set null so
+  // the draft type is satisfied without a phantom value.
   return {
     name: card.name,
     issuer: card.issuer,
@@ -1626,6 +1645,7 @@ function _cardRowToDraft(card: CardRow): CardParseDraft {
     lastFour: card.last_four ?? "",
     needsManual: false,
     alias: null,
+    nextAnnualFeeDate: null,
     clientRequestId: card.client_request_id,
   };
 }
