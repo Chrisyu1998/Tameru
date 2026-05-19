@@ -103,7 +103,7 @@ function _sub(overrides: Partial<SubscriptionFixture> = {}): SubscriptionFixture
     frequency: "monthly",
     start_date: "2026-05-19",
     next_billing_date: "2026-06-19",
-    category: "Subscriptions",
+    category: "Memberships",
     status: "active",
     client_request_id: "00000000-0000-0000-0000-0000000019cc",
     ...overrides,
@@ -194,7 +194,7 @@ export async function mockApi(page: Page, opts: MockApiOptions = {}): Promise<vo
           (s) =>
             !(
               s.name.endsWith(" annual fee") &&
-              s.category === "Subscriptions" &&
+              s.category === "Memberships" &&
               s.frequency === "annual"
             ),
         );

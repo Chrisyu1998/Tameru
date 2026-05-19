@@ -54,7 +54,7 @@ test("renders active, paused, cancelled buckets", async ({ page }) => {
         id: "sub-cancelled",
         name: "Old News",
         amount: "12.99",
-        category: "Subscriptions",
+        category: "Memberships",
         status: "cancelled",
         card_id: "card-1",
       }),
@@ -105,7 +105,7 @@ test("AF rows are hidden from the default list (DESIGN.md §6.5)", async ({
         name: "CSR annual fee",
         amount: "550.00",
         frequency: "annual",
-        category: "Subscriptions",
+        category: "Memberships",
         status: "active",
         card_id: "card-1",
       }),
@@ -216,6 +216,165 @@ test("resume-with-deleted-card shows 'resume as bank ACH' and PATCHes card_id=nu
   expect(resumeCall?.body).toEqual({ status: "active" });
 });
 
+test("edit sheet: changing amount fires PATCH with the new amount only", async ({
+  page,
+}) => {
+  // The edit-fields flow added in §6.5 — the sheet now exposes the
+  // mutable subscription fields (name, amount, category, card) instead
+  // of routing every edit through chat. Wire shape: PATCH carries only
+  // the fields the user actually touched.
+  const patchCalls: Array<{ id: string; body: Record<string, unknown> }> = [];
+  await mockApi(page, {
+    cards: [
+      {
+        id: "card-1",
+        name: "Amex Gold",
+        issuer: "amex",
+        network: "amex",
+        program: "MR",
+        last_four: "1234",
+        status: "active",
+      },
+    ],
+    subscriptions: [
+      fixtures.sub({
+        id: "sub-netflix",
+        name: "Netflix",
+        amount: "15.99",
+        category: "Streaming",
+        status: "active",
+        card_id: "card-1",
+      }),
+    ],
+    onPatchSubscription: (id, body) =>
+      patchCalls.push({ id, body: body as Record<string, unknown> }),
+  });
+  await page.goto("/subscriptions");
+
+  await page.getByText("Netflix").click();
+  // BottomSheet with `desktopVariant="side"` portals two copies to body:
+  // a mobile `<div role="dialog" class="md:hidden">` (display:none at
+  // the chromium default 1280px viewport) and a desktop
+  // `<aside role="dialog" class="md:flex">`. Inputs inside the mobile
+  // copy are non-interactable. Scope to the visible `<aside>` to act
+  // on the desktop variant.
+  const sheet = page.locator('aside[role="dialog"]');
+  const amountInput = sheet.locator('input[inputmode="decimal"]');
+  await expect(amountInput).toHaveValue("15.99");
+  await amountInput.fill("17.99");
+
+  await sheet.getByRole("button", { name: /save changes/i }).click();
+
+  await expect.poll(() => patchCalls.length).toBeGreaterThan(0);
+  const call = patchCalls.find((c) => c.id === "sub-netflix");
+  expect(call).toBeDefined();
+  // Only the touched field — name/category/card_id should not appear in
+  // the body, so the wire shape stays narrow and the server's resume
+  // guard isn't triggered by a no-op card_id reassignment.
+  expect(call!.body).toEqual({ amount: "17.99" });
+});
+
+test("edit sheet: changing category via the picker fires PATCH with new category", async ({
+  page,
+}) => {
+  const patchCalls: Array<{ id: string; body: Record<string, unknown> }> = [];
+  await mockApi(page, {
+    cards: [
+      {
+        id: "card-1",
+        name: "Amex Gold",
+        issuer: "amex",
+        network: "amex",
+        program: "MR",
+        last_four: "1234",
+        status: "active",
+      },
+    ],
+    subscriptions: [
+      fixtures.sub({
+        id: "sub-notion",
+        name: "Notion",
+        amount: "10.00",
+        // Seed with the catch-all to prove the picker pick goes through.
+        category: "Other",
+        status: "active",
+        card_id: "card-1",
+      }),
+    ],
+    onPatchSubscription: (id, body) =>
+      patchCalls.push({ id, body: body as Record<string, unknown> }),
+  });
+  await page.goto("/subscriptions");
+
+  await page.getByText("Notion").click();
+
+  // Scope to the visible `<aside>` (desktop variant) — same reason as
+  // the amount-edit test above. The category picker (a nested
+  // BottomSheet with default `desktopVariant="dialog"`) portals to body
+  // from BOTH outer copies, so two overlapping `<div role="dialog">`
+  // exist at the same z-index. The later-in-DOM copy wins the
+  // pointer-event stacking, so `.last()` is the clickable one. Both
+  // share React state, so the resulting setCategory call is identical.
+  const sheet = page.locator('aside[role="dialog"]');
+  await sheet
+    .getByRole("button", { name: /^category\s*Other/i })
+    .click();
+  await page
+    .getByRole("button", { name: "Memberships" })
+    .last()
+    .click();
+
+  await sheet.getByRole("button", { name: /save changes/i }).click();
+
+  await expect.poll(() => patchCalls.length).toBeGreaterThan(0);
+  const call = patchCalls.find((c) => c.id === "sub-notion");
+  expect(call).toBeDefined();
+  expect(call!.body).toEqual({ category: "Memberships" });
+});
+
+test("edit sheet: save button stays disabled until a field changes", async ({
+  page,
+}) => {
+  // Guards the dirty-tracking behaviour — opening the sheet and tapping
+  // save without any edit should be a no-op (no PATCH fires).
+  const patchCalls: Array<{ id: string; body: unknown }> = [];
+  await mockApi(page, {
+    cards: [
+      {
+        id: "card-1",
+        name: "CSR",
+        issuer: "chase",
+        network: "visa",
+        program: "UR",
+        last_four: "9999",
+        status: "active",
+      },
+    ],
+    subscriptions: [
+      fixtures.sub({
+        id: "sub-idle",
+        name: "Patreon",
+        amount: "5.00",
+        category: "Memberships",
+        status: "active",
+        card_id: "card-1",
+      }),
+    ],
+    onPatchSubscription: (id, body) => patchCalls.push({ id, body }),
+  });
+  await page.goto("/subscriptions");
+
+  await page.getByText("Patreon").click();
+  // Scope to the visible desktop `<aside>` — see amount-edit test for
+  // the BottomSheet portal-duplication rationale.
+  const sheet = page.locator('aside[role="dialog"]');
+  await expect(
+    sheet.getByRole("button", { name: /save changes/i }),
+  ).toBeDisabled();
+  // No PATCH should fire.
+  expect(patchCalls.length).toBe(0);
+});
+
 test("cancel button fires DELETE on the subscription", async ({ page }) => {
   const deleted: string[] = [];
   await mockApi(page, {
@@ -235,7 +394,7 @@ test("cancel button fires DELETE on the subscription", async ({ page }) => {
         id: "sub-killit",
         name: "Old Service",
         amount: "5.00",
-        category: "Subscriptions",
+        category: "Memberships",
         status: "active",
         card_id: "card-1",
       }),

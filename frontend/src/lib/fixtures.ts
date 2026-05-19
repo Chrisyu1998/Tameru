@@ -123,10 +123,10 @@ export const FIXTURE_TRANSACTIONS: Transaction[] = [
   t("Metrograph", 17.0, 4, "card-amex", "Entertainment", "tx-24"),
   t("Brooklyn Steel", 65.0, 8, "card-csp", "Entertainment", "tx-25"),
 
-  // Subscriptions — auto-detected recurring charges (5th-of-month etc.)
-  t("Spotify", 11.99, 2, "card-citi", "Subscriptions", "tx-26", { autoLogged: true }),
-  t("NYT", 17.0, 9, "card-citi", "Subscriptions", "tx-27", { autoLogged: true }),
-  t("iCloud+", 2.99, 12, "card-citi", "Subscriptions", "tx-28", { autoLogged: true }),
+  // Memberships / Streaming — auto-detected recurring charges (5th-of-month etc.)
+  t("Spotify", 11.99, 2, "card-citi", "Streaming", "tx-26", { autoLogged: true }),
+  t("NYT", 17.0, 9, "card-citi", "Memberships", "tx-27", { autoLogged: true }),
+  t("iCloud+", 2.99, 12, "card-citi", "Memberships", "tx-28", { autoLogged: true }),
 
   // Utilities
   t("Con Edison", 89.4, 10, "card-citi", "Utilities", "tx-29"),

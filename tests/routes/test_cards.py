@@ -624,7 +624,7 @@ def test_confirm_with_af_date_creates_companion_subscription(
     """`next_annual_fee_date` + non-zero `annual_fee` creates a companion sub.
 
     Day 19b. The companion subscription has `frequency='annual'`,
-    `category='Subscriptions'`, name '{card_name} annual fee', a fresh
+    `category='Memberships'`, name '{card_name} annual fee', a fresh
     server-side `client_request_id`, and `start_date` / `next_billing_date`
     both equal to the supplied renewal date.
     """
@@ -655,7 +655,7 @@ def test_confirm_with_af_date_creates_companion_subscription(
     assert len(af) == 1, "expected exactly one companion AF subscription"
     sub = af[0]
     assert sub["name"] == f"{card_name} annual fee"
-    assert sub["category"] == "Subscriptions"
+    assert sub["category"] == "Memberships"
     assert sub["frequency"] == "annual"
     assert sub["next_billing_date"] == renewal
     assert sub["start_date"] == renewal

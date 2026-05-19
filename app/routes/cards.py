@@ -327,7 +327,7 @@ def delete_card(
         third-party recipient or other card to reassign to.
 
     AF subscriptions are recognised by the (`name LIKE '% annual fee'`,
-    `category='Subscriptions'`, `frequency='annual'`) triple — the same
+    `category='Memberships'`, `frequency='annual'`) triple — the same
     shape Day 19b's `POST /cards/confirm` AF dual-write inserts.
 
     Security: the function is SECURITY DEFINER but every WHERE clause
@@ -358,7 +358,7 @@ def _insert_af_subscription(
     soft-delete cascade looks for to flip it to 'cancelled':
 
       - `name = '{card_name} annual fee'`
-      - `category = 'Subscriptions'`
+      - `category = 'Memberships'`
       - `frequency = 'annual'`
 
     `start_date` and `next_billing_date` both land on the user-supplied
@@ -385,7 +385,7 @@ def _insert_af_subscription(
                 "frequency": "annual",
                 "start_date": proposal.next_annual_fee_date.isoformat(),
                 "next_billing_date": proposal.next_annual_fee_date.isoformat(),
-                "category": "Subscriptions",
+                "category": "Memberships",
                 "status": "active",
                 "client_request_id": str(uuid4()),
             }

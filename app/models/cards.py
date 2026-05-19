@@ -162,7 +162,7 @@ class CardProposal(BaseModel):
     # Day 19b — optional renewal date for card annual-fee tracking. When
     # set alongside `annual_fee > 0`, `POST /cards/confirm` creates a
     # companion `subscriptions` row (frequency='annual', category=
-    # 'Subscriptions', name='{card_name} annual fee') so the pg_cron
+    # 'Memberships', name='{card_name} annual fee') so the pg_cron
     # auto-logger logs the AF on each anniversary. Optional — users who
     # don't know the date skip it; the card still saves and AF tracking
     # is just unavailable. Cannot be inferred from web_search (per-user

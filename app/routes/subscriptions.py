@@ -127,7 +127,7 @@ def get_subscriptions(
     AF rows (Day 19b companion subscriptions) are hidden by default —
     pass `?include_card_af=true` to surface them. Recognition uses the
     same triple as the soft-delete cascade: `name LIKE '% annual fee'`
-    + `category='Subscriptions'` + `frequency='annual'`. Filter is
+    + `category='Memberships'` + `frequency='annual'`. Filter is
     applied in Python after fetching — subscriptions are bounded to
     ~tens per user, so the cost is trivial and the SQL stays simple.
 
@@ -369,7 +369,7 @@ def _is_card_af_row(row: dict) -> bool:
     return (
         isinstance(row.get("name"), str)
         and row["name"].endswith(" annual fee")
-        and row.get("category") == "Subscriptions"
+        and row.get("category") == "Memberships"
         and row.get("frequency") == "annual"
     )
 

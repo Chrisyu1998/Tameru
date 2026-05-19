@@ -765,7 +765,7 @@ def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
             "amount": 1,
             "frequency": "monthly",
             "start_date": "2026-05-13",
-            "category": "Subscriptions",
+            "category": "Memberships",
         },
         # `Drugstores`/`year` is unused by other set_goal tests in this
         # file so this smoke test won't race with their assertions on a

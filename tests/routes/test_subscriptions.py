@@ -202,7 +202,7 @@ def test_get_subscriptions_hides_card_af_by_default(client, user_a, card_a):
     pause without cancelling the card.
 
     Recognition uses the same triple as the soft-delete cascade:
-    `name LIKE '% annual fee'` + `category='Subscriptions'` +
+    `name LIKE '% annual fee'` + `category='Memberships'` +
     `frequency='annual'`.
     """
     netflix_id = _create_subscription(
@@ -214,7 +214,7 @@ def test_get_subscriptions_hides_card_af_by_default(client, user_a, card_a):
         card_a,
         name=f"AF-{_tag()} annual fee",
         frequency="annual",
-        category="Subscriptions",
+        category="Memberships",
     )
 
     # Default response: no AF rows.
@@ -232,7 +232,7 @@ def test_get_subscriptions_include_card_af_returns_them(client, user_a, card_a):
         card_a,
         name=f"OptIn-{_tag()} annual fee",
         frequency="annual",
-        category="Subscriptions",
+        category="Memberships",
     )
     resp = client.get(
         "/subscriptions",
@@ -555,7 +555,7 @@ def _create_subscription(
     """Convenience: POST a fresh subscription and return its id.
 
     `frequency` and `category` are optional — tests that need to seed
-    an AF-shaped row (annual + Subscriptions category + 'X annual fee'
+    an AF-shaped row (annual + Memberships category + 'X annual fee'
     name) override them to exercise the hide-AF filter.
     """
     resp = client.post(

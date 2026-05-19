@@ -142,6 +142,40 @@ export async function cancelSubscription(id: string): Promise<void> {
   }
 }
 
+/**
+ * General-purpose patch: any subset of `{name, amount, category, card_id}`.
+ * Status changes still go through `pauseSubscription`/`resumeSubscription`/
+ * `cancelSubscription` so the local optimistic update can scope to the
+ * specific lifecycle field. Used by `EditSubscriptionSheet` (DESIGN.md
+ * §6.5) so the user can edit field values without leaving the
+ * subscriptions surface.
+ *
+ * Reverts the local row on failure so a 422 (e.g. `card_deleted` resume
+ * guard) doesn't leave the UI showing values the server didn't accept.
+ */
+export async function updateSubscription(
+  id: string,
+  patch: {
+    name?: string;
+    amount?: string;
+    category?: string;
+    card_id?: string | null;
+  },
+): Promise<void> {
+  const prev = state.items;
+  setState({
+    items: prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+  });
+  try {
+    const updated = await patchSubscription(id, patch);
+    setState({
+      items: state.items.map((s) => (s.id === id ? updated : s)),
+    });
+  } catch {
+    setState({ items: prev });
+  }
+}
+
 export async function reassignSubscriptionCard(
   id: string,
   cardId: string | null,

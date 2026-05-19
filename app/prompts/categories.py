@@ -23,7 +23,7 @@ ALLOWED_CATEGORIES: tuple[str, ...] = (
     "Transit",         # Rideshare (Uber/Lyft), public transit, parking, tolls
     "Travel",          # Airlines, hotels, car rentals, cruises
     "Streaming",       # Netflix, Spotify, Apple Music, Hulu, YouTube Premium
-    "Subscriptions",   # Non-streaming recurring: software, gym, Patreon, news
+    "Memberships",     # Non-streaming recurring: software, gym, Patreon, news, cloud storage
     "Entertainment",   # Concerts, movies, events, venues, attractions
     "Shopping",        # General retail, clothing, electronics (including online)
     "Drugstores",      # CVS, Walgreens, Rite Aid

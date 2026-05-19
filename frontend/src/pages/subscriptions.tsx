@@ -1,16 +1,9 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Pause, Play, X } from "lucide-react";
-import { SketchIcon } from "@/components/SketchIcon";
-import { BottomSheet } from "@/components/BottomSheet";
-import { Pill } from "@/components/Pill";
+import { EditSubscriptionSheet } from "@/components/EditSubscriptionSheet";
 import { useLedger } from "@/lib/ledger";
 import {
-  cancelSubscription,
   formatFrequency,
-  pauseSubscription,
-  reassignSubscriptionCard,
-  resumeSubscription,
   useSubscriptions,
   type SubscriptionRow,
 } from "@/lib/subscriptions";
@@ -37,6 +30,7 @@ function formatAmount(amount: string): string {
 export default function SubscriptionsPage() {
   const navigate = useNavigate();
   const { items } = useSubscriptions();
+  const { cards } = useLedger();
   const [selected, setSelected] = useState<SubscriptionRow | null>(null);
 
   // Surface the needs-new-card banner: any active card-deletion that
@@ -44,7 +38,6 @@ export default function SubscriptionsPage() {
   // soft-deleted. The cards list (via `useLedger`) is the source of
   // truth for whether the backing card is still active. (DESIGN.md §8.3
   // split-cascade rule.)
-  const { cards } = useLedger();
   const cardsById = useMemo(() => {
     const m = new Map<string, (typeof cards)[number]>();
     for (const c of cards) m.set(c.id, c);
@@ -56,13 +49,14 @@ export default function SubscriptionsPage() {
   const cancelled = items.filter((s) => s.status === "cancelled");
   const needsCard = paused.filter((s) => s.card_id != null && !cardsById.has(s.card_id));
 
+  // Keep the open sheet in sync with the in-memory row so edits land
+  // visibly (e.g. amount change applies, save, re-render keeps the
+  // updated row visible if the sheet stays open for a follow-up).
+  const selectedLive =
+    selected !== null ? (items.find((s) => s.id === selected.id) ?? selected) : null;
+
   const askToAdd = () => {
     setChatSeed("Add a new subscription:");
-    navigate("/chat");
-  };
-
-  const editInChat = (sub: SubscriptionRow) => {
-    setChatSeed(`Edit my ${sub.name} subscription:`);
     navigate("/chat");
   };
 
@@ -131,10 +125,11 @@ export default function SubscriptionsPage() {
         onClick={askToAdd}
       />
 
-      <DetailSheet
-        sub={selected}
+      <EditSubscriptionSheet
+        open={selected !== null}
+        subscription={selectedLive}
+        cards={cards}
         onClose={() => setSelected(null)}
-        onEditInChat={editInChat}
       />
     </div>
   );
@@ -192,170 +187,3 @@ function Row({
   );
 }
 
-function DetailSheet({
-  sub,
-  onClose,
-  onEditInChat,
-}: {
-  sub: SubscriptionRow | null;
-  onClose: () => void;
-  onEditInChat: (s: SubscriptionRow) => void;
-}) {
-  const { cards } = useLedger();
-  if (!sub) {
-    return (
-      <BottomSheet open={false} onClose={onClose}>
-        {null}
-      </BottomSheet>
-    );
-  }
-  const card = sub.card_id ? cards.find((c) => c.id === sub.card_id) : null;
-  // The §8.3 split-cascade leaves `card_id` pointing at the now-deleted
-  // card. The cards page filter strips deleted-and-no-tx-in-scope rows
-  // from `useLedger().cards`, so a missing lookup here is the signal
-  // that the backing card was closed. If we don't gate the resume
-  // button on this, the new server guard 422s with `card_deleted` —
-  // matching server behavior in the UI keeps the user out of a
-  // confusing dead end.
-  const needsNewCard = sub.card_id != null && !card;
-
-  const togglePause = (): void => {
-    if (sub.status === "active") void pauseSubscription(sub.id);
-    else if (sub.status === "paused") void resumeSubscription(sub.id);
-    onClose();
-  };
-  const resumeAsAch = (): void => {
-    // The simplest user-recoverable path when the backing card is
-    // gone: drop the dead link, switch to bank ACH, and resume.
-    // Reassigning to a different active card is a chat-driven flow
-    // (the bottom "ask tameru ai" affordance below).
-    void reassignSubscriptionCard(sub.id, null).then(() =>
-      resumeSubscription(sub.id),
-    );
-    onClose();
-  };
-  const cancel = (): void => {
-    void cancelSubscription(sub.id);
-    onClose();
-  };
-
-  return (
-    <BottomSheet open onClose={onClose} ariaLabel="subscription details">
-      <header>
-        <h2 className="font-serif text-2xl text-ink lowercase-title">
-          {sub.name.toLowerCase()}
-        </h2>
-        {sub.status === "paused" && (
-          <Pill tone="neutral" className="mt-2">
-            paused
-          </Pill>
-        )}
-        {sub.status === "cancelled" && (
-          <Pill tone="neutral" className="mt-2">
-            cancelled
-          </Pill>
-        )}
-      </header>
-
-      <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-4">
-        <DetailField label="amount" value={formatAmount(sub.amount)} mono />
-        <DetailField label="frequency" value={formatFrequency(sub.frequency)} />
-        <DetailField
-          label={sub.status === "active" ? "next billing" : "last billing"}
-          value={formatShortDate(sub.next_billing_date)}
-        />
-        <DetailField
-          label="card"
-          value={
-            sub.card_id == null
-              ? "—  (bank ACH)"
-              : card
-              ? `${card.name.split(" ")[0]} ···· ${card.last4 ?? ""}`
-              : "needs a new card"
-          }
-        />
-        <DetailField label="category" value={sub.category.toLowerCase()} />
-        <DetailField label="started" value={formatShortDate(sub.start_date)} />
-      </dl>
-
-      {sub.status !== "cancelled" && (
-        <div className="mt-7 flex flex-col gap-2">
-          {sub.status === "paused" && needsNewCard ? (
-            <>
-              <p className="rounded-2xl border border-warn-wash/60 bg-warn-wash/20 px-3 py-2 text-[0.78rem] text-ink-secondary">
-                this subscription's card was closed. resume as bank ACH,
-                or ask tameru to reassign it to another card.
-              </p>
-              <button
-                type="button"
-                onClick={resumeAsAch}
-                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-hairline bg-surface text-[0.95rem] text-ink hover:bg-elevated"
-              >
-                <Play className="h-4 w-4" /> resume as bank ACH
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={togglePause}
-              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-hairline bg-surface text-[0.95rem] text-ink hover:bg-elevated"
-            >
-              {sub.status === "active" ? (
-                <>
-                  <Pause className="h-4 w-4" /> pause
-                </>
-              ) : (
-                <>
-                  <Play className="h-4 w-4" /> resume
-                </>
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={cancel}
-            className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-warn-wash/40 text-[0.95rem] text-over hover:bg-warn-wash/70"
-          >
-            <X className="h-4 w-4" /> cancel subscription
-          </button>
-        </div>
-      )}
-
-      <p className="mt-5 text-center text-[0.72rem] text-ink-tertiary">
-        billing cadence and start date are fixed — cancel and re-add to change
-        them.
-      </p>
-
-      <button
-        type="button"
-        onClick={() => onEditInChat(sub)}
-        className="mt-5 inline-flex w-full items-center justify-center gap-2 text-[0.82rem] text-ink-secondary hover:text-ink"
-      >
-        <SketchIcon kind="sparkle" size={14} seed={43} className="text-moss" />
-        <span>to edit amount / category / card — ask tameru ai</span>
-        <ArrowRight className="h-3.5 w-3.5" />
-      </button>
-    </BottomSheet>
-  );
-}
-
-function DetailField({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex flex-col">
-      <dt className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-        {label}
-      </dt>
-      <dd className={cn("mt-0.5 text-[0.95rem] text-ink", mono && "tabular")}>
-        {value}
-      </dd>
-    </div>
-  );
-}

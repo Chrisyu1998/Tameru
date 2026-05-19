@@ -787,8 +787,9 @@ PROPOSE_SUBSCRIPTION_TOOL: dict[str, Any] = {
                 "enum": list(ALLOWED_CATEGORIES),
                 "description": (
                     "Closed-enum category. 'Streaming' for Netflix/Spotify/"
-                    "Apple Music; 'Subscriptions' for non-streaming "
-                    "recurring (software, gym, news, Patreon); 'Home' for "
+                    "Apple Music/YouTube Premium/Disney+ (media specifically); "
+                    "'Memberships' for non-streaming recurring (software, "
+                    "gym, news, Patreon, cloud storage); 'Home' for "
                     "rent/mortgage/HOA; 'Utilities' for phone/internet/"
                     "electric. If unclear, ask the user."
                 ),

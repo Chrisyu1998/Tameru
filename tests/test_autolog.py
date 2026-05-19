@@ -196,7 +196,7 @@ def _seed_subscription(
         "frequency": frequency,
         "start_date": next_billing_date.isoformat(),
         "next_billing_date": next_billing_date.isoformat(),
-        "category": "Subscriptions",
+        "category": "Memberships",
         "status": status,
     }
     admin_client.table("subscriptions").insert(row).execute()

@@ -375,7 +375,7 @@ function inferCategory(input: string, merchant: string): { value: Category; conf
     ["Transit", /\b(uber|lyft|taxi|cab|mta|omny|subway|bus|revel|toll|parking)\b/, 0.92],
     ["Travel", /\b(amtrak|delta|united|jetblue|airbnb|hotel|airline|flight)\b/, 0.9],
     ["Streaming", /\b(netflix|spotify|hulu|apple music|youtube premium|disney\+)\b/, 0.95],
-    ["Subscriptions", /\b(nyt|icloud|patreon|substack|gym|class pass)\b/, 0.9],
+    ["Memberships", /\b(nyt|icloud|patreon|substack|gym|class pass)\b/, 0.9],
     ["Entertainment", /\b(metrograph|movie|cinema|concert|brooklyn steel|theater|theatre)\b/, 0.85],
     ["Shopping", /\b(uniqlo|amazon|etsy|store|shop|mcnally)\b/, 0.7],
     ["Drugstores", /\b(cvs|walgreens|rite aid|drugstore|pharmacy)\b/, 0.92],
@@ -418,7 +418,7 @@ function pickCard(category: Category): { id: string; confidence: number } {
   }
   if (
     category === "Groceries" ||
-    category === "Subscriptions" ||
+    category === "Memberships" ||
     category === "Streaming" ||
     category === "Utilities" ||
     category === "Drugstores"

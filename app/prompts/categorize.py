@@ -18,6 +18,13 @@ still a Decimal on the transaction row — Day 5's confirm endpoint, the
 Entry-Moment Insight (Day 13), and all downstream analytics use it —
 but the category decision no longer sees it.
 
+v5 (categorize_v5): renamed `Subscriptions` → `Memberships` to remove
+the name collision with the `subscriptions` table (DESIGN.md §6.5). The
+bucket is unchanged — software, gym, Patreon, news, cloud storage —
+only the label moved. Streaming media (Netflix/Spotify/YouTube Premium/
+Disney+) stays in `Streaming` per §6.5's disambiguation rule. Existing
+rows are migrated by 20260519120000_rename_subscriptions_to_memberships.
+
 v4 (categorize_v4): fixed a prompt-injection gap in the caller
 (app/integrations/gemini.py::categorize). Prior to v4, the merchant
 string was passed twice to Gemini: once inside the <merchant>...</merchant>
@@ -41,7 +48,7 @@ from __future__ import annotations
 
 from app.prompts.categories import ALLOWED_CATEGORIES
 
-PROMPT_VERSION = "categorize_v4"
+PROMPT_VERSION = "categorize_v5"
 
 # Per-category one-line descriptions. Kept in this file (not categories.py)
 # because the descriptions are prompt-engineering — they change when we
@@ -75,9 +82,11 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
         "Netflix, Spotify, Apple Music, Hulu, YouTube Premium, Disney+ "
         "— recurring charges for streaming media specifically"
     ),
-    "Subscriptions": (
+    "Memberships": (
         "non-streaming recurring charges: software (Adobe, Notion), "
-        "gym memberships, Patreon, news subscriptions, cloud storage"
+        "gym memberships, Patreon, news subscriptions, cloud storage. "
+        "Netflix / Spotify / YouTube Premium / Disney+ are Streaming, "
+        "not Memberships — Streaming is media specifically"
     ),
     "Entertainment": (
         "concerts, movies at a theater, sporting events, venues, "
