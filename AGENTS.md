@@ -4,10 +4,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project memory
 
-`memory/decisions.md` and `memory/learnings.md` hold the *history* behind the architectural invariants in this file — why a choice was made, what alternatives were rejected, what was learned while building. Local-only (gitignored, missing for collaborators — that's fine). This file is for invariants; `memory/` is for narrative.
+`memory.md` (single file at the repo root) holds the *history* behind the architectural invariants in this file — why each non-obvious choice was made, what alternatives were rejected, what was learned while building. Two H2 sections: `## Decisions` (5-field blocks — Decision, Context, Rationale, Alternatives considered, Revisit when) and `## Learnings` (date + paragraph). Local-only (gitignored, missing for collaborators — that's fine). This file is for *invariants*; `memory.md` is for *narrative*.
 
-<!-- Memory auto-loads at session start. Single file with two H2 sections
-     (## Decisions, ## Learnings). Gitignored; missing import is silently skipped. -->
+Read `memory.md` before making any non-trivial architectural choice — the rationale for an existing pattern is almost always in there, and re-deriving it from scratch usually produces the wrong answer. When a session resolves a non-obvious decision or surfaces a durable learning, append it to `memory.md` in the same change.
+
+<!-- Memory auto-loads at session start via AGENTS.md import. Mirrors CLAUDE.md's @memory.md line. -->
 @memory.md
 
 ## Project
