@@ -21,9 +21,9 @@ from app.routes import transactions as transactions_routes
 # Environment variables every authenticated request path depends on. A
 # process can boot without them and still answer /healthz, then 500 on the
 # first request that needs one — `lifespan` turns that into a loud boot
-# failure instead. SUPABASE_SERVICE_ROLE_KEY is deliberately absent: it
-# belongs to pg_cron and migrations, never to a request handler (CLAUDE.md
-# invariant 1), so a request-serving process does not require it.
+# failure instead. The Supabase service-role key is deliberately absent:
+# it belongs to pg_cron and migrations, never to a request handler
+# (CLAUDE.md invariant 1), so a request-serving process does not require it.
 _REQUIRED_ENV_VARS = (
     "SUPABASE_URL",
     "SUPABASE_ANON_KEY",
