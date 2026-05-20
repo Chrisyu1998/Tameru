@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/Button";
-import { Card } from "@/components/Card";
+import { Dashboard } from "@/components/Dashboard";
+import { ChatThread } from "@/components/chat/ChatThread";
 import { Pill } from "@/components/Pill";
-import { DeltaTile } from "@/components/DeltaTile";
-import { cn } from "@/lib/utils";
+import { EntryNudgeAnimation } from "@/components/tour/EntryNudgeAnimation";
+import { DigestEmailPreview } from "@/components/tour/DigestEmailPreview";
+import { tourFixtures } from "@/fixtures/tour";
+import { useAppStore } from "@/store";
 import { markOnboarded } from "@/lib/onboarding";
+import { cn } from "@/lib/utils";
 
 interface TourScreen {
   title: string;
@@ -14,113 +18,30 @@ interface TourScreen {
   illustration: React.ReactNode;
 }
 
-function DashboardIllustration() {
-  return (
-    <div className="flex flex-col gap-3">
-      <Card variant="elevated">
-        <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-          this week
-        </p>
-        <p className="mt-2 font-serif text-3xl text-ink tabular">$412</p>
-        <p className="mt-1 text-xs text-ink-tertiary">3 days into the week</p>
-      </Card>
-      <div className="flex flex-col gap-2">
-        <DeltaTile category="dining" delta={47} />
-        <DeltaTile category="groceries" delta={-22} />
-        <DeltaTile category="transit" delta={8} />
-      </div>
-    </div>
-  );
-}
-
-function EntryNudgeIllustration() {
-  return (
-    <Card variant="elevated" className="border-moss-soft/40 bg-moss-wash/30">
-      <div className="flex items-start gap-3">
-        <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-moss" />
-        <div className="flex flex-col gap-2">
-          <p className="font-serif italic text-ink-secondary lowercase-title">
-            a small ritual, twice a day.
-          </p>
-          <p className="text-sm text-ink">
-            log what you bought. one line, one breath.
-          </p>
-          <div className="mt-2 flex items-center gap-2 rounded-2xl border border-hairline bg-surface px-3 py-2">
-            <span className="text-xs text-ink-tertiary">8:14am ·</span>
-            <span className="text-sm text-ink">flat white</span>
-            <span className="ml-auto tabular text-sm text-ink">$5.50</span>
-          </div>
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function ChatIllustration() {
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="self-end max-w-[80%] rounded-2xl rounded-tr-sm border border-hairline bg-elevated px-4 py-2.5 text-sm text-ink">
-        why was last week so high?
-      </div>
-      <div className="self-start max-w-[85%] rounded-2xl rounded-tl-sm bg-moss-wash px-4 py-2.5 text-sm text-moss-deep">
-        Two restaurants and a flight. Without those, you spent $54 less than
-        usual.
-      </div>
-      <div className="self-end max-w-[60%] rounded-2xl rounded-tr-sm border border-hairline bg-elevated px-4 py-2.5 text-sm text-ink">
-        thanks. that helps.
-      </div>
-    </div>
-  );
-}
-
-function DigestIllustration() {
-  return (
-    <Card variant="elevated">
-      <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-        sunday digest
-      </p>
-      <h3 className="mt-2 font-serif text-xl text-ink lowercase-title">
-        a quiet week.
-      </h3>
-      <ul className="mt-4 flex flex-col gap-2.5 text-sm text-ink-secondary">
-        <li className="flex items-start gap-2">
-          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-moss" />
-          spent <span className="tabular text-ink">$284</span>, below your
-          usual $340.
-        </li>
-        <li className="flex items-start gap-2">
-          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-moss" />
-          dining is trending down for the second week.
-        </li>
-        <li className="flex items-start gap-2">
-          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-warn" />
-          one subscription renews tuesday.
-        </li>
-      </ul>
-    </Card>
-  );
-}
-
 const SCREENS: TourScreen[] = [
   {
     title: "your week, at a glance",
     callout: "spending is shown as deltas — never absolute totals.",
-    illustration: <DashboardIllustration />,
+    illustration: (
+      <div className="mx-auto w-full max-w-md">
+        <Dashboard data={tourFixtures.dashboard} inert />
+      </div>
+    ),
   },
   {
     title: "a small ritual",
-    callout: "manual entry keeps you present with your money.",
-    illustration: <EntryNudgeIllustration />,
+    callout: "log it, confirm it, hear the quiet observation.",
+    illustration: <EntryNudgeAnimation />,
   },
   {
     title: "ask in plain language",
     callout: "your ledger talks back, kindly and in context.",
-    illustration: <ChatIllustration />,
+    illustration: <ChatThread messages={tourFixtures.chat} />,
   },
   {
     title: "the sunday digest",
     callout: "one calm summary per week. nothing more.",
-    illustration: <DigestIllustration />,
+    illustration: <DigestEmailPreview />,
   },
 ];
 
@@ -129,15 +50,31 @@ export default function TourPage() {
   const [idx, setIdx] = useState(0);
   const screen = SCREENS[idx];
   const isLast = idx === SCREENS.length - 1;
+  const jwt = useAppStore((s) => s.jwt);
+  const homeCurrency = useAppStore((s) => s.homeCurrency);
+  const fullyOnboarded = !!jwt && typeof homeCurrency === "string";
 
-  const finishTour = () => {
-    markOnboarded();
-    navigate("/");
+  // Final-CTA targets:
+  //   - "import a CSV": always deep-links into the wizard's csvImport step.
+  //     The wizard's pickStartStep handles every auth state — fully authed
+  //     jumps straight in; unauthed flows through signin → currency →
+  //     addCard → csvImport.
+  //   - "log my first transaction": authed users land on `/` (their real
+  //     home); unauthed users get the signin deep link so they don't
+  //     bounce back to splash.
+  const importCsvCta = () => navigate("/onboarding?step=csvImport");
+  const logFirstCta = () => {
+    if (fullyOnboarded) {
+      markOnboarded();
+      navigate("/");
+    } else {
+      navigate("/onboarding?step=signin");
+    }
   };
 
   const next = () => {
-    if (isLast) finishTour();
-    else setIdx((i) => i + 1);
+    if (isLast) return; // final screen renders dual CTAs, not "next"
+    setIdx((i) => i + 1);
   };
 
   const back = () => {
@@ -145,8 +82,33 @@ export default function TourPage() {
     else setIdx((i) => i - 1);
   };
 
+  // Horizontal swipe gesture. Threshold of 50px is the conventional
+  // sweet spot — large enough to ignore accidental drift, small enough
+  // that an intentional flick clears it. Vertical-dominant motion is
+  // ignored so the user can still scroll within a screen.
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const onTouchStart: React.TouchEventHandler = (e) => {
+    const t = e.touches[0];
+    touchStart.current = { x: t.clientX, y: t.clientY };
+  };
+  const onTouchEnd: React.TouchEventHandler = (e) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
+    if (dx < 0) next();
+    else back();
+  };
+
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-16">
+    <div
+      className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-16"
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+    >
       <div className="flex items-center justify-between">
         <button
           type="button"
@@ -171,7 +133,7 @@ export default function TourPage() {
 
       <div className="flex-1" />
 
-      <div className="mt-10 flex flex-col items-center gap-6">
+      <div className="mt-10 flex flex-col items-center gap-5">
         <div className="flex items-center gap-2">
           {SCREENS.map((_, i) => (
             <span
@@ -184,18 +146,38 @@ export default function TourPage() {
           ))}
         </div>
 
-        <Button fullWidth size="lg" onClick={next}>
-          {isLast ? "log your first transaction →" : "next"}
-        </Button>
-
         {!isLast && (
-          <button
-            type="button"
-            onClick={finishTour}
-            className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
-          >
-            skip the tour
-          </button>
+          <>
+            <Button fullWidth size="lg" onClick={next}>
+              next
+            </Button>
+            <button
+              type="button"
+              onClick={logFirstCta}
+              className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
+            >
+              skip the tour
+            </button>
+          </>
+        )}
+
+        {isLast && (
+          <>
+            <p className="max-w-[28ch] text-center text-xs text-ink-tertiary">
+              this is tameru with 3 months of data. log your first transaction
+              or import a csv to get there.
+            </p>
+            <Button fullWidth size="lg" onClick={importCsvCta}>
+              import a csv
+            </Button>
+            <button
+              type="button"
+              onClick={logFirstCta}
+              className="text-sm text-ink-secondary underline-offset-4 hover:text-ink hover:underline"
+            >
+              log my first transaction
+            </button>
+          </>
         )}
       </div>
     </div>

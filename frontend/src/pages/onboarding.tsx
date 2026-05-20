@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { SplashStep } from "@/features/onboarding/SplashStep";
 import { PhilosophyStep } from "@/features/onboarding/PhilosophyStep";
 import { SignInStep } from "@/features/onboarding/SignInStep";
@@ -25,29 +25,52 @@ const STEP_ORDER: OnboardingStep[] = [
 /** Steps where a back button is hidden (irreversible or in-progress). */
 const NO_BACK: OnboardingStep[] = ["splash", "currency", "csvProcessing"];
 
+/** Steps the `?step=` deep link accepts. Anything else is ignored. */
+const DEEP_LINK_STEPS = new Set<OnboardingStep>([
+  "signin",
+  "addCard",
+  "csvImport",
+]);
+
 /**
- * Pick where the wizard should open. Three cases:
- *   - no JWT → start at splash (full onboarding flow)
- *   - JWT + no home_currency → skip past signin to the currency step (this
- *     is the post-OAuth landing)
- *   - JWT + home_currency → wizard shouldn't be visible at all; the home
- *     gate routes elsewhere. We still default to splash so refreshing the
- *     URL directly doesn't crash.
+ * Pick where the wizard should open. Cases:
+ *   - `?step=csvImport` (Tour's final "import a CSV" CTA):
+ *       - authed + bootstrapped → jump straight to csvImport
+ *       - authed but no home_currency → currency (then flows forward to csvImport)
+ *       - not authed → signin (then flows forward to csvImport)
+ *   - `?step=signin` (Tour's final "log my first transaction" CTA, unauthed):
+ *       - not authed → signin
+ *   - no query param:
+ *       - authed + no home_currency → currency (post-OAuth landing)
+ *       - else → splash (full first-launch flow)
  */
 function pickStartStep(
   hasJwt: boolean,
   homeCurrency: string | null | undefined,
+  requested: OnboardingStep | null,
 ): OnboardingStep {
+  if (requested === "csvImport") {
+    if (hasJwt && typeof homeCurrency === "string") return "csvImport";
+    if (hasJwt && homeCurrency == null) return "currency";
+    return "signin";
+  }
+  if (requested === "signin" && !hasJwt) return "signin";
   if (hasJwt && homeCurrency == null) return "currency";
   return "splash";
 }
 
 export default function OnboardingWizard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const jwt = useAppStore((s) => s.jwt);
   const homeCurrency = useAppStore((s) => s.homeCurrency);
+
+  const requestedRaw = searchParams.get("step") as OnboardingStep | null;
+  const requested =
+    requestedRaw && DEEP_LINK_STEPS.has(requestedRaw) ? requestedRaw : null;
+
   const [step, setStep] = useState<OnboardingStep>(() =>
-    pickStartStep(!!jwt, homeCurrency),
+    pickStartStep(!!jwt, homeCurrency, requested),
   );
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_currency, setCurrency] = useState<Currency>("USD");
@@ -69,12 +92,15 @@ export default function OnboardingWizard() {
 
   // Fully-onboarded users who land on /onboarding (typically via the
   // sidebar's "restart onboarding") get the visual tour, not the auth
-  // wizard — they're already authed and bootstrapped.
+  // wizard. Skipped when an explicit `?step=` deep link is present — that
+  // signal comes from the tour's final CTAs and wants the wizard, not a
+  // re-tour.
   useEffect(() => {
+    if (requested) return;
     if (jwt && typeof homeCurrency === "string") {
       navigate("/onboarding/tour", { replace: true });
     }
-  }, [jwt, homeCurrency, navigate]);
+  }, [jwt, homeCurrency, navigate, requested]);
 
   const goTo = (next: OnboardingStep) => setStep(next);
   const finish = () => {

@@ -5,35 +5,44 @@ interface PhilosophyStepProps {
   onTour: () => void;
 }
 
+/**
+ * The pitch screen. Copy is the verbatim DESIGN.md §5.4.1 block — keep
+ * the two in sync. Primary CTA is "get started" so a user cannot reach
+ * signin without passing this screen. Secondary text link routes to the
+ * static tour.
+ */
 export function PhilosophyStep({ onContinue, onTour }: PhilosophyStepProps) {
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-24 animate-fade-up">
-      <h1 className="font-serif text-3xl text-ink lowercase-title">why manual?</h1>
+    <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-20 animate-fade-up">
+      <h1 className="font-serif text-3xl text-ink lowercase-title">
+        why manual?
+      </h1>
 
       <div className="mt-8 flex flex-col gap-5 text-[0.95rem] leading-relaxed text-ink-secondary">
         <p>
-          Most apps pull your transactions in silence. The numbers move, the
-          balance shifts, and you never quite see it happen.
+          Most spending apps sync your bank automatically. Tameru
+          doesn&rsquo;t &mdash; on purpose.
         </p>
         <p>
-          Automatic means invisible. The act of logging is what builds awareness
-          — a half-second pause where you notice what you bought, and why.
+          The act of logging a purchase, even for 10 seconds, is what
+          builds awareness. Mint synced everything automatically. People
+          still overspent, because automatic means invisible.
         </p>
         <p>
-          Manual entry isn't a chore here. It's the entire point. A small ritual
-          that turns spending into something you remember instead of something
-          that drifts past.
+          Tameru asks you to log what you spend. The AI handles the rest
+          &mdash; categorization, patterns, questions, nudges. You bring
+          the data. Tameru brings the intelligence.
         </p>
-        <p className="text-ink-tertiary">
-          We'll keep it light. A few taps, then back to your day.
+        <p className="text-ink">
+          If that sounds like the right trade, let&rsquo;s get started.
         </p>
       </div>
 
       <div className="flex-1" />
 
-      <div className="mt-12 flex flex-col items-center gap-4">
+      <div className="mt-10 flex flex-col items-center gap-4">
         <Button fullWidth onClick={onContinue}>
-          continue
+          get started
         </Button>
         <button
           type="button"

@@ -6,6 +6,11 @@ interface SplashStepProps {
   onTour: () => void;
 }
 
+/**
+ * Brand introduction. Single primary action ("continue") routes to the
+ * philosophy pitch; the tour escape hatch is a secondary text link.
+ * The "get started" CTA lives on PhilosophyStep so the pitch gates signup.
+ */
 export function SplashStep({ onContinue, onTour }: SplashStepProps) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-between px-6 pb-12 pt-24 animate-fade-up">
@@ -34,7 +39,7 @@ export function SplashStep({ onContinue, onTour }: SplashStepProps) {
 
       <div className="flex w-full max-w-sm flex-col items-center gap-4">
         <Button fullWidth onClick={onContinue}>
-          get started
+          continue
         </Button>
         <button
           type="button"

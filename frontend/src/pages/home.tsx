@@ -1,17 +1,12 @@
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowUpRight, Wallet } from "lucide-react";
+import { Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
-import { DeltaTile } from "@/components/DeltaTile";
+import { Dashboard } from "@/components/Dashboard";
 import {
   dismissFirstHint,
   isFirstHintDismissed,
 } from "@/lib/ledger";
-import {
-  useDashboardSummary,
-  type CategoryTileWire,
-  type DashboardSummaryWire,
-} from "@/lib/dashboardApi";
-import { formatMoney, formatMonth, formatPercent } from "@/lib/format";
+import { useDashboardSummary } from "@/lib/dashboardApi";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 
@@ -71,85 +66,9 @@ export default function HomePage() {
           }}
         />
       ) : (
-        <PopulatedHome summary={summary} />
+        <Dashboard data={summary} />
       )}
     </div>
-  );
-}
-
-/* ─── Populated ──────────────────────────────────────────────── */
-
-function PopulatedHome({ summary }: { summary: DashboardSummaryWire }) {
-  const monthCents = Math.round(Number(summary.this_month) * 100);
-  const deltaPct = summary.delta_pct ?? 0;
-  const tiles = summary.categories.slice(0, 4);
-
-  return (
-    <>
-      <header className="flex items-center justify-between">
-        <h1 className="font-serif text-3xl text-ink lowercase-title">home</h1>
-        <Link
-          to="/breakdown"
-          className="inline-flex items-center gap-1 text-sm text-moss hover:text-moss-deep transition-colors"
-        >
-          <ArrowUpRight className="h-3.5 w-3.5" />
-          <span>Breakdown</span>
-        </Link>
-      </header>
-
-      <section className="mt-12">
-        <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-          {formatMonth().toLowerCase()}
-        </p>
-        <p className="mt-3 font-serif text-[4rem] leading-none text-ink tabular">
-          {formatMoney(monthCents)}
-        </p>
-
-        {summary.baseline_ready && summary.delta_pct !== null && (
-          <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-warn-wash px-3 py-1 text-xs text-warn">
-            <span className="tabular font-medium">
-              {formatPercent(deltaPct)} vs your avg
-            </span>
-          </div>
-        )}
-
-        {summary.observation && (
-          <p className="mt-6 max-w-[28ch] font-serif italic text-[0.95rem] leading-relaxed text-ink-secondary">
-            {summary.observation}
-          </p>
-        )}
-      </section>
-
-      <section className="mt-12 grid grid-cols-2 gap-3">
-        {tiles.map((tile) => (
-          <Tile key={tile.name} tile={tile} />
-        ))}
-      </section>
-    </>
-  );
-}
-
-function Tile({ tile }: { tile: CategoryTileWire }) {
-  if (!tile.baseline_ready || tile.delta_abs === null) {
-    return (
-      <DeltaTile
-        layout="stacked"
-        tone="neutral"
-        direction="neutral"
-        category={tile.name.toLowerCase()}
-        delta={null}
-        band="still learning"
-      />
-    );
-  }
-  const deltaDollars = Math.round(Number(tile.delta_abs));
-  return (
-    <DeltaTile
-      layout="stacked"
-      tone="neutral"
-      category={tile.name.toLowerCase()}
-      delta={deltaDollars}
-    />
   );
 }
 
