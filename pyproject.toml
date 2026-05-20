@@ -15,6 +15,7 @@ dependencies = [
   "anthropic>=0.40",
   "google-genai>=0.3",
   "sentry-sdk[fastapi]>=2.18",
+  "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]

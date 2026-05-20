@@ -55,7 +55,11 @@ PROMPT_VERSION = "categorize_v5"
 # see misclassification patterns, and that should bump PROMPT_VERSION.
 # Every entry in ALLOWED_CATEGORIES must have a matching description; a
 # mismatch is a test failure, not a runtime fallback.
-_CATEGORY_DESCRIPTIONS: dict[str, str] = {
+#
+# Public (no underscore) since Day 20's batch-categorize prompt
+# (app/prompts/csv.py) reuses the same descriptions — the single-row and
+# batch prompts must stay aligned on category semantics.
+CATEGORY_DESCRIPTIONS: dict[str, str] = {
     "Groceries": (
         "supermarkets, produce markets, corner stores — buying food to "
         "take home, not a prepared meal"
@@ -119,10 +123,10 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
 
 # Sanity check at import time — fail loudly if categories.py and the
 # descriptions drift out of sync.
-assert set(_CATEGORY_DESCRIPTIONS.keys()) == set(ALLOWED_CATEGORIES), (
-    "ALLOWED_CATEGORIES and _CATEGORY_DESCRIPTIONS are out of sync: "
-    f"only in categories={set(ALLOWED_CATEGORIES) - _CATEGORY_DESCRIPTIONS.keys()}, "
-    f"only in descriptions={_CATEGORY_DESCRIPTIONS.keys() - set(ALLOWED_CATEGORIES)}"
+assert set(CATEGORY_DESCRIPTIONS.keys()) == set(ALLOWED_CATEGORIES), (
+    "ALLOWED_CATEGORIES and CATEGORY_DESCRIPTIONS are out of sync: "
+    f"only in categories={set(ALLOWED_CATEGORIES) - CATEGORY_DESCRIPTIONS.keys()}, "
+    f"only in descriptions={CATEGORY_DESCRIPTIONS.keys() - set(ALLOWED_CATEGORIES)}"
 )
 
 
@@ -143,7 +147,7 @@ def render_prompt(
       prompt shape is deterministic — no branching on list emptiness.
     """
     categories_block = "\n".join(
-        f"- {c}: {_CATEGORY_DESCRIPTIONS[c]}" for c in ALLOWED_CATEGORIES
+        f"- {c}: {CATEGORY_DESCRIPTIONS[c]}" for c in ALLOWED_CATEGORIES
     )
 
     if past_corrections:

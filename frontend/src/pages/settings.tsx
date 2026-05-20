@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
+import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -228,6 +229,7 @@ function AccountPanel() {
 }
 
 function ImportPanel() {
+  const [sheetOpen, setSheetOpen] = useState(false);
   return (
     <div>
       <PanelHeading
@@ -240,12 +242,19 @@ function ImportPanel() {
         </p>
         <button
           type="button"
+          onClick={() => setSheetOpen(true)}
           className="mt-3 inline-flex h-10 items-center gap-2 rounded-2xl border border-hairline bg-elevated px-4 text-sm text-ink hover:bg-sunken"
+          data-testid="open-import-csv"
         >
           <Upload className="h-4 w-4" />
           choose a csv
         </button>
+        <p className="mt-3 text-[0.78rem] text-ink-tertiary">
+          tameru detects the columns, categorizes in batches, and skips
+          rows that already exist. up to 5 MB and 5,000 rows.
+        </p>
       </div>
+      <ImportCsvSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
     </div>
   );
 }

@@ -1,0 +1,7 @@
+Transaction Date,Post Date,Description,Category,Type,Amount,Memo
+04/12/2026,04/13/2026,BLUE BOTTLE COFFEE,Food & Drink,Sale,-5.50,
+04/13/2026,04/14/2026,WHOLE FOODS MARKET,Groceries,Sale,-84.32,
+04/14/2026,04/15/2026,CHEVRON,Gas,Sale,-42.10,
+04/15/2026,04/16/2026,AMAZON.COM,Shopping,Sale,-29.99,
+04/16/2026,04/17/2026,AMAZON RETURN,Shopping,Return,29.99,
+04/17/2026,04/18/2026,PAYMENT THANK YOU,Payments,Payment,500.00,

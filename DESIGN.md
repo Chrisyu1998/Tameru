@@ -257,7 +257,18 @@ Every major US bank exports CSVs. CSV import gives new users instant history wit
 - Gemini batch-categorizes in groups of 100. Progress indicator: "Categorizing 143 transactions…".
 - Result: "143 transactions imported." Dashboard and AI chat are immediately usable.
 
-Edge cases: duplicate detection (date + merchant + amount); unknown column schema → manual mapping UI. CSV import is also available post-onboarding under Settings → Import Data.
+**Upload caps (v1).** Files > 5 MB or > 5,000 rows are rejected with 413 at the route boundary, *before* parsing — closes the §17.5 "malicious 100MB upload pins a FastAPI worker" surface (line 1520). 5,000 rows covers ~2.5 years of a typical US bank export with headroom; easier to relax than tighten if real users hit it.
+
+**Skip rules.** Two row classes are skipped rather than inserted, counted separately from duplicates, and surfaced in the final SSE event so the user understands the row-count delta:
+
+- *Negative amounts (returns / credits).* Gross-spending breakdown over-counts for users who return things — acceptable at v1's invite-only scale. Refund handling (net-of-returns reporting) is Phase 2.
+- *Foreign-currency rows.* When the detected schema includes a currency column and a row's currency code ≠ `users_meta.home_currency`, skip. Aligns with invariant 13 (single immutable home currency, no FX). When no currency column exists, trust the row is in home currency — every US bank export from the supported six is.
+
+**No recurring detection on import.** A merchant appearing 12 times in the CSV lands as 12 one-off `csv_import` transactions, not a single subscription with backfilled charges. Recurring detection is Phase 2 (§6 line 289). This matches the YNAB / Copilot / Monarch posture surfaced in the Day 19 forward-only research.
+
+**Idempotent re-run as the recovery path.** Disconnected mid-stream uploads recover by re-uploading the same file: the dedup quadruple `(user_id, date, normalize_merchant(merchant), amount)` queried against `active_transactions` (so a deleted row does not shadow a re-import) catches every already-committed row, and the final SSE event reports "0 inserted, N duplicates skipped." No partial-import-status table, no resume cursor — the dedup quadruple is the resume key. Re-categorizing the already-imported slice burns negligible Gemini cost (§11.3 amortizes one full import at $0.01–$0.10).
+
+Edge cases: duplicate detection on `(user_id, date, normalize_merchant(merchant), amount)`; unknown column schema (Gemini confidence < 0.8) → manual mapping UI. CSV inserts use `source = 'csv_import'` (§8.2) and `client_request_id = NULL` (§8.2 line 834 — idempotency comes from the dedup quadruple, not crid). Each Gemini call (`detect_columns`, `categorize_batch`) writes one `ai_call_log` row with `task_type = 'csv_import'` (§8.8) under the caller's JWT (invariant 14). CSV import is also available post-onboarding under Settings → Import Data.
 
 ---
 
