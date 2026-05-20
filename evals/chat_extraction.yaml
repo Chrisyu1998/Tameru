@@ -1,0 +1,557 @@
+# Chat-extraction eval — 61 hand-curated rows. Day 22 (DESIGN.md §7.10).
+#
+# Each row is a user chat message. The runner feeds `user_message`
+# through the full agent loop (run_turn) and inspects the first proposer
+# tool_use block. Two proposers are gated:
+#
+#   * propose_transaction (51 rows) — scored on amount accuracy
+#     (gate 93% / target 95%) and merchant accuracy (target 90%, no gate).
+#   * propose_subscription (10 rows) — scored as a single per-row pass
+#     rate (gate 85% / target 90%); all args_must_include fields must
+#     match. The pg_cron auto-logger amplifies any frequency/start_date
+#     error monthly, so subscription rows are metered holistically.
+#
+# IMPORTANT — every propose_transaction row carries an explicit time
+# reference ("today", "just now", "this morning", "yesterday", "last
+# Friday", ...). `propose_transaction` requires a `date` arg, and the
+# chat system prompt tells the agent NOT to fabricate dates — so a
+# dateless message makes the agent (correctly) ask "when was this?"
+# instead of proposing, which an extraction eval can't score. A complete
+# utterance is what tests extraction. The runner does not assert the
+# `date` value itself; the anchor just guarantees a proposal happens.
+#
+# propose_card is intentionally NOT in this corpus — it fires rarely, the
+# parse-card UI catches most extraction errors, and UAT (Day 28) covers
+# it. See DESIGN.md §7.10.
+#
+# Per row: `difficulty` (easy|medium|hard) and optional `tags` drive the
+# diagnostic breakdown in the eval summary — they do not affect the gate.
+#
+# `card_name_resolves_to` is matched by the runner against the seeded
+# fixture cards (scripts/_eval_setup._FIXTURE_CARDS): "Amex Gold",
+# "Chase Sapphire Reserve", "Chase Freedom Unlimited". Merchant matching
+# is case-insensitive substring containment.
+#
+# Multilingual coverage (DESIGN.md §7.7 line 689): 3 zh-TW + 3 ja-JP
+# rows, distributed across both proposers. v1 chat languages: en-US,
+# zh-TW, ja-JP.
+
+# ===========================================================================
+# propose_transaction — 51 rows
+# ===========================================================================
+
+# --- core English extraction (amount + merchant) ---------------------------
+- user_message: "spent $47 at Trader Joe's on my Amex Gold just now"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [card-resolution]
+  args_must_include:
+    merchant: "Trader Joe's"
+    amount: 47.00
+    card_name_resolves_to: "Amex Gold"
+
+- user_message: "I just paid 12.50 for lunch at Chipotle"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Chipotle"
+    amount: 12.50
+
+- user_message: "coffee this morning, $6.75 at Blue Bottle"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Blue Bottle"
+    amount: 6.75
+
+- user_message: "dinner at Nobu tonight was 185 dollars, put it on the Sapphire Reserve"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [card-resolution]
+  args_must_include:
+    merchant: "Nobu"
+    amount: 185.00
+    card_name_resolves_to: "Chase Sapphire Reserve"
+
+- user_message: "filled up the tank today, $58.10 at Shell"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Shell"
+    amount: 58.10
+
+- user_message: "uber ride to the airport just now, 32 bucks"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Uber"
+    amount: 32.00
+
+- user_message: "bought a sweater at Uniqlo for $39.90 today"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Uniqlo"
+    amount: 39.90
+
+- user_message: "groceries at Whole Foods today came to 112.40 on the Freedom Unlimited"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [card-resolution]
+  args_must_include:
+    merchant: "Whole Foods"
+    amount: 112.40
+    card_name_resolves_to: "Chase Freedom Unlimited"
+
+- user_message: "$22.50 for movie tickets at AMC tonight"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "AMC"
+    amount: 22.50
+
+- user_message: "picked up meds at CVS today, that was 18.20"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "CVS"
+    amount: 18.20
+
+- user_message: "paid 9 dollars for parking downtown this morning"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    amount: 9.00
+
+- user_message: "lunch today was fourteen dollars at Sweetgreen"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [word-amount]
+  args_must_include:
+    merchant: "Sweetgreen"
+    amount: 14.00
+
+- user_message: "got an Amazon order today for $42.99"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Amazon"
+    amount: 42.99
+
+- user_message: "spent 6.50 on a latte at Philz this morning"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Philz"
+    amount: 6.50
+
+- user_message: "Home Depot run today, $143.27 for paint and supplies"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Home Depot"
+    amount: 143.27
+
+- user_message: "dentist visit cost me 220 today"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    amount: 220.00
+
+- user_message: "$15.40 at In-N-Out just now, charged to the Amex Gold"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [card-resolution]
+  args_must_include:
+    merchant: "In-N-Out"
+    amount: 15.40
+    card_name_resolves_to: "Amex Gold"
+
+- user_message: "bought concert tickets today, 147 dollars on Live Nation"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Live Nation"
+    amount: 147.00
+
+- user_message: "Lyft home from dinner tonight, $18.43"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Lyft"
+    amount: 18.43
+
+- user_message: "spent $84.19 at Safeway today"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Safeway"
+    amount: 84.19
+
+# --- split / computed amounts ----------------------------------------------
+- user_message: "dinner at Nobu tonight was 170 total, split with a friend so my half was 85"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [split]
+  args_must_include:
+    merchant: "Nobu"
+    amount: 85.00
+
+- user_message: "group lunch today, $96 for four people, my share is 24"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [split]
+  args_must_include:
+    amount: 24.00
+
+- user_message: "Uber today was 40 but I split it three ways, so 13.33 for me"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [split]
+  args_must_include:
+    merchant: "Uber"
+    amount: 13.33
+
+- user_message: "bar tab last night was 60, I covered half — 30 bucks"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [split]
+  args_must_include:
+    amount: 30.00
+
+# --- decimal / currency phrasing variety -----------------------------------
+- user_message: "five bucks at Starbucks this morning"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [word-amount]
+  args_must_include:
+    merchant: "Starbucks"
+    amount: 5.00
+
+- user_message: "I spent two hundred and fifty dollars at Best Buy today"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [word-amount]
+  args_must_include:
+    merchant: "Best Buy"
+    amount: 250.00
+
+- user_message: "$7 even at Peet's this morning"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Peet's"
+    amount: 7.00
+
+- user_message: "groceries today: 65 dollars and 50 cents at H Mart"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [word-amount]
+  args_must_include:
+    merchant: "H Mart"
+    amount: 65.50
+
+- user_message: "Costco haul today was 247.83"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Costco"
+    amount: 247.83
+
+- user_message: "$1,299 for a new iPad at the Apple Store today"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Apple Store"
+    amount: 1299.00
+
+# --- date phrasing (these specifically exercise date parsing) --------------
+- user_message: "yesterday I spent $30 at Trader Joe's"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [date]
+  args_must_include:
+    merchant: "Trader Joe's"
+    amount: 30.00
+
+- user_message: "spent 25 on gas at Chevron last Friday"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [date]
+  args_must_include:
+    merchant: "Chevron"
+    amount: 25.00
+
+- user_message: "dinner on Monday was 88 at Sushi Ginza"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [date]
+  args_must_include:
+    merchant: "Sushi Ginza"
+    amount: 88.00
+
+# --- merchant canonicalization (abbreviations) -----------------------------
+- user_message: "TJs run today, $52"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [canonicalization]
+  args_must_include:
+    amount: 52.00
+
+- user_message: "$8 at sbux this morning"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [canonicalization]
+  args_must_include:
+    amount: 8.00
+
+# --- card resolution variety -----------------------------------------------
+- user_message: "$60 dinner tonight, charge it to my gold card"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [card-resolution]
+  args_must_include:
+    amount: 60.00
+    card_name_resolves_to: "Amex Gold"
+
+- user_message: "put today's $200 hotel on the reserve"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [card-resolution]
+  args_must_include:
+    amount: 200.00
+    card_name_resolves_to: "Chase Sapphire Reserve"
+
+- user_message: "$45 at the vet today on my freedom card"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [card-resolution]
+  args_must_include:
+    amount: 45.00
+    card_name_resolves_to: "Chase Freedom Unlimited"
+
+# --- explicit category mentioned -------------------------------------------
+- user_message: "log a $50 entertainment expense today — Six Flags tickets"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "Six Flags"
+    amount: 50.00
+
+- user_message: "$120 utilities payment to PG&E today"
+  expected_tool: propose_transaction
+  difficulty: easy
+  args_must_include:
+    merchant: "PG&E"
+    amount: 120.00
+
+# --- amounts in unusual positions ------------------------------------------
+- user_message: "Trader Joe's today, 47 dollars"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Trader Joe's"
+    amount: 47.00
+
+- user_message: "47.32 — Trader Joe's groceries, today"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Trader Joe's"
+    amount: 47.32
+
+- user_message: "at Whole Foods today I dropped 90 bucks"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Whole Foods"
+    amount: 90.00
+
+- user_message: "the Uber today cost 18"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Uber"
+    amount: 18.00
+
+- user_message: "23.45 at Walgreens for cold medicine this morning"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Walgreens"
+    amount: 23.45
+
+- user_message: "lunch today — Chipotle — 14.85"
+  expected_tool: propose_transaction
+  difficulty: easy
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Chipotle"
+    amount: 14.85
+
+- user_message: "dropped 320 tonight at the sushi place Sushi Ginza Onodera"
+  expected_tool: propose_transaction
+  difficulty: medium
+  tags: [amount-position]
+  args_must_include:
+    merchant: "Sushi Ginza Onodera"
+    amount: 320.00
+
+# --- multilingual: zh-TW transaction rows ----------------------------------
+- user_message: "今天在全家花了 120 元"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [multilingual, zh-TW]
+  args_must_include:
+    amount: 120.00
+
+- user_message: "今天星巴克咖啡 6.5 美元，用 Amex Gold"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [multilingual, zh-TW, card-resolution]
+  args_must_include:
+    amount: 6.50
+    card_name_resolves_to: "Amex Gold"
+
+# --- multilingual: ja-JP transaction rows ----------------------------------
+- user_message: "今日ローソンで 850 円使った"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [multilingual, ja-JP]
+  args_must_include:
+    amount: 850.00
+
+- user_message: "今朝スターバックスで 7 ドル払った"
+  expected_tool: propose_transaction
+  difficulty: hard
+  tags: [multilingual, ja-JP]
+  args_must_include:
+    amount: 7.00
+
+# ===========================================================================
+# propose_subscription — 10 rows
+# (>=2 cardless: rent/utilities — invariant 2026-05-19 cardless ACH)
+# ===========================================================================
+
+- user_message: "track my Netflix, $15.99 a month, started Feb 14 on my Amex Gold"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, card-resolution]
+  args_must_include:
+    name: "Netflix"
+    amount: 15.99
+    frequency: "monthly"
+    start_date: "2026-02-14"
+    category: "Streaming"
+    card_name_resolves_to: "Amex Gold"
+
+- user_message: "add Spotify at 11.99/month, began January 3rd, on the Sapphire Reserve"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, card-resolution]
+  args_must_include:
+    name: "Spotify"
+    amount: 11.99
+    frequency: "monthly"
+    start_date: "2026-01-03"
+    category: "Streaming"
+    card_name_resolves_to: "Chase Sapphire Reserve"
+
+- user_message: "track my Adobe Creative Cloud subscription, $59.99 monthly, started March 1 on my Freedom Unlimited"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, card-resolution]
+  args_must_include:
+    name: "Adobe Creative Cloud"
+    amount: 59.99
+    frequency: "monthly"
+    start_date: "2026-03-01"
+    category: "Memberships"
+    card_name_resolves_to: "Chase Freedom Unlimited"
+
+- user_message: "I pay $245 a month for Equinox, started April 1, on the Amex Gold"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, card-resolution]
+  args_must_include:
+    name: "Equinox"
+    amount: 245.00
+    frequency: "monthly"
+    start_date: "2026-04-01"
+    category: "Memberships"
+    card_name_resolves_to: "Amex Gold"
+
+- user_message: "track my Amazon Prime, $139 a year, renewed January 15 on the Sapphire Reserve"
+  expected_tool: propose_subscription
+  difficulty: hard
+  tags: [subscription, card-resolution, annual]
+  args_must_include:
+    name: "Amazon Prime"
+    amount: 139.00
+    frequency: "annual"
+    start_date: "2026-01-15"
+    category: "Memberships"
+    card_name_resolves_to: "Chase Sapphire Reserve"
+
+- user_message: "add my Disney+ at 13.99 monthly, started Feb 20, on the Freedom Unlimited"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, card-resolution]
+  args_must_include:
+    name: "Disney+"
+    amount: 13.99
+    frequency: "monthly"
+    start_date: "2026-02-20"
+    category: "Streaming"
+    card_name_resolves_to: "Chase Freedom Unlimited"
+
+# --- cardless ACH (rent / utilities) — omit card_name_resolves_to ----------
+- user_message: "track my rent, $2400 a month, started March 1 — it's paid by bank transfer"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, cardless]
+  args_must_include:
+    name: "Rent"
+    amount: 2400.00
+    frequency: "monthly"
+    start_date: "2026-03-01"
+    category: "Home"
+
+- user_message: "add my internet bill, Comcast, $89.99 monthly, started Feb 5, autopay from checking"
+  expected_tool: propose_subscription
+  difficulty: medium
+  tags: [subscription, cardless]
+  args_must_include:
+    amount: 89.99
+    frequency: "monthly"
+    start_date: "2026-02-05"
+    category: "Utilities"
+
+# --- multilingual: zh-TW subscription row ----------------------------------
+- user_message: "幫我追蹤 Netflix，每月 390 元，從 3 月 5 日開始"
+  expected_tool: propose_subscription
+  difficulty: hard
+  tags: [subscription, multilingual, zh-TW]
+  args_must_include:
+    name: "Netflix"
+    amount: 390.00
+    frequency: "monthly"
+    start_date: "2026-03-05"
+    category: "Streaming"
+
+# --- multilingual: ja-JP subscription row ----------------------------------
+- user_message: "Spotify を毎月 980 円で追跡して、2 月 10 日から開始"
+  expected_tool: propose_subscription
+  difficulty: hard
+  tags: [subscription, multilingual, ja-JP]
+  args_must_include:
+    name: "Spotify"
+    amount: 980.00
+    frequency: "monthly"
+    start_date: "2026-02-10"
+    category: "Streaming"

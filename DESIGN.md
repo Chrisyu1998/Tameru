@@ -572,14 +572,16 @@ The agent's analytical surface is a registry of ~7 typed Python functions (`get_
 - `get_transactions({ category?, card_id?, merchant_contains?, date_from?, date_to?, amount_min?, amount_max?, limit? }) → Transaction[]`
 - `calculate_total({ category?, card_id?, date_from?, date_to? }) → { total, count }`
 - `get_subscriptions({ status? }) → Subscription[]`
-- `get_spending_summary({ months? }) → CategoryBreakdown[]`
-- `get_cards() → Card[]`
+- `get_spending_summary({ months?, date_from?, date_to? }) → CategoryBreakdown[]` — `months` gives a trailing window; `date_from`/`date_to` give an explicit one. A *specific named month* ("breakdown for March") needs the explicit window — the trailing window cannot isolate a single past month (added Day 22 after the §7.10 eval caught the agent answering a "March" question with current-month data).
+- `get_cards() → Card[]` — each card carries a short `ref` handle (`{issuer}-{last_four}`, e.g. `amex-1001`) for the propose-tool `card_ref` arg below.
 
 **Writes (propose-then-confirm)** — the tool returns a proposal payload; the React client renders it as a preview card; a separate `POST /<resource>/confirm` endpoint writes the row after the user taps "looks right." No write happens inside the tool itself (§6.2 entry flow).
 
-- `propose_transaction({ merchant, amount, date, card_id?, category?, notes? }) → TransactionProposal`
+- `propose_transaction({ merchant, amount, date, card_ref?, category?, notes? }) → TransactionProposal`
 - `propose_card({ network, last4, program, alias? }) → CardProposal`
-- `propose_subscription({ name, amount, frequency, start_date, category?, card_id? }) → SubscriptionProposal`
+- `propose_subscription({ name, amount, frequency, start_date, category?, card_ref? }) → SubscriptionProposal`
+
+**Card references use a short handle, not the UUID.** The agent identifies a card via `get_cards` and passes that card's `ref` (`{issuer}-{last_four}`) — not its `id` UUID — to `propose_transaction` / `propose_subscription`'s `card_ref`. The tool resolves the handle to the UUID server-side under RLS. Rationale: the §7.10 chat-extraction eval caught Claude dropping a hex digit while copying a 36-char UUID between `get_cards` and `propose_subscription`, silently losing the card attribution. A short, meaningful handle is reliable to copy, and a slip fails closed (no match → cardless proposal, parse card prompts) rather than mis-resolving. The propose-tool implementations still accept a `card_id` UUID for direct (non-agent) callers and tests, but the agent-facing tool schema exposes only `card_ref`.
 - `set_goal({ category?, amount, period }) → Goal` — direct write; goals are low-risk, reversible, and not on the transaction ledger. Creation and amount/period updates flow through this tool (chat is the only create surface, per invariant #8); the `/goals` page reaches the same table via `PATCH /goals/{id}` and `DELETE /goals/{id}` (§8.13) for edits and deletes, which preserves the tool-layer invariant — no *new* direct-write tools beyond `set_goal` itself.
 
 **Why propose-then-confirm instead of a direct-write tool?** Transactions, cards, and subscriptions are visible on the user's ledger. Writing on `tool_use` would mean Claude could create a row from a misread vague message before the user sees what it parsed. The proposal pattern makes the UI the point of commit: no row exists until the user taps a button. It also matches the Intent Preview pattern from 2026 agentic-UX design literature.
@@ -592,7 +594,8 @@ The agent's analytical surface is a registry of ~7 typed Python functions (`get_
 → Computes delta, responds in prose. Both tool calls logged to `AICallLog`.
 
 **Example trace — write:** "spent $47 at Trader Joe's on my Amex Gold"
-→ `propose_transaction(merchant="Trader Joe's", amount=47.00, date=today, card_id=<resolved from "Amex Gold">)`
+→ `get_cards()` → finds the Amex Gold, `ref="amex-1001"`
+→ `propose_transaction(merchant="Trader Joe's", amount=47.00, date=today, card_ref="amex-1001")`
 → tool impl calls `categorize()` (Gemini) for category suggestion → returns `TransactionProposal`
 → Client renders the parse card (UX frame 15) → user taps "looks right" → `POST /transactions/confirm` writes the row and returns the Entry-Moment Insight.
 
@@ -673,6 +676,7 @@ The user describes a transaction by typing or speaking **in the chat surface**. 
 - "Spent $47 at Trader Joe's on my Amex Gold just now" → Claude calls `propose_transaction(merchant="Trader Joe's", amount=47.00, date=today, card_id=<resolved from "Amex Gold">)`. Category suggestion is added by the tool impl via `categorize()` (Gemini).
 - "Lunch at Nobu, $85, split with a friend so my half was $42, CSR" → Claude recognizes the split and fills `amount=42.00`.
 - Ambiguous input (e.g. "coffee yesterday") → Claude replies in prose asking one targeted question ("how much?") rather than proposing a transaction with holes. No separate fallback form UI — the chat itself is the fallback.
+- A missing *date* is not a hole. When the user states a merchant and amount but no time ("$7 at Peet's"), Claude defaults `date` to today and proposes — it does **not** ask "when was this?". The parse card (UX frame 15) is an editable correction surface, so a wrong default costs one tap, whereas a clarifying-question round-trip on every dateless entry is friction on the app's most common action. A missing *amount* still warrants a question — a proposal needs a real number. (Resolved Day 22, prompt `chat_v9`, after the §7.10 chat-extraction eval surfaced the agent over-asking. The blanket "don't fabricate dates" rule is scoped to retrieval windows, not entry.)
 
 **Text trigger:** the chat message submit button is the trigger. One Claude turn per user message. Gemini is not called in this path (it remains in `categorize()` and in CSV / receipt bulk paths).
 
@@ -726,27 +730,27 @@ Tameru exposes an MCP server (HTTP+SSE transport) at `https://tameru.app/mcp`. C
 
 ### 7.10 Eval Harness
 
-Automated test suite measuring AI accuracy across the three highest-stakes tasks. Run via `python eval.py`. Results in `evals/results.db` (SQLite, in-repo).
+Automated test suite measuring AI accuracy across the three highest-stakes tasks. Run via `python eval.py --eval=all` (Day 22). Each run writes a per-run JSON artifact to `evals/runs/<run_id>.json`; `evals/results.db` is a *derived* local SQLite, rebuilt from those JSON files via `python eval.py --report` and gitignored. The per-run JSON is the canonical artifact — committing a shared SQLite would produce binary merge conflicts across concurrent PRs.
 
-**Eval 1 — categorization accuracy.** 100 hand-curated `(merchant, amount) → category` pairs. Target ≥ 90%. Per-category precision/recall tracked.
+**Eval setup.** The chat-extraction and multi-hop suites run the production agent loop (`run_turn`), which needs a JWT and seeded data. The harness provisions a real Supabase user (`eval@tameru.internal`) — not a service-role bypass (invariant 1) — via `scripts/mint_eval_jwt.py`, and seeds deterministic cards / transactions / subscriptions via `scripts/seed_eval_fixtures.py` (pinned in `scripts/_eval_setup.py`). Eval turns write `ai_call_log` rows under that user exactly as a human chat turn does (invariant 14); a weekly `pg_cron` job (`trim_eval_user_ai_call_log`, migration `20260520120000`) trims those rows older than 7 days.
 
-**Eval 2 — NL parse accuracy.** 50 hand-curated NL strings → `(merchant, amount, date, card)`. Target: amount ≥ 95%, merchant ≥ 90%.
+**Eval 1 — categorization accuracy.** ~100+ hand-curated `(merchant, amount) → category` pairs (`evals/categorization.yaml`), scored against `categorize()`. Categories follow the `categorize_v5` taxonomy (`Memberships`, not "Subscriptions"). Target ≥ 90%.
 
-**Eval 3 — multi-hop tool-use accuracy.** 20 hand-curated chat prompts that require 2+ chained tool calls (e.g., "How much more did I spend on dining in March vs February?"). Each row has the prompt + the expected sequence of tool calls (name + key arguments) + an acceptable final-answer pattern. Scored by:
-- **Tool sequence correctness** (did the agent call the right tools in a sensible order?). Target ≥ 90%.
-- **Final answer correctness** (is the prose answer numerically right within ±$1?). Target ≥ 95%.
+**Eval 2 — chat-extraction accuracy.** Hand-curated NL strings → expected proposer `tool_use` args (`evals/chat_extraction.yaml`). Since the chat-unified UX (invariant 8) removed the standalone `parse_nl_entry` Gemini function, this eval runs the full agent loop against each user message and asserts the resulting tool call. Two proposers are gated: `propose_transaction` (target: amount ≥ 95%, merchant ≥ 90%) and `propose_subscription` (target: per-row pass ≥ 90% — the auto-logger amplifies frequency/start_date errors monthly, so subscription rows are metered holistically). `propose_card` is not gated — it fires rarely and the parse-card UI catches most extraction errors; UAT (Day 28) covers it. Includes `zh-TW` and `ja-JP` rows for multilingual coverage (§7.7).
 
-This eval exists specifically so the Haiku-vs-Flash-Lite (or future model) decision can be made on Tameru's actual tool surface, not on vendor benchmarks.
+**Eval 3 — multi-hop tool-use accuracy.** 20 hand-curated chat prompts that require 2+ chained tool calls (`evals/multi_hop.yaml`), e.g. "How much more did I spend on dining in March vs February?". Each row carries the prompt, the expected tool sequence (name + key arguments, matched as an order-insensitive multiset by default), and an optional final-answer pattern + dollar value. Scored by:
+- **Tool sequence correctness** (did the agent call the right tools?). Target ≥ 90%.
+- **Final answer correctness** (does the prose name the right number within tolerance?). Target ≥ 95%.
 
-**Storage:** `evals/categorization.yaml`, `evals/nl_parse.yaml`, `evals/multi_hop.yaml` in repo. Version controlled.
+Includes `zh-TW` and `ja-JP` rows so a Haiku model bump can't silently regress multilingual extraction (§7.7). This eval exists specifically so the Haiku-vs-Flash-Lite (or future model) decision can be made on Tameru's actual tool surface, not on vendor benchmarks.
 
-**Run trigger:** locally on demand; CI on PRs that touch `app/prompts/` or `app/agent/`. Not on every commit (token cost).
+**Run trigger:** locally on demand; CI's `eval-gate` job on PRs that touch `app/prompts/`, `app/agent/`, `app/integrations/gemini.py`, or `evals/`. Not on every commit (token cost); uses separate eval-only API keys with a tight dashboard quota.
 
-**Regression gate:** PR cannot merge if categorization drops below 88%, NL parse amount below 93%, or multi-hop tool sequence below 85%.
+**Targets vs gates.** The *target* is the accuracy we want; the *gate* is the floor that blocks a CI merge. `eval.py` exits non-zero only on a gate breach — a target miss prints a warning and still passes. Gates: categorization ≥ 88%, chat-extraction `propose_transaction` amount ≥ 93%, chat-extraction `propose_subscription` per-row ≥ 85%, multi-hop tool sequence ≥ 85%. Merchant accuracy and multi-hop final-answer are target-only (no gate).
 
-**Refresh cadence:** monthly job mines `MerchantCategory` corrections for new categorization rows. Multi-hop suite refreshed manually when new tools are added or new question patterns appear in real chat logs.
+**Refresh cadence:** monthly job mines `merchant_category` corrections for new categorization rows. Chat-extraction and multi-hop suites refreshed manually when new tools are added or new question patterns appear in real chat logs.
 
-**Model A/B usage:** `python eval.py --model gemini-3.1-flash-lite-preview` runs the same suite against an alternate chat model. Results stored in `results.db` per-model so cross-model comparisons are first-class.
+**Model A/B usage:** `python eval.py --eval=all --model claude-<id>` runs the suites against an alternate Claude chat model; each run's JSON records the model, so cross-model comparisons are first-class. `--model` is Claude-only — the agent loop constructs an Anthropic client, so the flag rejects a non-`claude-*` id rather than silently sending it to the wrong provider. The Flash-Lite cross-provider A/B (§11.4) stays a post-launch item: it requires the chat loop to first gain a Gemini execution path, which v1 does not build.
 
 ---
 

@@ -1,68 +1,571 @@
-# Categorization eval — 14-row skeleton, one per non-Other v2 category
-# (full 100 lands on Day 22).
+# Categorization eval — 114 hand-curated rows: 98 base (7 per non-Other
+# v5 category × 14 categories) + 16 edge cases. Day 22 (DESIGN.md §7.10).
 #
-# Shape: (merchant, amount) -> expected_category. Amount is a string so
-# decimal precision is preserved through YAML parse; the runner converts
-# to Decimal before calling categorize().
+# Shape: (merchant, amount) -> expected_category, plus diagnostic
+# `difficulty` (easy|medium|hard) and optional `tags`. Amount is a string
+# so decimal precision survives YAML parse; the runner converts to
+# Decimal for inspection but does NOT pass amount to categorize()
+# (categorize_v3 dropped amount — see app/prompts/categorize.py).
 #
-# Criteria for picking rows: each row should disambiguate against the
-# nearest-neighbor category (Starbucks = Coffee Shops not Dining; Uber =
-# Transit not Travel; CVS = Drugstores not Health). The full 100 on Day
-# 22 should deepen coverage — multiple merchants per category, price
-# ranges, ambiguous cases like airport Starbucks.
+# `difficulty` / `tags` do not affect the CI gate — they drive the
+# per-tier breakdown in the eval summary so a regression can be localized
+# ("we regressed on hard edge-case rows" vs one flat percentage).
+#
+# Curation criteria:
+#   * Each row disambiguates against the nearest-neighbor category
+#     (Starbucks = Coffee Shops not Dining; CVS = Drugstores not Health).
+#   * `easy` = unambiguous brand; `medium` = needs the taxonomy to
+#     resolve; `hard` = a genuine trap (the 16 edge cases).
+#   * Categories follow categorize_v5: `Memberships` (not "Subscriptions"),
+#     `Streaming` as its own bucket. No row uses `Other`.
+#
+# Refresh cadence: monthly, mining `merchant_category` corrections.
 
+# ---------------------------------------------------------------------------
+# Groceries (7)
+# ---------------------------------------------------------------------------
 - merchant: "Trader Joe's"
   amount: "47.32"
   expected_category: "Groceries"
+  difficulty: easy
+- merchant: "Whole Foods Market"
+  amount: "112.40"
+  expected_category: "Groceries"
+  difficulty: easy
+- merchant: "Safeway"
+  amount: "84.19"
+  expected_category: "Groceries"
+  difficulty: easy
+- merchant: "H Mart"
+  amount: "65.50"
+  expected_category: "Groceries"
+  difficulty: medium
+- merchant: "Costco Wholesale"
+  amount: "247.83"
+  expected_category: "Groceries"
+  difficulty: medium
+- merchant: "99 Ranch Market"
+  amount: "58.12"
+  expected_category: "Groceries"
+  difficulty: medium
+- merchant: "Erewhon Market"
+  amount: "92.65"
+  expected_category: "Groceries"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Dining (7) — includes delivery (Uber Eats, DoorDash) per categorize_v5
+# ---------------------------------------------------------------------------
 - merchant: "Nobu Malibu"
   amount: "185.00"
   expected_category: "Dining"
+  difficulty: easy
+- merchant: "Chipotle Mexican Grill"
+  amount: "14.85"
+  expected_category: "Dining"
+  difficulty: easy
+- merchant: "In-N-Out Burger"
+  amount: "11.40"
+  expected_category: "Dining"
+  difficulty: easy
+- merchant: "Uber Eats"
+  amount: "32.50"
+  expected_category: "Dining"
+  difficulty: medium
+- merchant: "DoorDash"
+  amount: "28.90"
+  expected_category: "Dining"
+  difficulty: medium
+- merchant: "Sushi Ginza Onodera"
+  amount: "320.00"
+  expected_category: "Dining"
+  difficulty: easy
+- merchant: "Sweetgreen"
+  amount: "16.75"
+  expected_category: "Dining"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Coffee Shops (7) — disambiguate against Dining; includes tea shops
+# ---------------------------------------------------------------------------
 - merchant: "Blue Bottle Coffee"
   amount: "6.50"
   expected_category: "Coffee Shops"
+  difficulty: easy
+- merchant: "Starbucks"
+  amount: "7.25"
+  expected_category: "Coffee Shops"
+  difficulty: easy
+- merchant: "Philz Coffee"
+  amount: "5.75"
+  expected_category: "Coffee Shops"
+  difficulty: easy
+- merchant: "Peet's Coffee"
+  amount: "4.95"
+  expected_category: "Coffee Shops"
+  difficulty: easy
+- merchant: "Verve Coffee Roasters"
+  amount: "6.85"
+  expected_category: "Coffee Shops"
+  difficulty: medium
+- merchant: "Boba Guys"
+  amount: "8.50"
+  expected_category: "Coffee Shops"
+  difficulty: medium
+- merchant: "Stumptown Coffee Roasters"
+  amount: "5.50"
+  expected_category: "Coffee Shops"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Gas (7)
+# ---------------------------------------------------------------------------
 - merchant: "Shell Gas Station #4412"
   amount: "58.10"
   expected_category: "Gas"
+  difficulty: easy
+- merchant: "Chevron"
+  amount: "62.40"
+  expected_category: "Gas"
+  difficulty: easy
+- merchant: "Arco AM/PM"
+  amount: "44.20"
+  expected_category: "Gas"
+  difficulty: medium
+- merchant: "76 Gas Station"
+  amount: "53.85"
+  expected_category: "Gas"
+  difficulty: easy
+- merchant: "Exxon Mobil"
+  amount: "67.30"
+  expected_category: "Gas"
+  difficulty: easy
+- merchant: "Costco Gas"
+  amount: "48.92"
+  expected_category: "Gas"
+  difficulty: medium
+- merchant: "BP Gas"
+  amount: "55.10"
+  expected_category: "Gas"
+  difficulty: easy
 
+# ---------------------------------------------------------------------------
+# Transit (7) — rideshare, parking, tolls, public transit
+# ---------------------------------------------------------------------------
 - merchant: "Uber Trip"
   amount: "18.43"
   expected_category: "Transit"
+  difficulty: easy
+- merchant: "Lyft"
+  amount: "22.50"
+  expected_category: "Transit"
+  difficulty: easy
+- merchant: "BART"
+  amount: "8.20"
+  expected_category: "Transit"
+  difficulty: medium
+- merchant: "FasTrak"
+  amount: "12.50"
+  expected_category: "Transit"
+  difficulty: medium
+- merchant: "SFMTA Parking"
+  amount: "9.00"
+  expected_category: "Transit"
+  difficulty: medium
+- merchant: "ParkMobile"
+  amount: "6.75"
+  expected_category: "Transit"
+  difficulty: medium
+- merchant: "NYC MTA Subway"
+  amount: "2.90"
+  expected_category: "Transit"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Travel (7)
+# ---------------------------------------------------------------------------
 - merchant: "United Airlines"
   amount: "412.00"
   expected_category: "Travel"
+  difficulty: easy
+- merchant: "Delta Air Lines"
+  amount: "389.50"
+  expected_category: "Travel"
+  difficulty: easy
+- merchant: "Marriott Hotels"
+  amount: "278.00"
+  expected_category: "Travel"
+  difficulty: easy
+- merchant: "Airbnb"
+  amount: "640.00"
+  expected_category: "Travel"
+  difficulty: easy
+- merchant: "Hertz Car Rental"
+  amount: "215.30"
+  expected_category: "Travel"
+  difficulty: easy
+- merchant: "Hilton Hotels"
+  amount: "319.00"
+  expected_category: "Travel"
+  difficulty: easy
+- merchant: "American Airlines"
+  amount: "498.00"
+  expected_category: "Travel"
+  difficulty: easy
 
+# ---------------------------------------------------------------------------
+# Streaming (7) — media specifically, NOT Memberships
+# ---------------------------------------------------------------------------
 - merchant: "Netflix"
   amount: "15.49"
   expected_category: "Streaming"
+  difficulty: easy
+- merchant: "Spotify"
+  amount: "11.99"
+  expected_category: "Streaming"
+  difficulty: easy
+- merchant: "Hulu"
+  amount: "17.99"
+  expected_category: "Streaming"
+  difficulty: easy
+- merchant: "Disney+"
+  amount: "13.99"
+  expected_category: "Streaming"
+  difficulty: easy
+- merchant: "Apple Music"
+  amount: "10.99"
+  expected_category: "Streaming"
+  difficulty: easy
+- merchant: "YouTube Premium"
+  amount: "13.99"
+  expected_category: "Streaming"
+  difficulty: medium
+- merchant: "HBO Max"
+  amount: "15.99"
+  expected_category: "Streaming"
+  difficulty: easy
 
+# ---------------------------------------------------------------------------
+# Memberships (7) — non-streaming recurring (categorize_v5 rename)
+# ---------------------------------------------------------------------------
 - merchant: "Notion Labs"
   amount: "10.00"
-  expected_category: "Subscriptions"
+  expected_category: "Memberships"
+  difficulty: easy
+- merchant: "Adobe Creative Cloud"
+  amount: "59.99"
+  expected_category: "Memberships"
+  difficulty: easy
+- merchant: "Equinox Fitness"
+  amount: "245.00"
+  expected_category: "Memberships"
+  difficulty: medium
+- merchant: "Patreon"
+  amount: "12.00"
+  expected_category: "Memberships"
+  difficulty: medium
+- merchant: "Dropbox Plus"
+  amount: "11.99"
+  expected_category: "Memberships"
+  difficulty: easy
+- merchant: "New York Times"
+  amount: "17.00"
+  expected_category: "Memberships"
+  difficulty: medium
+- merchant: "iCloud+ Storage"
+  amount: "2.99"
+  expected_category: "Memberships"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Entertainment (7) — one-off experiences, NOT Streaming
+# ---------------------------------------------------------------------------
 - merchant: "AMC Century City"
   amount: "22.50"
   expected_category: "Entertainment"
+  difficulty: easy
+- merchant: "Live Nation"
+  amount: "147.00"
+  expected_category: "Entertainment"
+  difficulty: easy
+- merchant: "Ticketmaster"
+  amount: "89.50"
+  expected_category: "Entertainment"
+  difficulty: easy
+- merchant: "SF MOMA"
+  amount: "30.00"
+  expected_category: "Entertainment"
+  difficulty: medium
+- merchant: "Regal Cinemas"
+  amount: "18.00"
+  expected_category: "Entertainment"
+  difficulty: easy
+- merchant: "Six Flags Magic Mountain"
+  amount: "85.00"
+  expected_category: "Entertainment"
+  difficulty: easy
+- merchant: "StubHub"
+  amount: "240.00"
+  expected_category: "Entertainment"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Shopping (7) — general retail; online Amazon for non-grocery
+# ---------------------------------------------------------------------------
 - merchant: "Uniqlo San Francisco"
   amount: "89.00"
   expected_category: "Shopping"
+  difficulty: easy
+- merchant: "Amazon.com"
+  amount: "42.50"
+  expected_category: "Shopping"
+  difficulty: medium
+- merchant: "Best Buy"
+  amount: "319.00"
+  expected_category: "Shopping"
+  difficulty: easy
+- merchant: "Lululemon"
+  amount: "128.00"
+  expected_category: "Shopping"
+  difficulty: easy
+- merchant: "Target"
+  amount: "67.40"
+  expected_category: "Shopping"
+  difficulty: medium
+- merchant: "Nordstrom"
+  amount: "245.00"
+  expected_category: "Shopping"
+  difficulty: easy
+- merchant: "Apple Store"
+  amount: "1299.00"
+  expected_category: "Shopping"
+  difficulty: easy
 
+# ---------------------------------------------------------------------------
+# Drugstores (7) — retail stores; disambiguate against Health
+# ---------------------------------------------------------------------------
 - merchant: "CVS Pharmacy"
   amount: "12.89"
   expected_category: "Drugstores"
+  difficulty: easy
+- merchant: "Walgreens"
+  amount: "23.45"
+  expected_category: "Drugstores"
+  difficulty: easy
+- merchant: "Rite Aid"
+  amount: "18.20"
+  expected_category: "Drugstores"
+  difficulty: easy
+- merchant: "Duane Reade"
+  amount: "14.75"
+  expected_category: "Drugstores"
+  difficulty: medium
+- merchant: "CVS #2841"
+  amount: "9.50"
+  expected_category: "Drugstores"
+  difficulty: easy
+- merchant: "Walgreens Boots Alliance"
+  amount: "31.10"
+  expected_category: "Drugstores"
+  difficulty: easy
+- merchant: "CVS Health"
+  amount: "27.40"
+  expected_category: "Drugstores"
+  difficulty: easy
 
+# ---------------------------------------------------------------------------
+# Home (7) — furniture, home improvement, decor
+# ---------------------------------------------------------------------------
 - merchant: "Home Depot"
   amount: "143.27"
   expected_category: "Home"
+  difficulty: easy
+- merchant: "IKEA"
+  amount: "289.00"
+  expected_category: "Home"
+  difficulty: easy
+- merchant: "Lowe's Home Improvement"
+  amount: "112.40"
+  expected_category: "Home"
+  difficulty: easy
+- merchant: "West Elm"
+  amount: "475.00"
+  expected_category: "Home"
+  difficulty: medium
+- merchant: "Pottery Barn"
+  amount: "620.00"
+  expected_category: "Home"
+  difficulty: medium
+- merchant: "Crate & Barrel"
+  amount: "189.00"
+  expected_category: "Home"
+  difficulty: medium
+- merchant: "Ace Hardware"
+  amount: "43.50"
+  expected_category: "Home"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Utilities (7)
+# ---------------------------------------------------------------------------
 - merchant: "PG&E"
   amount: "178.42"
   expected_category: "Utilities"
+  difficulty: easy
+- merchant: "Comcast Xfinity"
+  amount: "89.99"
+  expected_category: "Utilities"
+  difficulty: easy
+- merchant: "Verizon Wireless"
+  amount: "120.00"
+  expected_category: "Utilities"
+  difficulty: easy
+- merchant: "AT&T Internet"
+  amount: "75.00"
+  expected_category: "Utilities"
+  difficulty: easy
+- merchant: "T-Mobile"
+  amount: "95.00"
+  expected_category: "Utilities"
+  difficulty: easy
+- merchant: "ConEd"
+  amount: "143.00"
+  expected_category: "Utilities"
+  difficulty: medium
+- merchant: "SoCalGas"
+  amount: "62.50"
+  expected_category: "Utilities"
+  difficulty: medium
 
+# ---------------------------------------------------------------------------
+# Health (7) — providers, NOT retail drugstores
+# ---------------------------------------------------------------------------
 - merchant: "Dr. Smith DDS"
   amount: "220.00"
   expected_category: "Health"
+  difficulty: easy
+- merchant: "Kaiser Permanente"
+  amount: "45.00"
+  expected_category: "Health"
+  difficulty: easy
+- merchant: "One Medical"
+  amount: "199.00"
+  expected_category: "Health"
+  difficulty: medium
+- merchant: "SF Vet Hospital"
+  amount: "180.00"
+  expected_category: "Health"
+  difficulty: medium
+- merchant: "Better Help Therapy"
+  amount: "260.00"
+  expected_category: "Health"
+  difficulty: medium
+- merchant: "LabCorp"
+  amount: "112.00"
+  expected_category: "Health"
+  difficulty: medium
+- merchant: "Quest Diagnostics"
+  amount: "85.50"
+  expected_category: "Health"
+  difficulty: medium
+
+# ---------------------------------------------------------------------------
+# Edge cases (16) — borderline rows that pressure-test boundaries.
+# All `hard`; tagged `edge-case` plus a cluster tag where one applies.
+# ---------------------------------------------------------------------------
+# Coffee at a Starbucks-in-airport — still Coffee Shops, not Travel
+- merchant: "Starbucks SFO Terminal 2"
+  amount: "9.45"
+  expected_category: "Coffee Shops"
+  difficulty: hard
+  tags: [edge-case, airport]
+# Uber Eats vs Uber Trip — Eats is Dining
+- merchant: "Uber Eats Delivery"
+  amount: "41.20"
+  expected_category: "Dining"
+  difficulty: hard
+  tags: [edge-case, delivery]
+# Amazon Fresh — groceries, not Shopping
+- merchant: "Amazon Fresh"
+  amount: "67.80"
+  expected_category: "Groceries"
+  difficulty: hard
+  tags: [edge-case, amazon]
+# Whole Foods via Amazon Prime — still Groceries
+- merchant: "Amazon.com Whole Foods"
+  amount: "94.20"
+  expected_category: "Groceries"
+  difficulty: hard
+  tags: [edge-case, amazon]
+# Apple TV+ — Streaming, not Memberships
+- merchant: "Apple TV+"
+  amount: "9.99"
+  expected_category: "Streaming"
+  difficulty: hard
+  tags: [edge-case]
+# 7-Eleven — Shopping (convenience store; not Groceries, not Drugstores)
+- merchant: "7-Eleven"
+  amount: "8.75"
+  expected_category: "Shopping"
+  difficulty: hard
+  tags: [edge-case]
+# Airport Hertz — Travel, not Transit (rental, not local ride)
+- merchant: "Hertz LAX"
+  amount: "187.00"
+  expected_category: "Travel"
+  difficulty: hard
+  tags: [edge-case, airport]
+# Local cab — Transit
+- merchant: "SF Yellow Cab"
+  amount: "24.00"
+  expected_category: "Transit"
+  difficulty: hard
+  tags: [edge-case]
+# Therapy via app — still Health
+- merchant: "Talkspace"
+  amount: "260.00"
+  expected_category: "Health"
+  difficulty: hard
+  tags: [edge-case]
+# Movie theater concessions — still Entertainment
+- merchant: "AMC Concessions Century City"
+  amount: "18.00"
+  expected_category: "Entertainment"
+  difficulty: hard
+  tags: [edge-case]
+# Restaurant inside a hotel — Dining, not Travel
+- merchant: "Hotel Bel-Air Restaurant"
+  amount: "145.00"
+  expected_category: "Dining"
+  difficulty: hard
+  tags: [edge-case, venue-in-venue]
+# Restaurant supply at Costco-style store — Groceries (food shopping)
+- merchant: "Smart & Final"
+  amount: "78.40"
+  expected_category: "Groceries"
+  difficulty: hard
+  tags: [edge-case]
+# AAA roadside — Memberships (annual membership)
+- merchant: "AAA Membership"
+  amount: "65.00"
+  expected_category: "Memberships"
+  difficulty: hard
+  tags: [edge-case]
+# GitHub Copilot subscription — Memberships (software)
+- merchant: "GitHub"
+  amount: "10.00"
+  expected_category: "Memberships"
+  difficulty: hard
+  tags: [edge-case, software]
+# Amazon Prime annual fee — Memberships
+- merchant: "Amazon Prime"
+  amount: "139.00"
+  expected_category: "Memberships"
+  difficulty: hard
+  tags: [edge-case, amazon]
+# Stadium parking — Transit (parking is Transit per categorize_v5)
+- merchant: "Chase Center Parking"
+  amount: "40.00"
+  expected_category: "Transit"
+  difficulty: hard
+  tags: [edge-case, venue-in-venue]

@@ -71,6 +71,95 @@ jobs:
       - name: Build
         run: npm run build
 
+  eval-gate:
+    name: AI eval gate (categorization + chat extraction + multi-hop)
+    runs-on: ubuntu-latest
+    # Gated behind backend-test: the eval is the only CI step that costs
+    # real money (~195 Anthropic + Gemini calls), so a PR that can't even
+    # pass unit tests shouldn't trigger a paid run. NOT gated on
+    # frontend-test — frontend has no bearing on AI accuracy, so a flaky
+    # vitest run must not block the eval.
+    needs: [backend-test]
+    # Path-filtered: evals are expensive, so they only run when prompt or
+    # agent code — the things that move accuracy — actually changed. The
+    # paths-filter step below makes the whole job a no-op otherwise.
+    # push-to-main is excluded; the gate's job is to block a regression
+    # before it merges, not after.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check whether eval-relevant paths changed
+        id: changed
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            evals:
+              - 'app/prompts/**'
+              - 'app/agent/**'
+              - 'app/integrations/gemini.py'
+              - 'evals/**'
+              - 'eval.py'
+              - 'scripts/_eval_setup.py'
+
+      - name: Set up Python
+        if: steps.changed.outputs.evals == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Supabase CLI
+        if: steps.changed.outputs.evals == 'true'
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase stack
+        if: steps.changed.outputs.evals == 'true'
+        run: supabase start
+
+      - name: Apply migrations to local stack
+        if: steps.changed.outputs.evals == 'true'
+        run: supabase db reset --no-seed
+
+      - name: Install backend deps
+        if: steps.changed.outputs.evals == 'true'
+        run: pip install -e ".[dev]"
+
+      - name: Seed eval fixtures
+        if: steps.changed.outputs.evals == 'true'
+        env:
+          # SUPABASE_URL is read by app.auth's JWKS client; the eval JWT
+          # is minted against the same local stack scripts/_eval_setup
+          # discovers via `supabase status`.
+          EVAL_USER_PASSWORD: ${{ secrets.EVAL_USER_PASSWORD }}
+        run: python scripts/seed_eval_fixtures.py
+
+      - name: Run eval gate
+        if: steps.changed.outputs.evals == 'true'
+        env:
+          # Separate keys from prod, with a tight monthly quota set in
+          # the Anthropic / Google dashboards (the dashboard is the
+          # authoritative budget — not a number in CI).
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_EVAL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_EVAL }}
+          GEMINI_MODEL_DEFAULT: gemini-2.5-flash
+          EVAL_USER_PASSWORD: ${{ secrets.EVAL_USER_PASSWORD }}
+        run: python eval.py --eval=all
+
+      - name: Upload per-run eval JSON
+        if: steps.changed.outputs.evals == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-run
+          path: evals/runs/*.json
+          if-no-files-found: warn
+
+      - name: Stop Supabase stack
+        if: steps.changed.outputs.evals == 'true' && always()
+        run: supabase stop --no-backup
+
   migrate-prod:
     name: Apply migrations to prod Supabase
     needs: [backend-test, frontend-test]

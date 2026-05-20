@@ -23,6 +23,7 @@ trail covers the whole call, not just successes.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import time
@@ -135,6 +136,7 @@ def run_turn(
     user: AuthedUser,
     conversation_history: list[dict[str, Any]],
     user_message: str,
+    today: _dt.date | None = None,
 ) -> AssistantTurn:
     """Run one full chat turn — Claude → tools → Claude → ... → final text.
 
@@ -142,6 +144,13 @@ def run_turn(
     shape: `[{"role": "user"|"assistant", "content": <blocks-or-text>}]`.
     The route handler is responsible for loading and capping it (the 5-
     turn cap from DESIGN.md §7.2.1 lives there, not here).
+
+    `today` is a test/eval seam — when set, it's the date stamped into
+    the system prompt's "Today is …" line, so the model resolves "March",
+    "yesterday", etc. against a fixed date. Production callers omit it
+    (the route handler does) and the prompt uses the live clock. The eval
+    harness pins it so date-relative corpus rows stay deterministic
+    regardless of when the suite runs (DESIGN.md §7.10).
 
     Raises:
       * `UsageCapExceeded` if the user is already at/over their daily
@@ -164,8 +173,9 @@ def run_turn(
     # Block 0 is the static preamble (cached via cache_control: ephemeral);
     # block 1 is the dynamic tail (Today is … + per-user merchants). The
     # merchant query fires once at turn entry — the set is stable across
-    # the iterations below, so we don't pay it per-hop.
-    system = render_system_prompt(user_jwt=user.jwt)
+    # the iterations below, so we don't pay it per-hop. `today` is None
+    # in production (live clock) and pinned by the eval harness.
+    system = render_system_prompt(user_jwt=user.jwt, today=today)
     prompt_hash = system_prompt_hash(system, schemas)
 
     messages: list[dict[str, Any]] = list(conversation_history)

@@ -174,13 +174,29 @@ class GetSubscriptionsResponse(BaseModel):
 class GetSpendingSummaryRequest(BaseModel):
     """Tool input for `get_spending_summary`.
 
-    Example request:
-        {"months": 3}
+    Two windowing modes, mutually exclusive in practice:
+
+      * trailing window — `{"months": 3}` covers the current month plus
+        the previous two. This is the "where does my money go lately"
+        shape.
+      * explicit window — `{"date_from": "2026-03-01", "date_to":
+        "2026-03-31"}` covers exactly that range. This is the shape for
+        a *specific named month* ("breakdown for March") — the trailing
+        window cannot express it. When either date is supplied, the
+        explicit window wins and `months` is ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     months: int = Field(default=1)
+    date_from: _dt.date | None = Field(
+        default=None,
+        description="Inclusive window start; pair with date_to for a specific period.",
+    )
+    date_to: _dt.date | None = Field(
+        default=None,
+        description="Inclusive window end; defaults to today when only date_from is set.",
+    )
 
 
 class SpendingSummaryRow(BaseModel):
@@ -197,13 +213,20 @@ class GetSpendingSummaryResponse(BaseModel):
     Example response:
         {
             "window_start": "2026-03-01",
-            "window_months": 3,
+            "window_end": "2026-03-31",
+            "window_months": 1,
             "breakdown": [{"category": "Dining", "total": "123.45", "count": 8}],
             "truncated": false
         }
+
+    `window_start` / `window_end` are the actual inclusive bounds the
+    totals cover — the agent should read them back to confirm it asked
+    for the period it meant. `window_months` is the count of calendar
+    months the window spans.
     """
 
     window_start: str
+    window_end: str
     window_months: int
     breakdown: list[SpendingSummaryRow]
     truncated: bool
@@ -222,12 +245,15 @@ class GetCardsResponse(BaseModel):
 class ProposeTransactionRequest(BaseModel):
     """Tool input for `propose_transaction`.
 
-    `card_id` is UUID-only — Claude resolves card names via `get_cards`
-    first (already in its tool list from Day 9a) and passes the UUID.
-    Rationale: keeping the input tightly typed lets the agent loop reason
-    about ambiguity (two cards both nicknamed "Amex") by asking a
-    clarifying question in chat, rather than having the tool silently
-    pick one.
+    `card_ref` is the short card handle (`{issuer}-{last_four}`, e.g.
+    "amex-1001") emitted by `get_cards`. The agent passes this rather
+    than the card's UUID: copying a 36-char random UUID between tool
+    calls is error-prone for an LLM (a dropped hex digit silently loses
+    the card attribution — observed in the Day 22 eval), whereas the
+    short handle is meaningful and a slip simply fails to resolve rather
+    than mis-resolving. `card_id` is retained as a UUID-typed field for
+    direct (non-agent) callers and tests; the agent-facing JSON schema
+    exposes only `card_ref`.
 
     `category` is optional — when omitted, the tool calls Gemini to fill
     it. When supplied (Claude pre-fills from explicit user text like
@@ -237,7 +263,7 @@ class ProposeTransactionRequest(BaseModel):
 
     Example request:
         {"merchant": "Trader Joe's", "amount": 47, "date": "2026-05-13",
-         "card_id": "f1e2d3c4-..."}
+         "card_ref": "amex-1001"}
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -246,6 +272,7 @@ class ProposeTransactionRequest(BaseModel):
     amount: Decimal
     date: _dt.date
     card_id: UUID | None = None
+    card_ref: str | None = None
     category: str | None = None
     notes: str | None = None
 
@@ -462,10 +489,16 @@ GET_SUBSCRIPTIONS_TOOL: dict[str, Any] = {
 GET_SPENDING_SUMMARY_TOOL: dict[str, Any] = {
     "name": "get_spending_summary",
     "description": (
-        "Return per-category totals for the last N calendar months "
-        "(including the current month). Defaults to the current month "
-        "only. Use for 'where does my money go', category breakdowns, or "
-        "category-level comparisons over a window."
+        "Return per-category spending totals over a window. Use for "
+        "'where does my money go', category breakdowns, or category-level "
+        "comparisons. Two windowing modes: pass `months` for a trailing "
+        "window ending today (months=1 = this month so far, months=3 = "
+        "this month plus the previous two); OR pass `date_from` and "
+        "`date_to` for an explicit range. For a SPECIFIC named month or "
+        "past period ('breakdown for March', 'spending between Jan and "
+        "Mar'), you MUST pass date_from/date_to — the trailing `months` "
+        "window cannot isolate a single past month. Today's date is in "
+        "the system prompt; compute the range from it."
     ),
     "input_schema": {
         "type": "object",
@@ -477,7 +510,24 @@ GET_SPENDING_SUMMARY_TOOL: dict[str, Any] = {
                 "maximum": 24,
                 "description": (
                     "Number of trailing calendar months to include "
-                    "(default 1 = this month only)."
+                    "(default 1 = this month only). Ignored when "
+                    "date_from/date_to are supplied."
+                ),
+            },
+            "date_from": {
+                "type": "string",
+                "format": "date",
+                "description": (
+                    "Inclusive window start (YYYY-MM-DD). Pair with "
+                    "date_to to target a specific month or period."
+                ),
+            },
+            "date_to": {
+                "type": "string",
+                "format": "date",
+                "description": (
+                    "Inclusive window end (YYYY-MM-DD). Defaults to today "
+                    "when only date_from is given."
                 ),
             },
         },
@@ -491,7 +541,10 @@ GET_CARDS_TOOL: dict[str, Any] = {
         "Return the user's active cards with their reward multipliers and "
         "card metadata. Use when the user asks about their cards, asks "
         "which card earns most on a category, or references a card by "
-        "name without an id."
+        "name. Each card includes a short `ref` handle (e.g. "
+        "'amex-1001') — pass that `ref` to propose_transaction / "
+        "propose_subscription when the user names a card; never copy the "
+        "long `id` UUID into a later tool call."
     ),
     "input_schema": {
         "type": "object",
@@ -509,7 +562,8 @@ PROPOSE_TRANSACTION_TOOL: dict[str, Any] = {
         "client renders the proposal as a parse card; the row is only "
         "created when the user taps the confirm button (which triggers "
         "POST /transactions/confirm). If the user names a card, call "
-        "get_cards first to resolve the UUID and pass it as card_id. "
+        "get_cards first and pass the matching card's short `ref` handle "
+        "(e.g. 'amex-1001') as card_ref. "
         "Do not say 'I added it' after calling this tool — the row does "
         "not exist yet."
     ),
@@ -532,12 +586,14 @@ PROPOSE_TRANSACTION_TOOL: dict[str, Any] = {
                 "format": "date",
                 "description": "Transaction date (YYYY-MM-DD).",
             },
-            "card_id": {
+            "card_ref": {
                 "type": "string",
-                "format": "uuid",
                 "description": (
-                    "Card UUID resolved from get_cards. Do not pass a "
-                    "card name; resolve it via get_cards first."
+                    "The card's short `ref` handle from get_cards "
+                    "(e.g. 'amex-1001'). When the user names a card, call "
+                    "get_cards, find the matching card, and pass its "
+                    "`ref` here. Do NOT pass the card's long `id` UUID — "
+                    "copy the short ref. Omit when no card is named."
                 ),
             },
             "category": {
@@ -737,10 +793,11 @@ PROPOSE_SUBSCRIPTION_TOOL: dict[str, Any] = {
         "created when the user taps the confirm button (which triggers "
         "POST /subscriptions/confirm). "
         "If the user names a card ('on my Amex Gold'), call get_cards "
-        "first to resolve the UUID and pass it as card_id. If the user "
-        "doesn't name a card (e.g. 'track my rent' — usually bank ACH), "
-        "OMIT card_id; the subscription saves as cardless and pg_cron "
-        "auto-logs cardless transactions. "
+        "first and pass the matching card's short `ref` handle (e.g. "
+        "'amex-1001') as card_ref. If the user doesn't name a card "
+        "(e.g. 'track my rent' — usually bank ACH), OMIT card_ref; the "
+        "subscription saves as cardless and pg_cron auto-logs cardless "
+        "transactions. "
         "Do not say 'I added it' after calling this tool — the row does "
         "not exist yet. Mention that future auto-logged charges will "
         "show up in the ledger; the first charge is NOT backfilled — "
@@ -794,14 +851,15 @@ PROPOSE_SUBSCRIPTION_TOOL: dict[str, Any] = {
                     "electric. If unclear, ask the user."
                 ),
             },
-            "card_id": {
+            "card_ref": {
                 "type": "string",
-                "format": "uuid",
                 "description": (
-                    "OPTIONAL. Card UUID resolved from get_cards. Pass when "
-                    "the user named a card. OMIT for bank-ACH bills (rent, "
-                    "utilities, mortgage) — the subscription saves as "
-                    "cardless and pg_cron auto-logs with no card attribution."
+                    "OPTIONAL. The card's short `ref` handle from "
+                    "get_cards (e.g. 'amex-1001'). Pass when the user "
+                    "named a card — do NOT pass the long `id` UUID. OMIT "
+                    "for bank-ACH bills (rent, utilities, mortgage) — the "
+                    "subscription saves as cardless and pg_cron auto-logs "
+                    "with no card attribution."
                 ),
             },
         },
@@ -948,48 +1006,70 @@ def get_subscriptions(user: AuthedUser, *, status: str | None = None) -> dict[st
     ).model_dump(mode="json")
 
 
-def get_spending_summary(user: AuthedUser, *, months: int = 1) -> dict[str, Any]:
-    """Return per-category totals over a trailing calendar-month window.
+def get_spending_summary(
+    user: AuthedUser,
+    *,
+    months: int = 1,
+    date_from: Any = None,
+    date_to: Any = None,
+) -> dict[str, Any]:
+    """Return per-category totals over a calendar window.
 
-    Request:
+    Request (trailing window):
         {"months": 3}
+
+    Request (explicit window — a specific named month):
+        {"date_from": "2026-03-01", "date_to": "2026-03-31"}
 
     Response:
         {
             "window_start": "2026-03-01",
-            "window_months": 3,
+            "window_end": "2026-03-31",
+            "window_months": 1,
             "breakdown": [{"category": "Dining", "total": "123.45", "count": 8}],
             "truncated": false
         }
 
-    `months=1` is "this month so far"; `months=3` includes the current
-    month plus the previous two. Anchored at the first of the start
-    month so partial months don't skew totals.
+    Two windowing modes:
+      * trailing — `months=1` is "this month so far"; `months=3` is the
+        current month plus the previous two, anchored at the first of the
+        start month so partial months don't skew totals.
+      * explicit — when `date_from` and/or `date_to` are supplied, the
+        window is exactly that range and `months` is ignored. This is the
+        only mode that can answer "breakdown for March" when today is in
+        a later month; the trailing window cannot isolate a single past
+        month.
     """
-    request = GetSpendingSummaryRequest.model_validate({"months": months})
-    months = request.months
-    if months < 1:
-        months = 1
-    if months > 24:
-        months = 24
+    request = GetSpendingSummaryRequest.model_validate(
+        {"months": months, "date_from": date_from, "date_to": date_to}
+    )
 
     today = _dt.date.today()
-    start = _subtract_months(_first_of_month(today), months - 1)
+    if request.date_from is not None or request.date_to is not None:
+        # Explicit window. A lone date_from runs through today; a lone
+        # date_to runs from the first of its month. Both supplied → the
+        # exact range.
+        start = request.date_from or _first_of_month(request.date_to)  # type: ignore[arg-type]
+        end = request.date_to or today
+        window_months = _months_spanned(start, end)
+    else:
+        # Trailing window — same clamp + anchor as before.
+        m = max(1, min(24, request.months))
+        start = _subtract_months(_first_of_month(today), m - 1)
+        # Upper bound at today — `/transactions/confirm` allows
+        # `date.today() + 1 day` for client-side timezone slack, so
+        # future-dated rows can legitimately exist; without this clamp a
+        # TZ-shifted late-night entry would pollute "this month so far."
+        end = today
+        window_months = m
 
     client = supabase_for_user(user.jwt)
-    # Upper bound at today — `/transactions/confirm` allows
-    # `date.today() + 1 day` for client-side timezone slack
-    # (app/routes/transactions.py:_DATE_FUTURE_SLACK), so future-dated
-    # rows can legitimately exist. Without this clamp, a transaction
-    # entered late at night with a TZ-shifted local midnight would
-    # pollute "this month so far" — a small but trust-eroding bug,
-    # since users read this number as "money already spent."
     resp = (
         # Default-safe read via the view (DESIGN.md §8).
         client.table("active_transactions")
         .select("category, amount, date")
         .gte("date", start.isoformat())
-        .lte("date", today.isoformat())
+        .lte("date", end.isoformat())
         .range(0, RESULT_ROW_CAP)
         .execute()
     )
@@ -1012,7 +1092,8 @@ def get_spending_summary(user: AuthedUser, *, months: int = 1) -> dict[str, Any]
     ]
     return GetSpendingSummaryResponse(
         window_start=start.isoformat(),
-        window_months=months,
+        window_end=end.isoformat(),
+        window_months=window_months,
         breakdown=breakdown,
         truncated=truncated,
     ).model_dump(mode="json")
@@ -1025,7 +1106,14 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
         {}
 
     Response:
-        {"items": [{"id": "...", "name": "Amex Gold", "status": "active"}]}
+        {"items": [{"id": "...", "ref": "amex-1001", "name": "Amex Gold",
+                    "status": "active"}]}
+
+    Each item carries a short `ref` handle (`{issuer}-{last_four}`). The
+    agent passes `ref` — not the long `id` UUID — to propose_transaction
+    / propose_subscription's `card_ref` arg. UUIDs are error-prone for an
+    LLM to copy verbatim between tool calls; the short handle is robust
+    and a slip fails closed (no resolution) rather than mis-resolving.
     """
     client = supabase_for_user(user.jwt)
     resp = (
@@ -1036,9 +1124,12 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
         .execute()
     )
     rows = resp.data or []
-    return GetCardsResponse(
-        items=[_strip_keys(row, ("user_id",)) for row in rows],
-    ).model_dump(mode="json")
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = _strip_keys(row, ("user_id",))
+        item["ref"] = _card_ref(row.get("issuer"), row.get("last_four"), row.get("id"))
+        items.append(item)
+    return GetCardsResponse(items=items).model_dump(mode="json")
 
 
 def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
@@ -1075,12 +1166,12 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
       * `categorize()` raises GeminiError → fall back to
         category="Other", gemini_suggestion=None. The categorize call
         already wrote its own ai_call_log row before raising.
-      * `card_id` supplied → verify it's the user's via an RLS-scoped
-        cards SELECT. Hallucinated UUIDs, deleted cards, and cross-user
-        UUIDs all look identical to the lookup (the latter two via RLS
-        returning empty). In all three cases, drop card_id to None so the
-        parse card prompts the user to pick rather than failing at
-        commit time on `_assert_card_owned`.
+      * card resolution → `_resolve_proposal_card` (see its docstring).
+        The agent passes `card_ref` (the short get_cards handle); a
+        direct caller may pass `card_id` (a UUID). A ref/UUID that
+        doesn't resolve to one of the user's active cards drops to None
+        so the parse card prompts the user to pick rather than failing
+        at commit time on `_assert_card_owned`.
     """
     request = ProposeTransactionRequest.model_validate(kwargs)
 
@@ -1097,9 +1188,7 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
             gemini_suggestion = None
 
     client = supabase_for_user(user.jwt)
-    card_id = request.card_id
-    if card_id is not None and not _card_belongs_to_user(client, card_id):
-        card_id = None
+    card_id = _resolve_proposal_card(client, request.card_id, request.card_ref)
 
     # Carry the merchant through in its display form (validator already
     # stripped leading/trailing whitespace). The §8.2 schema says
@@ -1284,6 +1373,7 @@ class ProposeSubscriptionRequest(BaseModel):
     start_date: _dt.date
     category: str
     card_id: UUID | None = None
+    card_ref: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -1339,21 +1429,20 @@ def propose_subscription(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         queue carries it opaquely across drain retries; the partial
         unique index on `subscriptions (user_id, client_request_id)`
         makes a same-crid replay a no-op at confirm time.
-      * `card_id` supplied → verify it resolves to the user's active
-        cards via RLS-scoped SELECT. Hallucinated UUIDs, deleted cards,
-        and cross-user UUIDs all return False; drop card_id to None in
-        those cases so the parse card surfaces a picker instead of
-        failing at commit on `_assert_card_owned`.
-      * `card_id` omitted → cardless subscription (bank ACH); the
-        confirm endpoint allows this and pg_cron auto-logs with
+      * card resolution → `_resolve_proposal_card`. The agent passes
+        `card_ref` (the short get_cards handle); a direct caller may
+        pass `card_id` (a UUID). A ref/UUID that doesn't resolve to one
+        of the user's active cards drops to None so the parse card
+        surfaces a picker instead of failing at commit on
+        `_assert_card_owned`.
+      * card omitted → cardless subscription (bank ACH); the confirm
+        endpoint allows this and pg_cron auto-logs with
         `transactions.card_id = NULL`.
     """
     request = ProposeSubscriptionRequest.model_validate(kwargs)
 
     client = supabase_for_user(user.jwt)
-    card_id = request.card_id
-    if card_id is not None and not _card_belongs_to_user(client, card_id):
-        card_id = None
+    card_id = _resolve_proposal_card(client, request.card_id, request.card_ref)
 
     next_billing_date = compute_next_billing_date(
         request.start_date, request.frequency
@@ -1500,6 +1589,17 @@ def _subtract_months(d: _dt.date, months: int) -> _dt.date:
     return _dt.date(year, month + 1, 1)
 
 
+def _months_spanned(start: _dt.date, end: _dt.date) -> int:
+    """Count the calendar months an inclusive [start, end] range touches.
+
+    March-only (Mar 1 → Mar 31) spans 1; Feb 1 → Mar 31 spans 2. Clamped
+    to at least 1 so an inverted or single-day range still reports a
+    sane `window_months` in the spending-summary response.
+    """
+    raw = (end.year - start.year) * 12 + (end.month - start.month) + 1
+    return max(1, raw)
+
+
 def _filters_from_input(payload: dict[str, Any], *, allow_pagination: bool) -> TransactionFilters:
     """Build `TransactionFilters` from validated tool input.
 
@@ -1585,3 +1685,78 @@ def _card_belongs_to_user(client: Any, card_id: UUID) -> bool:
         .execute()
     )
     return bool(resp.data)
+
+
+def _card_ref(issuer: Any, last_four: Any, card_id: Any) -> str:
+    """Build the short card handle the agent copies between tool calls.
+
+    `{issuer}-{last_four}` (e.g. "amex-1001"). Issuer enum values use
+    underscores, never hyphens, so the handle round-trips unambiguously
+    through `_resolve_card_ref`'s `rpartition("-")`. Falls back to the
+    raw UUID only for the rare card with no `last_four` — `get_cards`
+    returns confirmed cards, which always have one.
+    """
+    if issuer and last_four:
+        return f"{issuer}-{last_four}"
+    return str(card_id)
+
+
+def _resolve_card_ref(client: Any, ref: str) -> str | None:
+    """Resolve a card-reference string to the card's UUID, or None.
+
+    Accepts the `{issuer}-{last_four}` handle `get_cards` emits, and —
+    defensively — a raw UUID (the fallback handle for a card with no
+    `last_four`). Resolution is RLS-scoped: a ref that matches no active
+    card of the caller returns None, which the proposers treat as
+    "no card" (the parse card then prompts the user to pick). A slip in
+    the handle fails closed this way rather than mis-resolving.
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        return None
+    # Raw-UUID fallback first — a card whose handle is its UUID.
+    try:
+        as_uuid = UUID(ref)
+    except ValueError:
+        as_uuid = None
+    if as_uuid is not None:
+        return str(as_uuid) if _card_belongs_to_user(client, as_uuid) else None
+    # `{issuer}-{last_four}` handle. Issuer values never contain a
+    # hyphen, so the LAST hyphen separates issuer from last_four.
+    issuer, sep, last_four = ref.rpartition("-")
+    if not (sep and issuer and last_four):
+        return None
+    resp = (
+        client.table("cards")
+        .select("id")
+        .eq("issuer", issuer)
+        .eq("last_four", last_four)
+        .eq("status", "active")
+        .limit(2)
+        .execute()
+    )
+    rows = resp.data or []
+    # The natural-key partial unique index guarantees ≤1 active match;
+    # `limit(2)` is belt-and-suspenders so a hypothetical dup resolves to
+    # None (ambiguous) rather than silently picking one.
+    return rows[0]["id"] if len(rows) == 1 else None
+
+
+def _resolve_proposal_card(
+    client: Any, card_id: UUID | None, card_ref: str | None
+) -> str | None:
+    """Resolve the card a proposal should carry, or None.
+
+    `card_ref` (the short get_cards handle) is the agent's path and is
+    preferred when present — it's robust against the UUID-transcription
+    slips the Day 22 eval surfaced. `card_id` (a raw UUID) is the
+    direct-caller / test path, validated via `_card_belongs_to_user`.
+    Either input that fails to resolve to one of the user's active cards
+    yields None — proposers then leave the proposal cardless and the
+    parse card prompts the user to pick.
+    """
+    if card_ref is not None:
+        return _resolve_card_ref(client, card_ref)
+    if card_id is not None and _card_belongs_to_user(client, card_id):
+        return str(card_id)
+    return None

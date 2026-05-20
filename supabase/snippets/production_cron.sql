@@ -19,3 +19,14 @@ SELECT cron.schedule(
     '0 6 * * *',  -- daily at 06:00 UTC
     $$SELECT autolog_subscriptions();$$
 );
+
+-- Day 22 (DESIGN.md §7.10): weekly trim of the eval user's ai_call_log
+-- rows. The eval harness writes ai_call_log rows under
+-- `eval@tameru.internal` on every CI eval run (invariant 14); this keeps
+-- the table from growing unbounded. Weekly is plenty — eval rows have no
+-- analytic value past the run that produced them.
+SELECT cron.schedule(
+    'trim-eval-user-ai-call-log',
+    '0 4 * * 0',  -- weekly, Sunday 04:00 UTC
+    $$SELECT trim_eval_user_ai_call_log();$$
+);

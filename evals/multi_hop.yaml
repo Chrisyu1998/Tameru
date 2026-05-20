@@ -1,0 +1,270 @@
+# Multi-hop eval — 20 hand-curated chat prompts. Day 22 (DESIGN.md §7.10).
+#
+# Each row runs through the full agent loop (run_turn). Scored on:
+#   * tool sequence — does the agent call a sensible set of tools?
+#     (gate 85% / target 90%). `sequence_match: unordered` (default) is a
+#     multiset subset match: every expected step must be matched by some
+#     distinct actual tool call. `ordered` requires a strict prefix.
+#   * final answer — `answer_pattern` (regex) and/or `expected_answer_value_usd`
+#     within `answer_value_tolerance_usd` (target 95%, no gate). The value
+#     check passes if ANY dollar figure in the prose lands within tolerance.
+#
+# Per row: `difficulty` (easy|medium|hard) and `tags` drive the diagnostic
+# breakdown in the eval summary — they do not affect the gate.
+#
+# Fixture data (scripts/_eval_setup) — totals the expected values depend on:
+#   Dining:        Jan $150 / Feb $200 / Mar $250
+#   Groceries:     Feb $280 / Mar $300
+#   Coffee Shops:  Feb $35  / Mar $40   (all on the Amex Gold fixture card)
+#   Subscriptions: Netflix $15.99/mo + Spotify $9.99/mo = $25.98/mo
+#   March all-category total: $250 + $300 + $40 = $590
+# If you change the fixture totals, update the expected values below.
+#
+# Coverage: cross-month deltas, category combine, category × card,
+# generative charts, subscription queries, chat-based disambiguation,
+# graceful no-data, and multilingual (>=2 zh-TW + >=2 ja-JP per §7.7).
+
+# --- cross-month deltas ----------------------------------------------------
+- prompt: "How much more did I spend on dining in March vs February?"
+  difficulty: medium
+  tags: [cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-03-01" }
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-02-01" }
+  sequence_match: unordered
+  answer_pattern: "(more|less|increase|decrease|higher|lower)"
+  expected_answer_value_usd: 50.00
+  answer_value_tolerance_usd: 1.00
+
+- prompt: "Did my grocery spending go up from February to March?"
+  difficulty: medium
+  tags: [cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Groceries", date_from: "2026-02-01" }
+    - name: calculate_total
+      args_must_include: { category: "Groceries", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "(up|increase|more|higher|yes)"
+  expected_answer_value_usd: 20.00
+  answer_value_tolerance_usd: 1.00
+
+- prompt: "Compare my dining spend in January versus March."
+  difficulty: medium
+  tags: [cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-01-01" }
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "(more|less|increase|decrease|higher|lower)"
+  expected_answer_value_usd: 100.00
+  answer_value_tolerance_usd: 1.00
+
+# --- category combine ------------------------------------------------------
+- prompt: "What's my combined spend on dining and groceries in March?"
+  difficulty: medium
+  tags: [category-combine]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-03-01" }
+    - name: calculate_total
+      args_must_include: { category: "Groceries", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "\\$\\d"
+  expected_answer_value_usd: 550.00
+  answer_value_tolerance_usd: 1.00
+
+# --- category x card -------------------------------------------------------
+- prompt: "Did I spend more on coffee in March or February on my Amex Gold?"
+  difficulty: hard
+  tags: [category-card]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-03-01" }
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-02-01" }
+  sequence_match: unordered
+  answer_pattern: "(March|more|higher)"
+  expected_answer_value_usd: 40.00
+  answer_value_tolerance_usd: 1.00
+
+- prompt: "How much did coffee differ between February and March?"
+  difficulty: medium
+  tags: [cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-02-01" }
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "(more|less|difference|increase|\\$5)"
+  expected_answer_value_usd: 5.00
+  answer_value_tolerance_usd: 1.00
+
+# --- generative chart asks -------------------------------------------------
+- prompt: "Chart my dining spending by month for the last three months."
+  difficulty: medium
+  tags: [chart]
+  expected_tool_sequence:
+    - name: render_chart
+      args_must_include: {}
+  sequence_match: unordered
+
+- prompt: "Show me a chart comparing groceries and dining over the last two months."
+  difficulty: medium
+  tags: [chart]
+  expected_tool_sequence:
+    - name: render_chart
+      args_must_include: {}
+  sequence_match: unordered
+
+# --- spending summary ------------------------------------------------------
+# "March" is a specific past month — get_spending_summary must be given
+# an explicit date_from/date_to window (the trailing `months` window
+# can't isolate it). Pinning date_from asserts the agent computed the
+# range rather than defaulting to the current month.
+- prompt: "What was my biggest spending category in March, and roughly how much?"
+  difficulty: medium
+  tags: [spending-summary]
+  expected_tool_sequence:
+    - name: get_spending_summary
+      args_must_include: { date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "[Gg]roceries"
+  expected_answer_value_usd: 300.00
+  answer_value_tolerance_usd: 5.00
+
+# A single "total" (not a breakdown) — calculate_total with no category
+# filter and an explicit March window is the right tool.
+- prompt: "Give me my total spending across all categories in March."
+  difficulty: medium
+  tags: [spending-summary]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "\\$\\d"
+  expected_answer_value_usd: 590.00
+  answer_value_tolerance_usd: 2.00
+
+# --- subscription queries --------------------------------------------------
+- prompt: "How does my total monthly subscription cost compare to my coffee spend in March?"
+  difficulty: hard
+  tags: [subscription]
+  expected_tool_sequence:
+    - name: get_subscriptions
+      args_must_include: {}
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "(more|less|than|compared)"
+  expected_answer_value_usd: 25.98
+  answer_value_tolerance_usd: 1.00
+
+- prompt: "What do I pay every month for subscriptions?"
+  difficulty: easy
+  tags: [subscription]
+  expected_tool_sequence:
+    - name: get_subscriptions
+      args_must_include: {}
+  sequence_match: unordered
+  answer_pattern: "\\$\\d"
+  expected_answer_value_usd: 25.98
+  answer_value_tolerance_usd: 1.00
+
+# --- chat-based disambiguation ---------------------------------------------
+# Args are deliberately NOT pinned: "find that ~$8 Blue Bottle coffee" can
+# be filtered correctly via merchant_contains, OR category + amount range,
+# OR a merchant substring — all valid. The row asserts the agent reaches
+# for the retrieval tool to disambiguate, not which filter it picks.
+- prompt: "Find that coffee charge from Blue Bottle for around $8."
+  difficulty: medium
+  tags: [disambiguation]
+  expected_tool_sequence:
+    - name: get_transactions
+      args_must_include: {}
+  sequence_match: unordered
+
+- prompt: "I want to edit that big dinner at Nobu — pull it up."
+  difficulty: medium
+  tags: [disambiguation]
+  expected_tool_sequence:
+    - name: get_transactions
+      args_must_include: {}
+  sequence_match: unordered
+
+# --- average / count -------------------------------------------------------
+- prompt: "How many dining transactions did I have in March and what was the total?"
+  difficulty: medium
+  tags: [spending-summary]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "(5|five)"
+  expected_answer_value_usd: 250.00
+  answer_value_tolerance_usd: 1.00
+
+# --- graceful no-data ------------------------------------------------------
+- prompt: "Do I have any upcoming travel bookings or trips logged?"
+  difficulty: easy
+  tags: [graceful-degradation]
+  expected_tool_sequence: []
+  sequence_match: unordered
+  answer_pattern: "(no|don't|none|nothing|haven't)"
+
+# --- multilingual: zh-TW (2 rows) ------------------------------------------
+- prompt: "我三月的餐飲花費跟二月比，多了多少？"
+  difficulty: hard
+  tags: [multilingual, zh-TW, cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-03-01" }
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-02-01" }
+  sequence_match: unordered
+  answer_pattern: "\\$?\\d"
+  expected_answer_value_usd: 50.00
+  answer_value_tolerance_usd: 1.00
+
+- prompt: "我每個月的訂閱總共要付多少錢？"
+  difficulty: hard
+  tags: [multilingual, zh-TW, subscription]
+  expected_tool_sequence:
+    - name: get_subscriptions
+      args_must_include: {}
+  sequence_match: unordered
+  answer_pattern: "\\$?\\d"
+  expected_answer_value_usd: 25.98
+  answer_value_tolerance_usd: 1.00
+
+# --- multilingual: ja-JP (2 rows) ------------------------------------------
+- prompt: "3月と2月で、外食費はどちらが多かったですか？"
+  difficulty: hard
+  tags: [multilingual, ja-JP, cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-03-01" }
+    - name: calculate_total
+      args_must_include: { category: "Dining", date_from: "2026-02-01" }
+  sequence_match: unordered
+  answer_pattern: "(3月|March|多)"
+  expected_answer_value_usd: 250.00
+  answer_value_tolerance_usd: 1.00
+
+- prompt: "コーヒー代は3月と2月でいくら違いますか？"
+  difficulty: hard
+  tags: [multilingual, ja-JP, cross-month-delta]
+  expected_tool_sequence:
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-03-01" }
+    - name: calculate_total
+      args_must_include: { category: "Coffee Shops", date_from: "2026-02-01" }
+  sequence_match: unordered
+  answer_pattern: "\\$?\\d"
+  expected_answer_value_usd: 5.00
+  answer_value_tolerance_usd: 1.00

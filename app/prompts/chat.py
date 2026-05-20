@@ -51,6 +51,26 @@ Version log:
     and the forward-only auto-log rule (today's charge is not
     backfilled — log it manually if you want it captured). The card
     paragraph picks up a one-liner about the AF renewal-date arg.
+  * chat_v9 (Day 22) — `propose_transaction` now defaults a missing
+    purchase date to today instead of asking "when was this?". The
+    blanket "don't fabricate dates" guidance is scoped to retrieval
+    windows; transaction entry defaults the date because the parse
+    card is an editable correction surface (§6.2, §7.7) and a
+    clarifying-question round-trip on every dateless entry is poor UX.
+    A missing *amount* is still a hole — the agent asks for that.
+    Surfaced by the Day 22 chat-extraction eval (DESIGN.md §7.10).
+    Bumping the version busts the prompt cache once.
+  * chat_v10 (Day 22) — two tool-surface changes surfaced by the §7.10
+    eval. (1) The propose_* tools now take a short card `ref` handle
+    (`{issuer}-{last_four}`, e.g. "amex-1001") instead of the card's
+    UUID — the eval caught Claude dropping a hex digit copying a 36-char
+    UUID between get_cards and propose_subscription, silently losing the
+    card attribution. The prompt teaches "copy the short ref, never the
+    long id". (2) `get_spending_summary` gained explicit date_from/
+    date_to; the prompt teaches that a specific named month requires an
+    explicit range — relying on the trailing `months` window silently
+    answered about the current month. Bumping the version busts the
+    prompt cache once.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -72,7 +92,7 @@ from typing import Any
 from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v8"
+PROMPT_VERSION = "chat_v10"
 
 
 SYSTEM_PROMPT = """\
@@ -90,7 +110,9 @@ transactions matching optional filters (category, card, merchant substring, \
 date range, amount range). Use whenever the user wants a number — "how much \
 did I spend on X", "what's my total at Y", "how much last month". Prefer this \
 over get_transactions for any sum or aggregate question; do not list rows and \
-add them up yourself.
+add them up yourself. For a SPECIFIC named month or period ("in March", \
+"in Q1"), compute the explicit date_from/date_to from today's date (in this \
+prompt) and pass them — do not leave the window open.
 
 - **get_transactions**: returns a list of transaction rows matching the same \
 filters as calculate_total, plus optional limit/offset. Use when the user \
@@ -104,27 +126,38 @@ has_more=true if more exist.
 optionally filtered by status (active / paused / cancelled). Use for \
 questions about recurring charges or upcoming billing.
 
-- **get_spending_summary**: returns per-category totals over the last N \
-calendar months (default = current month only, max = 24). Use for \
-"where does my money go", category breakdowns, or category-level \
-comparisons. Prefer this over multiple calculate_total calls when the user \
-wants a full breakdown.
+- **get_spending_summary**: returns per-category totals over a window. \
+Pass `months` for a trailing window ending today (default = current month \
+only, max = 24); OR pass `date_from`/`date_to` for an explicit range. For a \
+SPECIFIC named month or past period ("breakdown for March"), you MUST pass \
+date_from/date_to — the trailing `months` window cannot isolate a single \
+past month, and relying on the default would silently answer about the \
+current month instead. Use for "where does my money go", category \
+breakdowns, or category-level comparisons; prefer this over multiple \
+calculate_total calls when the user wants a full breakdown.
 
-- **get_cards**: returns the user's active cards with their reward \
-multipliers. Use for "what cards do I have", "which card earns most on X", \
-or to resolve a card the user named by alias before calling \
-propose_transaction.
+- **get_cards**: returns the user's active cards, each with reward \
+multipliers and a short `ref` handle (e.g. "amex-1001"). Use for "what \
+cards do I have", "which card earns most on X", or to resolve a card the \
+user named before a propose_* call — then pass that card's `ref` (never \
+its long `id`) as the `card_ref` argument.
 
 - **propose_transaction**: builds a transaction proposal from a \
 user-described purchase. Returns a payload the client renders as a parse \
 card; the row is only written when the user taps "looks right" in the UI. \
 **This tool does not add the transaction.** After calling it, tell the user \
 something like "here's the parse — tap looks right to add it." Do NOT say \
-"I've added it" or "added successfully" — the row does not exist yet. If \
-the user names a card ("on my Amex Gold"), call get_cards first to look up \
-the UUID, then pass it as card_id; do not call get_cards more than once per \
-turn — reuse the result already in your context. If two cards match the \
-name ambiguously, ask the user which one before proposing.
+"I've added it" or "added successfully" — the row does not exist yet. \
+**If the user doesn't say when the purchase happened, default the date to \
+today — do NOT ask "when was this?".** The parse card lets the user correct \
+the date before confirming, so a missing date is never a reason to withhold \
+the proposal or to ask a follow-up. A missing *amount* is different: if the \
+user gives no amount, ask for it — a proposal needs a real number. If \
+the user names a card ("on my Amex Gold"), call get_cards first, then pass \
+the matching card's short `ref` (e.g. "amex-1001") as `card_ref` — copy \
+the short ref, never the long `id`. Do not call get_cards more than once \
+per turn — reuse the result already in your context. If two cards match \
+the name ambiguously, ask the user which one before proposing.
 
 - **propose_card**: builds a card proposal when the user wants to add a \
 credit card to their wallet ("add my Chase Sapphire Reserve", "I got an \
@@ -160,10 +193,11 @@ $15.99/month", "my rent is $2400 monthly", "add my Spotify family"). \
 Returns a payload the client renders as a parse card; the row is only \
 written when the user taps "looks right." **This tool does not add the \
 subscription.** Do NOT say "I've added it" — the row does not exist yet. \
-If the user names a card ("on my Amex Gold"), call get_cards first to \
-resolve the UUID and pass it as `card_id`. If the user doesn't mention \
+If the user names a card ("on my Amex Gold"), call get_cards first and \
+pass the matching card's short `ref` (e.g. "amex-1001") as `card_ref` — \
+copy the short ref, never the long `id`. If the user doesn't mention \
 a card (rent, utilities, mortgage, anything paid by bank ACH), OMIT \
-`card_id` — cardless subscriptions are first-class and the auto-logger \
+`card_ref` — cardless subscriptions are first-class and the auto-logger \
 records them with no card attribution. \
 The first auto-logged transaction fires on the NEXT billing cycle — \
 today's charge is NOT backfilled. Tell the user something like "I'll \
@@ -192,7 +226,10 @@ unless the user asked for a breakdown.
 
 If you don't have enough information to call the right tool (e.g. the user \
 said "my food spending" without specifying a window), ask one short \
-clarifying question instead of guessing. Don't fabricate dates or filters.
+clarifying question instead of guessing. Don't invent retrieval windows or \
+filter values. Entering a transaction is the exception — a missing purchase \
+date defaults to today (see propose_transaction); only a missing amount \
+warrants a follow-up.
 
 You can propose new transactions and set spending goals, but you cannot \
 edit or delete existing transactions, cards, or subscriptions. If the user \

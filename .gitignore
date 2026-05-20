@@ -40,8 +40,11 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Eval results (append-only SQLite is commit-worthy, but cache isn't)
+# Eval harness — per-run JSON in evals/runs/ IS committed (no merge
+# conflicts across PRs). The derived SQLite is not — rebuild it locally
+# with `python eval.py --report`.
 evals/.cache/
+evals/results.db
 
 # Personal project memory (cowork OS) — local only
 memory.md

@@ -30,6 +30,7 @@ from app.agent.loop import (
 )
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+from app.prompts.chat import PROMPT_VERSION as CHAT_PROMPT_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +134,10 @@ def test_one_hop_turn_returns_text(authed_user, monkeypatch):
     rows = _ai_call_log_chat_rows(authed_user)
     assert rows, "expected at least one ai_call_log row for chat_turn"
     assert rows[0]["task_type"] == "chat_turn"
-    assert rows[0]["prompt_version"] == "chat_v8"
+    # Assert against the live constant, not a pinned literal — the loop
+    # logs whatever PROMPT_VERSION chat.py currently exports, and pinning
+    # a string here just means every prompt bump breaks an unrelated test.
+    assert rows[0]["prompt_version"] == CHAT_PROMPT_VERSION
     assert rows[0]["success"] is True
 
 

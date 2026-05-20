@@ -1,0 +1,4 @@
+# Per-run eval JSON lands here (eval.py writes evals/runs/<run_id>.json).
+# Each run is its own file — no merge conflicts across concurrent PRs.
+# evals/results.db (the derived SQLite) is gitignored; rebuild it locally
+# with `python eval.py --report`.
