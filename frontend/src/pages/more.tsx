@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Bell,
   ChevronRight,
   Download,
-  FileUp,
   Lock,
   LogOut,
   Mail,
@@ -13,6 +12,7 @@ import {
 } from "lucide-react";
 import { SketchIcon } from "@/components/SketchIcon";
 import { BottomSheet } from "@/components/BottomSheet";
+import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
 import { signOut } from "@/lib/auth";
 import { initialTokens } from "@/lib/claudeTokens";
@@ -113,7 +113,7 @@ export default function MorePage() {
         />
       </ul>
 
-      <ImportSheet
+      <ImportCsvSheet
         open={openSheet === "import"}
         onClose={() => setOpenSheet(null)}
       />
@@ -194,104 +194,6 @@ function RowButton({
         />
       </button>
     </li>
-  );
-}
-
-/* ─── Import sheet ────────────────────────────────────────────── */
-
-const BANK_HINTS = ["Chase", "Amex", "Citi", "BofA"];
-
-function ImportSheet({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const [file, setFile] = useState<File | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Reset on close.
-  useEffect(() => {
-    if (!open) {
-      setFile(null);
-      setDragging(false);
-    }
-  }, [open]);
-
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) setFile(f);
-  };
-
-  return (
-    <BottomSheet open={open} onClose={onClose} ariaLabel="import data">
-      <h2 className="font-serif text-2xl text-ink lowercase-title">
-        import data
-      </h2>
-      <p className="mt-1 text-[0.85rem] text-ink-tertiary">
-        drop a csv exported from your bank.
-      </p>
-
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
-        className={cn(
-          "mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 py-8 text-center transition-colors",
-          dragging
-            ? "border-moss bg-moss-wash/40"
-            : "border-hairline bg-sunken/40 hover:bg-elevated"
-        )}
-      >
-        <FileUp className="h-6 w-6 text-ink-tertiary" />
-        <p className="mt-2 text-[0.9rem] text-ink">
-          {file ? file.name : "drop a csv here, or tap to browse"}
-        </p>
-        <p className="mt-0.5 text-[0.72rem] text-ink-tertiary">
-          we'll parse it locally — nothing leaves your device until you confirm.
-        </p>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".csv,text/csv"
-          className="hidden"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-        />
-      </div>
-
-      <p className="mt-5 text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-        common formats
-      </p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {BANK_HINTS.map((b) => (
-          <Pill key={b} tone="neutral">
-            {b}
-          </Pill>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        disabled={!file}
-        onClick={onClose}
-        className={cn(
-          "mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl px-5 text-sm font-medium transition-colors",
-          file
-            ? "bg-moss text-surface hover:bg-moss-deep"
-            : "bg-sunken text-ink-quaternary cursor-not-allowed"
-        )}
-      >
-        upload
-      </button>
-    </BottomSheet>
   );
 }
 
