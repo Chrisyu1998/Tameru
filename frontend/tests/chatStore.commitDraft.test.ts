@@ -43,7 +43,11 @@ vi.mock('@/lib/ledger', async () => {
 import { confirmTransaction } from '@/lib/transactionsApi';
 import type { ConfirmTransactionResult } from '@/lib/transactionsApi';
 import { chatStore } from '@/lib/chatStore';
-import type { AssistantParseMessage, ParseDraft } from '@/lib/chat';
+import type {
+  AssistantParseMessage,
+  InsightSeverity,
+  ParseDraft,
+} from '@/lib/chat';
 import type { Transaction } from '@/lib/fixtures';
 
 const confirmMock = vi.mocked(confirmTransaction);
@@ -95,7 +99,9 @@ function makeTx(overrides: Partial<Transaction> = {}): Transaction {
   };
 }
 
-function mockConfirm(insight: string | null): void {
+function mockConfirm(
+  insight: { text: string; severity: InsightSeverity } | null,
+): void {
   const result: ConfirmTransactionResult = { transaction: makeTx(), insight };
   confirmMock.mockResolvedValueOnce(result);
 }
@@ -111,7 +117,10 @@ describe('chatStore.commitDraft — Day 13 insight bubble', () => {
 
   test('non-null insight appends exactly one extra assistant message', async () => {
     seedParseMessage();
-    mockConfirm('highest single dining spend this month.');
+    mockConfirm({
+      text: 'highest single dining spend this month.',
+      severity: 'calm',
+    });
 
     await chatStore.commitDraft(PARSE_MSG_ID, makeDraft());
 
@@ -124,6 +133,27 @@ describe('chatStore.commitDraft — Day 13 insight bubble', () => {
     expect(insight.kind).toBe('insight');
     if (insight.kind === 'insight') {
       expect(insight.text).toBe('highest single dining spend this month.');
+      expect(insight.severity).toBe('calm');
+    }
+  });
+
+  test('insight severity flows through commit to the bubble message', async () => {
+    seedParseMessage();
+    mockConfirm({
+      text: 'on pace for about $160 over your monthly dining average.',
+      severity: 'alert',
+    });
+
+    await chatStore.commitDraft(PARSE_MSG_ID, makeDraft());
+
+    const messages = chatStore.getSnapshot().messages;
+    const insight = messages[messages.length - 1];
+    expect(insight.kind).toBe('insight');
+    if (insight.kind === 'insight') {
+      expect(insight.severity).toBe('alert');
+      expect(insight.text).toBe(
+        'on pace for about $160 over your monthly dining average.',
+      );
     }
   });
 
@@ -140,7 +170,10 @@ describe('chatStore.commitDraft — Day 13 insight bubble', () => {
 
   test('parse card flips to committed before insight lands beneath it', async () => {
     seedParseMessage();
-    mockConfirm('4th dining transaction this week — you usually have 2.');
+    mockConfirm({
+      text: '4th dining transaction this week — you usually have 2.',
+      severity: 'calm',
+    });
 
     await chatStore.commitDraft(PARSE_MSG_ID, makeDraft());
 

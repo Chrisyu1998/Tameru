@@ -17,8 +17,13 @@ The four rules, highest priority first (rationale in the Day 13 prompt):
 
   1. **single_tx_notable**     — new monthly high in a category.
   2. **weekly_frequency**      — elevated weekly count vs the 4-week avg.
-  3. **cumulative_delta**      — MTD spend pulling above the 3-month avg.
+  3. **cumulative_delta**      — category spend (projected or current)
+                                 pulling above the baseline.
   4. **card_mismatch**         — wrong-card usage with a better option.
+
+Each fired insight carries a `severity` tier — `calm` / `elevated` /
+`alert` — that drives the frontend bubble's visual weight (DESIGN.md §6.2).
+Only the pace-aware rule 3 escalates above `calm`.
 
 Rate-limit windows live in `entry_moment_fires`. They are enforced by
 `entry_moment_signals(p_transaction_id)` returning the most recent fire
@@ -30,13 +35,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
-from app.models.transactions import TransactionRow
+from app.models.transactions import EntryMomentInsight, TransactionRow
 
 RULE_SINGLE_TX_NOTABLE = "single_tx_notable"
 RULE_WEEKLY_FREQUENCY = "weekly_frequency"
@@ -51,20 +57,33 @@ RULE_2_MIN_PRIOR_AVG = Decimal("0.5")
 RULE_1_MIN_MONTH_COUNT = 3
 RULE_4_MIN_WRONG_CARD_COUNT = 2
 
+# Rule 3 (cumulative_delta) — pace projection + severity banding.
+# Below this many days into the month a straight-line projection from
+# 2-3 days of data is noise, so rule 3 falls back to retrospective framing.
+RULE_3_MIN_DAYS_FOR_PROJECTION = 5
+SEVERITY_ALERT_RATIO = Decimal("0.25")
+
+# Severity tiers — drive EntryInsightBubble's tiered visual treatment and
+# mirror the §6.3 dashboard color scale. `calm` is the quiet grey aside;
+# `elevated` is amber (10-25% over baseline); `alert` is terracotta (25%+).
+SEVERITY_CALM = "calm"
+SEVERITY_ELEVATED = "elevated"
+SEVERITY_ALERT = "alert"
+
 
 def entry_moment_insight(
     user: AuthedUser, transaction: TransactionRow
-) -> str | None:
-    """Return a one-sentence insight for the just-committed transaction, or None.
+) -> EntryMomentInsight | None:
+    """Return an entry-moment insight for the just-committed transaction, or None.
 
     Request:
         user: the authenticated caller (JWT-scoped for all DB reads).
         transaction: the row that `POST /transactions/confirm` just inserted.
 
     Response:
-        A short prose sentence (str) when a rule fires, or `None` when no
-        rule applies. The caller passes the value straight through to
-        `TransactionConfirmResponse.insight`.
+        An `EntryMomentInsight` (one prose sentence + a `severity` tier)
+        when a rule fires, or `None` when no rule applies. The caller passes
+        the value straight through to `TransactionConfirmResponse.insight`.
 
     Side effect: on a non-`None` return, inserts one row into
     `entry_moment_fires` so the rate-limit windows in `entry_moment_signals`
@@ -84,7 +103,7 @@ def entry_moment_insight(
         return None
 
     _record_fire(user, decision.rule_id, decision.category)
-    return decision.sentence
+    return EntryMomentInsight(text=decision.sentence, severity=decision.severity)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +124,7 @@ class _Signals:
     category: str
     amount: Decimal
     card_id: UUID | None
+    txn_date: date
     category_tx_count_prior: int
     category_history_days: int
     month_tx_count_in_category: int
@@ -132,6 +152,7 @@ class _Signals:
             category=row["txn_category"],
             amount=Decimal(str(row["txn_amount"] or 0)),
             card_id=UUID(row["txn_card_id"]) if row.get("txn_card_id") else None,
+            txn_date=date.fromisoformat(str(row["txn_date"])),
             category_tx_count_prior=int(row.get("category_tx_count_prior") or 0),
             category_history_days=int(row.get("category_history_days") or 0),
             month_tx_count_in_category=int(row.get("month_tx_count_in_category") or 0),
@@ -161,11 +182,12 @@ class _Signals:
 
 @dataclass(frozen=True)
 class _RuleDecision:
-    """One picked rule + the sentence it generated + the category to record."""
+    """One picked rule: the sentence, the category to record, the severity tier."""
 
     rule_id: str
     sentence: str
     category: str
+    severity: str
 
 
 def _pick_rule(sig: _Signals) -> _RuleDecision | None:
@@ -178,16 +200,26 @@ def _pick_rule(sig: _Signals) -> _RuleDecision | None:
       * a "signal" guard (is the situation actually noteworthy?), and
       * a rate-limit check (has the same rule already fired in its
         suppression window?).
+
+    The pace-aware overspending rule (rule 3) is evaluated up front: an
+    `alert`-tier result — spend tracking 25%+ over the category baseline —
+    is the loudest, most actionable thing the bubble can say, so it
+    outranks the calmer "new monthly high" (rule 1) and "elevated weekly
+    frequency" (rule 2) observations. Below the alert band, rule 3 keeps
+    its original priority-3 slot.
     """
+    overspending = _rule_cumulative_delta(sig)
+    if overspending is not None and overspending.severity == SEVERITY_ALERT:
+        return overspending
+
     decision = _rule_single_tx_notable(sig)
     if decision is not None:
         return decision
     decision = _rule_weekly_frequency(sig)
     if decision is not None:
         return decision
-    decision = _rule_cumulative_delta(sig)
-    if decision is not None:
-        return decision
+    if overspending is not None:
+        return overspending
     decision = _rule_card_mismatch(sig)
     if decision is not None:
         return decision
@@ -211,7 +243,10 @@ def _rule_single_tx_notable(sig: _Signals) -> _RuleDecision | None:
         return None
     sentence = f"highest single {sig.category.lower()} spend this month."
     return _RuleDecision(
-        rule_id=RULE_SINGLE_TX_NOTABLE, sentence=sentence, category=sig.category
+        rule_id=RULE_SINGLE_TX_NOTABLE,
+        sentence=sentence,
+        category=sig.category,
+        severity=SEVERITY_CALM,
     )
 
 
@@ -242,17 +277,34 @@ def _rule_weekly_frequency(sig: _Signals) -> _RuleDecision | None:
         f"this week — you usually have {avg_int}."
     )
     return _RuleDecision(
-        rule_id=RULE_WEEKLY_FREQUENCY, sentence=sentence, category=sig.category
+        rule_id=RULE_WEEKLY_FREQUENCY,
+        sentence=sentence,
+        category=sig.category,
+        severity=SEVERITY_CALM,
     )
 
 
 def _rule_cumulative_delta(sig: _Signals) -> _RuleDecision | None:
-    """Fire when MTD category spend is pulling notably above the baseline.
+    """Fire when category spend — projected or current — pulls above baseline.
+
+    This is the only rule that escalates above `calm`. It frames the
+    overspending signal by how much of the month has elapsed:
+
+      * **Forecast** (default, `RULE_3_MIN_DAYS_FOR_PROJECTION` days into
+        the month or later) — straight-lines month-to-date spend to a
+        month-end projection and compares that to the baseline. Forward-
+        looking: "on pace for about $N over your monthly dining average."
+      * **Retrospective** (the first few days of the month, where a
+        projection from 2-3 days of data is noise) — compares month-to-date
+        spend directly. "this puts you $N above ... with M days left."
+
+    Severity is the §6.3 band of the delta (projected or current): 10-25%
+    over baseline → `elevated`, 25%+ → `alert` (see `_delta_severity`).
 
     Guards:
       * Category cleared the soft gate.
-      * `mtd > baseline` by both 10% and the absolute floor.
       * `days_remaining > 0` — phrasing assumes some month is left.
+      * The delta clears the combined percent + absolute noise floor.
       * Rate limit: once per category per rolling 7 days.
       * Suppressed when rule 2 already fired this week for this category
         (they answer adjacent questions; firing both is noisy).
@@ -261,24 +313,48 @@ def _rule_cumulative_delta(sig: _Signals) -> _RuleDecision | None:
         return None
     if sig.monthly_baseline_category <= 0:
         return None
-    delta = sig.mtd_category_spend - sig.monthly_baseline_category
-    if not _passes_noise_threshold(delta, sig.monthly_baseline_category):
-        return None
-    if delta <= 0:
-        return None
     if sig.days_remaining_in_month <= 0:
         return None
     if sig.last_cumulative_delta_at is not None:
         return None
     if sig.last_weekly_frequency_at is not None:
         return None
+
+    days_elapsed = sig.txn_date.day
+    use_forecast = days_elapsed >= RULE_3_MIN_DAYS_FOR_PROJECTION
+    if use_forecast:
+        days_in_month = days_elapsed + sig.days_remaining_in_month
+        projected = (
+            sig.mtd_category_spend
+            / Decimal(days_elapsed)
+            * Decimal(days_in_month)
+        )
+        delta = projected - sig.monthly_baseline_category
+    else:
+        delta = sig.mtd_category_spend - sig.monthly_baseline_category
+
+    if delta <= 0:
+        return None
+    if not _passes_noise_threshold(delta, sig.monthly_baseline_category):
+        return None
+
     delta_int = int(round(float(delta)))
-    sentence = (
-        f"this puts you ${delta_int} above your monthly {sig.category.lower()} "
-        f"average with {sig.days_remaining_in_month} days left."
-    )
+    if use_forecast:
+        sentence = (
+            f"on pace for about ${delta_int} over your monthly "
+            f"{sig.category.lower()} average."
+        )
+    else:
+        sentence = (
+            f"this puts you ${delta_int} above your monthly "
+            f"{sig.category.lower()} average with "
+            f"{sig.days_remaining_in_month} days left."
+        )
     return _RuleDecision(
-        rule_id=RULE_CUMULATIVE_DELTA, sentence=sentence, category=sig.category
+        rule_id=RULE_CUMULATIVE_DELTA,
+        sentence=sentence,
+        category=sig.category,
+        severity=_delta_severity(delta, sig.monthly_baseline_category),
     )
 
 
@@ -307,7 +383,10 @@ def _rule_card_mismatch(sig: _Signals) -> _RuleDecision | None:
         f"{sig.best_card_name} earns {multiplier}x there."
     )
     return _RuleDecision(
-        rule_id=RULE_CARD_MISMATCH, sentence=sentence, category=sig.category
+        rule_id=RULE_CARD_MISMATCH,
+        sentence=sentence,
+        category=sig.category,
+        severity=SEVERITY_CALM,
     )
 
 
@@ -322,6 +401,22 @@ def _passes_soft_gate(sig: _Signals) -> bool:
         sig.category_tx_count_prior >= MIN_TX_COUNT_FOR_BASELINE
         and sig.category_history_days >= MIN_HISTORY_DAYS_FOR_BASELINE
     )
+
+
+def _delta_severity(delta: Decimal, baseline: Decimal) -> str:
+    """Map an over-baseline delta onto the §6.3 amber/red severity bands.
+
+    A delta reaching this function has already cleared the 10% noise floor
+    (`_passes_noise_threshold`), so it is at least `elevated`; the only
+    question is whether it has crossed the 25% line into `alert`. Mirrors
+    the dashboard category tile's color scale so the entry-moment bubble
+    and the dashboard speak one visual language.
+    """
+    if baseline <= 0:
+        return SEVERITY_ELEVATED
+    if delta / baseline >= SEVERITY_ALERT_RATIO:
+        return SEVERITY_ALERT
+    return SEVERITY_ELEVATED
 
 
 def _passes_noise_threshold(delta: Decimal, baseline: Decimal) -> bool:

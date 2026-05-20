@@ -12,6 +12,7 @@ and `tests/routes/test_dashboard.py` once the integration suite runs.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -25,11 +26,15 @@ from app.services.entry_moment import (
     RULE_1_MIN_MONTH_COUNT,
     RULE_2_MIN_PRIOR_AVG,
     RULE_2_MIN_THIS_WEEK_COUNT,
+    RULE_3_MIN_DAYS_FOR_PROJECTION,
     RULE_4_MIN_WRONG_CARD_COUNT,
     RULE_CARD_MISMATCH,
     RULE_CUMULATIVE_DELTA,
     RULE_SINGLE_TX_NOTABLE,
     RULE_WEEKLY_FREQUENCY,
+    SEVERITY_ALERT,
+    SEVERITY_CALM,
+    SEVERITY_ELEVATED,
     _format_multiplier,
     _ordinal,
     _passes_noise_threshold,
@@ -54,6 +59,7 @@ def test_rule_1_fires_when_new_monthly_max_with_enough_context():
     assert decision is not None
     assert decision.rule_id == RULE_SINGLE_TX_NOTABLE
     assert decision.sentence == "highest single dining spend this month."
+    assert decision.severity == SEVERITY_CALM
 
 
 def test_rule_1_skipped_when_under_min_month_count():
@@ -104,6 +110,7 @@ def test_rule_2_fires_with_elevated_week_against_meaningful_prior_avg():
     assert decision is not None
     assert decision.rule_id == RULE_WEEKLY_FREQUENCY
     assert decision.sentence == "4th dining transaction this week — you usually have 2."
+    assert decision.severity == SEVERITY_CALM
 
 
 def test_rule_2_skipped_when_under_soft_gate():
@@ -140,75 +147,130 @@ def test_rule_2_skipped_when_under_min_count_this_week():
 
 
 # ---------------------------------------------------------------------------
-# _pick_rule — rule 3 (cumulative delta)
+# _pick_rule — rule 3 (cumulative delta, pace-aware)
 # ---------------------------------------------------------------------------
 
 
-def test_rule_3_fires_when_mtd_above_baseline_past_noise_floor():
-    """Rule 3 fires when MTD exceeds baseline by >10% AND >$10."""
+def test_rule_3_forecast_fires_elevated_when_pace_moderately_over():
+    """Rule 3 forecast framing fires `elevated` at a 10-25% projected overage."""
+    # Day 20 of a 30-day month, $160 MTD → projected $240, $40 (20%) over
+    # the $200 baseline → elevated (amber) band.
     sig = _signals(
+        txn_date=date(2026, 6, 20),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
-        mtd_category_spend=Decimal("200"),
-        monthly_baseline_category=Decimal("150"),
-        days_remaining_in_month=12,
+        mtd_category_spend=Decimal("160"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
     )
     decision = _pick_rule(sig)
     assert decision is not None
     assert decision.rule_id == RULE_CUMULATIVE_DELTA
+    assert decision.severity == SEVERITY_ELEVATED
+    assert decision.sentence == "on pace for about $40 over your monthly dining average."
+
+
+def test_rule_3_forecast_fires_alert_when_pace_far_over():
+    """Rule 3 forecast framing fires `alert` once the projected overage tops 25%."""
+    # Day 20 of a 30-day month, $240 MTD → projected $360, $160 (80%) over
+    # the $200 baseline → alert (terracotta) band.
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("240"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_CUMULATIVE_DELTA
+    assert decision.severity == SEVERITY_ALERT
+    assert (
+        decision.sentence
+        == "on pace for about $160 over your monthly dining average."
+    )
+
+
+def test_rule_3_retrospective_framing_in_first_days_of_month():
+    """Before RULE_3_MIN_DAYS_FOR_PROJECTION, rule 3 uses the retrospective sentence."""
+    # Day 3 — too early to project from 2-3 days of data; compare MTD
+    # directly. $300 vs $200 → $100 (50%) over → alert, retrospective
+    # phrasing that still names the days left.
+    sig = _signals(
+        txn_date=date(2026, 6, 3),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("300"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=27,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_CUMULATIVE_DELTA
+    assert decision.severity == SEVERITY_ALERT
     assert "above your monthly dining average" in decision.sentence
-    assert "12 days left" in decision.sentence
+    assert "27 days left" in decision.sentence
+
+
+def test_rule_3_min_days_constant_is_the_forecast_cutoff():
+    """Document the day-of-month boundary between retrospective and forecast framing."""
+    assert RULE_3_MIN_DAYS_FOR_PROJECTION == 5
 
 
 def test_rule_3_suppressed_when_rule_2_already_fired_this_week():
     """Rule 3 backs off when rule 2 already fired in the same category this week."""
     sig = _signals(
+        txn_date=date(2026, 6, 20),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
         # Rule 2's signals do NOT meet — to isolate the suppression check.
         this_week_count=0,
         prior_4w_avg_weekly_count=Decimal("0"),
-        mtd_category_spend=Decimal("200"),
-        monthly_baseline_category=Decimal("150"),
-        days_remaining_in_month=12,
-        last_weekly_frequency_at="2026-05-12T00:00:00Z",
+        mtd_category_spend=Decimal("240"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+        last_weekly_frequency_at="2026-06-12T00:00:00Z",
     )
     assert _pick_rule(sig) is None
 
 
-def test_rule_3_skipped_when_delta_below_absolute_floor():
-    """Even a percent-passing delta below the $10 absolute floor is treated as noise."""
+def test_rule_3_forecast_skipped_when_projected_delta_below_absolute_floor():
+    """A projected delta under the $10 absolute floor is treated as noise."""
+    # Day 20, $135 MTD → projected $202.50, $2.50 over $200 — below the floor.
     sig = _signals(
+        txn_date=date(2026, 6, 20),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
-        mtd_category_spend=Decimal("55"),
-        monthly_baseline_category=Decimal("50"),
-        days_remaining_in_month=12,
+        mtd_category_spend=Decimal("135"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
     )
-    # +10% over $50 = $5 delta — passes percent but below absolute floor.
     assert _pick_rule(sig) is None
 
 
-def test_rule_3_skipped_when_delta_below_percent_floor():
-    """Large absolute delta with small percent (e.g., $11 over $400 baseline) is noise."""
+def test_rule_3_forecast_skipped_when_projected_delta_below_percent_floor():
+    """A projected delta over $10 but under 10% of a large baseline is noise."""
+    # Day 20, $1400 MTD → projected $2100, $100 over $2000 = 5% — below 10%.
     sig = _signals(
+        txn_date=date(2026, 6, 20),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
-        mtd_category_spend=Decimal("411"),
-        monthly_baseline_category=Decimal("400"),
-        days_remaining_in_month=12,
+        mtd_category_spend=Decimal("1400"),
+        monthly_baseline_category=Decimal("2000"),
+        days_remaining_in_month=10,
     )
-    # $11 / $400 = 2.75% — below the 10% floor.
     assert _pick_rule(sig) is None
 
 
 def test_rule_3_skipped_on_last_day_of_month():
-    """Rule 3's sentence assumes 'with N days left' — last day is no-op."""
+    """Rule 3's phrasing assumes some month is left — last day is a no-op."""
     sig = _signals(
+        txn_date=date(2026, 6, 30),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
-        mtd_category_spend=Decimal("200"),
-        monthly_baseline_category=Decimal("150"),
+        mtd_category_spend=Decimal("300"),
+        monthly_baseline_category=Decimal("200"),
         days_remaining_in_month=0,
     )
     assert _pick_rule(sig) is None
@@ -234,6 +296,7 @@ def test_rule_4_fires_when_better_card_exists_and_repeat_use():
     assert "Chase Freedom" in decision.sentence
     assert "Amex Gold" in decision.sentence
     assert "4x" in decision.sentence
+    assert decision.severity == SEVERITY_CALM
 
 
 def test_rule_4_skipped_under_min_wrong_card_count():
@@ -294,18 +357,22 @@ def test_priority_order_rule_1_wins_over_rule_2():
     decision = _pick_rule(sig)
     assert decision is not None
     assert decision.rule_id == RULE_SINGLE_TX_NOTABLE
+    assert decision.severity == SEVERITY_CALM
 
 
-def test_priority_order_rule_2_wins_over_rule_3():
-    """Rule 2 (frequency) outranks rule 3 (cumulative delta) when both apply."""
+def test_priority_rule_2_wins_over_elevated_rule_3():
+    """An `elevated`-tier rule 3 keeps slot 3 — rule 2 (frequency) still outranks it."""
     sig = _signals(
+        txn_date=date(2026, 6, 20),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        # Rule 2 eligible.
         this_week_count=4,
         prior_4w_avg_weekly_count=Decimal("2"),
-        mtd_category_spend=Decimal("200"),
-        monthly_baseline_category=Decimal("150"),
-        days_remaining_in_month=12,
+        # Rule 3 eligible but only `elevated` (20% projected overage).
+        mtd_category_spend=Decimal("160"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
     )
     decision = _pick_rule(sig)
     assert decision is not None
@@ -315,11 +382,12 @@ def test_priority_order_rule_2_wins_over_rule_3():
 def test_priority_order_rule_3_wins_over_rule_4():
     """Rule 3 (delta) outranks rule 4 (card mismatch) when both apply."""
     sig = _signals(
+        txn_date=date(2026, 6, 20),
         category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
         category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
-        mtd_category_spend=Decimal("200"),
-        monthly_baseline_category=Decimal("150"),
-        days_remaining_in_month=12,
+        mtd_category_spend=Decimal("160"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
         this_card_name="Chase Freedom",
         this_card_multiplier=Decimal("1"),
         best_card_name="Amex Gold",
@@ -329,6 +397,47 @@ def test_priority_order_rule_3_wins_over_rule_4():
     decision = _pick_rule(sig)
     assert decision is not None
     assert decision.rule_id == RULE_CUMULATIVE_DELTA
+
+
+def test_priority_alert_rule_3_outranks_rule_1():
+    """An `alert`-tier rule 3 jumps the queue — it outranks even rule 1."""
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        # Rule 1 eligible.
+        amount=Decimal("80"),
+        month_tx_count_in_category=RULE_1_MIN_MONTH_COUNT,
+        prior_max_in_category_this_month=Decimal("50"),
+        # Rule 3 eligible and `alert` (80% projected overage).
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("240"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_CUMULATIVE_DELTA
+    assert decision.severity == SEVERITY_ALERT
+
+
+def test_priority_alert_rule_3_outranks_rule_2():
+    """An `alert`-tier rule 3 also outranks rule 2 (elevated weekly frequency)."""
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        # Rule 2 eligible.
+        this_week_count=4,
+        prior_4w_avg_weekly_count=Decimal("2"),
+        # Rule 3 eligible and `alert`.
+        mtd_category_spend=Decimal("240"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_CUMULATIVE_DELTA
+    assert decision.severity == SEVERITY_ALERT
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +514,7 @@ def _signals(**overrides: Any) -> _Signals:
         "category": "Dining",
         "amount": Decimal("10"),
         "card_id": None,
+        "txn_date": date(2026, 5, 20),
         "category_tx_count_prior": 0,
         "category_history_days": 0,
         "month_tx_count_in_category": 0,

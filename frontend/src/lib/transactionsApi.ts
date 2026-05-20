@@ -1,5 +1,6 @@
 import { apiJson, apiFetch } from './api';
 import type { Category } from './categories';
+import type { InsightSeverity } from './chat';
 import type { Transaction } from './fixtures';
 
 /*
@@ -36,9 +37,17 @@ export interface TransactionListWire {
   has_more: boolean;
 }
 
+/** Entry-moment insight wire shape — mirrors `EntryMomentInsight`
+ * (app/models/transactions.py). `text` is the one-sentence bubble copy;
+ * `severity` drives `EntryInsightBubble`'s tiered visual treatment. */
+export interface EntryMomentInsightWire {
+  text: string;
+  severity: InsightSeverity;
+}
+
 export interface TransactionConfirmResponseWire {
   transaction: TransactionRowWire;
-  insight: string | null;
+  insight: EntryMomentInsightWire | null;
 }
 
 /**
@@ -112,10 +121,10 @@ export interface ConfirmTransactionBody {
 
 export interface ConfirmTransactionResult {
   transaction: Transaction;
-  // One-sentence deterministic insight string when a rule fires; null on
-  // first-in-category, within-noise deltas, saturated rate limits, and on
-  // idempotent replay (Day 13).
-  insight: string | null;
+  // Deterministic entry-moment insight (sentence + severity tier) when a
+  // rule fires; null on first-in-category, within-noise deltas, saturated
+  // rate limits, and on idempotent replay (Day 13).
+  insight: EntryMomentInsightWire | null;
 }
 
 export async function confirmTransaction(

@@ -101,11 +101,11 @@ def confirm_transaction(
     ):
         _upsert_merchant_correction(user, proposal.merchant, proposal.category)
 
-    # Day 13: deterministic rule engine picks one short prose sentence
-    # (or returns None) and records a row in entry_moment_fires for
-    # rate-limit accounting. Best-effort — a failure inside the insight
-    # path must never block the confirm response. The row is already
-    # committed; the bubble is a nice-to-have garnish.
+    # Day 13: deterministic rule engine picks one insight (sentence +
+    # severity tier) or returns None, and records a row in
+    # entry_moment_fires for rate-limit accounting. Best-effort — a failure
+    # inside the insight path must never block the confirm response. The
+    # row is already committed; the bubble is a nice-to-have garnish.
     try:
         insight = entry_moment_insight(user, row)
     except Exception:

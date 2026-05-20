@@ -337,7 +337,8 @@ export const chatStore = {
               id: newId("ai"),
               role: "assistant",
               kind: "insight",
-              text: insight,
+              text: insight.text,
+              severity: insight.severity,
             },
           ],
         });
@@ -671,7 +672,8 @@ export const chatStore = {
               id: newId("ai"),
               role: "assistant",
               kind: "insight",
-              text: result.insight,
+              text: result.insight.text,
+              severity: result.insight.severity,
             },
           ]
         : next,

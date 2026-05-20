@@ -288,7 +288,10 @@ describe("offline_queue — enqueue + drain happy path", () => {
     const editedBody = txBody(CRID_1, { amount: "42.00" }); // queued at $42
     confirmTxMock.mockResolvedValueOnce({
       transaction: txRow({ amountCents: 4200 }), // server returns $42
-      insight: "highest single dining spend this month.",
+      insight: {
+        text: "highest single dining spend this month.",
+        severity: "calm",
+      },
     });
 
     await enqueue({

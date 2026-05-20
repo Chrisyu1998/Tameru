@@ -128,17 +128,27 @@ export interface AssistantRichChartMessage {
 }
 
 /**
+ * Severity tier for an entry-moment insight — drives `EntryInsightBubble`'s
+ * tiered visual treatment. Mirrors the dashboard's §6.3 baseline color
+ * scale: `calm` is the quiet grey aside, `elevated` is amber, `alert` is
+ * terracotta. Only the pace-aware overspending rule escalates above `calm`.
+ */
+export type InsightSeverity = "calm" | "elevated" | "alert";
+
+/**
  * Entry-moment insight bubble — Day 13. Rendered below a committed
  * parse card when the `insight` field on `POST /transactions/confirm`'s
  * response is non-null. Distinct kind (not reusing `text`) so the
- * renderer can give it a quieter visual treatment without bleeding
- * styles into ordinary assistant text.
+ * renderer can give it a tiered visual treatment without bleeding
+ * styles into ordinary assistant text. `severity` selects the tier
+ * (DESIGN.md §6.2).
  */
 export interface AssistantInsightMessage {
   id: string;
   role: "assistant";
   kind: "insight";
   text: string;
+  severity: InsightSeverity;
 }
 
 /**

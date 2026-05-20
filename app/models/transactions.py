@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -178,17 +179,41 @@ class TransactionRow(BaseModel):
     updated_at: _dt.datetime
 
 
+class EntryMomentInsight(BaseModel):
+    """One entry-moment insight returned by `POST /transactions/confirm`.
+
+    Produced by the deterministic rule engine in
+    `app/services/entry_moment.py`; rendered by the frontend's
+    `EntryInsightBubble`. `severity` drives a tiered visual treatment that
+    mirrors the dashboard's §6.3 baseline color scale:
+
+      * `calm`     — quiet grey aside (rules 1 / 2 / 4).
+      * `elevated` — amber; the pace-aware rule 3, tracking 10-25% over the
+                     category baseline.
+      * `alert`    — terracotta; rule 3, 25%+ over baseline.
+
+    Example: `{"text": "on pace for about $180 over your monthly dining
+    average.", "severity": "alert"}`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    severity: Literal["calm", "elevated", "alert"]
+
+
 class TransactionConfirmResponse(BaseModel):
     """`POST /transactions/confirm` response.
 
-    `insight` is always `None` in Day 5's implementation (Day 13 wires in
-    `entry_moment_insight()`). On idempotent replay (same
-    `client_request_id`) `insight` stays `None` even after Day 13 — the
-    original insight already fired on the first confirm.
+    `insight` carries the entry-moment insight (sentence + severity tier)
+    when the rule engine fires, otherwise `None`. On idempotent replay
+    (same `client_request_id`) `insight` is always `None` — the original
+    insight already fired on the first confirm; re-firing is worse than
+    silence (DESIGN.md §6.2).
     """
 
     transaction: TransactionRow
-    insight: str | None = None
+    insight: EntryMomentInsight | None = None
 
 
 class TransactionListResponse(BaseModel):

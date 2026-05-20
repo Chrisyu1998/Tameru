@@ -201,7 +201,7 @@ function MessageRow({
     );
   }
   if (msg.kind === "insight") {
-    return <EntryInsightBubble text={msg.text} />;
+    return <EntryInsightBubble text={msg.text} severity={msg.severity} />;
   }
   if (msg.kind === "chart") {
     return (

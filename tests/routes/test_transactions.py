@@ -810,8 +810,11 @@ def test_confirm_fires_single_tx_notable_when_new_monthly_max(
     assert resp.status_code == 200, resp.text
     insight = resp.json()["insight"]
     assert insight is not None
-    assert "highest single" in insight.lower()
-    assert category.lower() in insight.lower()
+    # `insight` is now an object: {text, severity}. single_tx_notable is a
+    # `calm`-tier rule (only the pace-aware rule 3 escalates).
+    assert "highest single" in insight["text"].lower()
+    assert category.lower() in insight["text"].lower()
+    assert insight["severity"] == "calm"
 
     # Rate-limit row recorded.
     fires = _read_fires(user_a, category=category, rule_id="single_tx_notable")

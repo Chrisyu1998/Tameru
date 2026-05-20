@@ -364,13 +364,31 @@ Dashboards with many charts create a false sense of progress without changing be
 
 #### Entry-Moment Insight — primary behavioral intervention
 
-Immediately after a transaction is saved, replace the standard confirmation toast with **one** contextual sentence. Disappears after 3 seconds. No tap. No action.
+Immediately after a transaction is confirmed, `POST /transactions/confirm` returns at most **one** contextual sentence, rendered as a bubble in the chat thread directly below the committed parse card (`EntryInsightBubble`). It is not a toast and not a modal: it stays in the thread for the rest of the session, with no dismiss affordance — rate limits, enforced server-side in `entry_moment_fires`, are what prevent fatigue. The insight is **ephemeral by design** — it is not written to `chat_messages`, so it does not reappear when the conversation is rehydrated on a later app open. The durable home for an ongoing overspending signal is the dashboard category tile (§6.3) and the weekly digest (§6.4).
 
-- "4th dining transaction this week — you usually have 2."
-- "This puts you $23 above your monthly dining average with 12 days left."
-- "You've used Chase Freedom for dining 3 times this week — Amex Gold earns 4x there."
+A deterministic rule engine (`app/services/entry_moment.py`) evaluates four rules and returns the first that fires:
 
-Rules: one sentence max. No numbers beyond one. No buttons. Auto-dismiss at 3s. Not shown when there's nothing meaningful to surface (e.g., first transaction in a category). Framed as a delta vs. baseline — never as an absolute number.
+1. **single_tx_notable** — a new monthly high in a category.
+2. **weekly_frequency** — an elevated weekly count vs. the 4-week average.
+3. **cumulative_delta** — category spend pulling above the baseline (pace-aware; see below).
+4. **card_mismatch** — wrong-card usage with a better-earning option.
+
+**Severity tiers.** Each fired insight carries a `severity` that drives a tiered visual treatment mirroring the §6.3 baseline color scale:
+
+- `calm` — a quiet grey italic aside. Rules 1, 2, and 4.
+- `elevated` — amber, with a leading glyph. Rule 3 only, when spend tracks 10–25% over the category baseline.
+- `alert` — terracotta, with a warning glyph. Rule 3 only, 25%+ over baseline.
+
+An `alert`-tier rule 3 **outranks the calm rules** — a "you're on pace to overspend" message is not suppressed by a "biggest dinner this month" observation. Below the alert band, rule 3 keeps its original priority-3 slot.
+
+**Rule 3 is pace-aware.** From the 5th of the month onward it straight-lines month-to-date spend to a month-end projection — *"on pace for about $180 over your monthly dining average."* In the first few days, where a projection from 2–3 days of data is noise, it falls back to a retrospective framing — *"this puts you $23 above your monthly dining average with 12 days left."*
+
+Examples by tier:
+
+- calm: *"4th dining transaction this week — you usually have 2."*
+- alert: *"on pace for about $180 over your monthly dining average."*
+
+Rules: one sentence; at most two numbers, always framed as a delta vs. the baseline — never a bare absolute, never a judgment ("you spend a lot here" is the wrong tone). No buttons (a severity glyph is not an action affordance). Not shown when there's nothing meaningful to surface — the first transaction in a category, or a within-noise delta.
 
 #### AI Chat — power-user escape valve
 
