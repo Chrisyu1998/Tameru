@@ -59,28 +59,7 @@ def get_current_user_jwt(request: Request) -> AuthedUser:
     if not header or not header.lower().startswith("bearer "):
         raise _unauthorized("missing bearer token")
     token = header.split(" ", 1)[1].strip()
-    if not token:
-        raise _unauthorized("missing bearer token")
-
-    jwks_client, issuer = _jwks()
-    try:
-        signing_key = jwks_client.get_signing_key_from_jwt(token).key
-        claims = jwt.decode(
-            token,
-            signing_key,
-            algorithms=_JWT_ALGORITHMS,
-            audience=_JWT_AUDIENCE,
-            issuer=issuer,
-        )
-    except jwt.PyJWTError as exc:
-        raise _unauthorized(f"invalid token: {exc.__class__.__name__}") from exc
-
-    sub = claims.get("sub")
-    email = claims.get("email")
-    if not sub or not email:
-        raise _unauthorized("token missing sub/email")
-
-    return AuthedUser(jwt=token, user_id=UUID(sub), email=email)
+    return verify_supabase_jwt(token)
 
 
 def get_current_user_with_device(
@@ -113,6 +92,44 @@ def get_current_user_with_device(
     if not resp.data or resp.data[0].get("active_device_id") != device_id:
         raise _device_displaced()
     return user
+
+
+def verify_supabase_jwt(token: str) -> AuthedUser:
+    """Verify a Supabase-issued JWT string and return the authenticated user.
+
+    The shared verification core behind both `get_current_user_jwt` (the
+    FastAPI request dependency) and the MCP server's OAuth Resource Server
+    token check (`app/mcp_server.py`). Checks signature (ES256, pinned —
+    see the module docstring), audience (`authenticated`), and issuer
+    against the project JWKS. Raises `HTTPException(401)` on any failure.
+
+    Accepts both a browser session JWT and a Supabase OAuth-2.1-Server
+    access token: the latter is a standard user JWT with one extra
+    `client_id` claim (DESIGN.md §7.9), so the same verification holds and
+    the extra claim is simply ignored here.
+    """
+    if not token:
+        raise _unauthorized("missing bearer token")
+
+    jwks_client, issuer = _jwks()
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token).key
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=_JWT_ALGORITHMS,
+            audience=_JWT_AUDIENCE,
+            issuer=issuer,
+        )
+    except jwt.PyJWTError as exc:
+        raise _unauthorized(f"invalid token: {exc.__class__.__name__}") from exc
+
+    sub = claims.get("sub")
+    email = claims.get("email")
+    if not sub or not email:
+        raise _unauthorized("token missing sub/email")
+
+    return AuthedUser(jwt=token, user_id=UUID(sub), email=email)
 
 
 # ---------------------------------------------------------------------------

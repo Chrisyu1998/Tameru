@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from app.auth import AuthedUser, get_current_user_jwt
 from app.db import supabase_for_user
+from app.mcp_server import mcp_app, mcp_server, mcp_well_known_routes
 from app.routes import auth as auth_routes
 from app.routes import cards as cards_routes
 from app.routes import chat as chat_routes
@@ -30,6 +31,10 @@ _REQUIRED_ENV_VARS = (
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
     "IMPORT_TOKEN_SECRET",
+    # Public URL of the mounted MCP server (app/mcp_server.py). Missing,
+    # it would not 500 a request — it would silently mis-advertise the
+    # OAuth protected-resource metadata, so fail fast at boot instead.
+    "MCP_RESOURCE_SERVER_URL",
 )
 
 
@@ -63,7 +68,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             "variable(s): " + ", ".join(sorted(missing)) + ". Set them in "
             "Railway's env UI (see .env.example)."
         )
-    yield
+    # The read-only MCP server (app/mcp_server.py) is mounted at /mcp; its
+    # Streamable HTTP transport needs the session manager running for the
+    # lifetime of the process.
+    async with mcp_server.session_manager.run():
+        yield
 
 
 app = FastAPI(title="Tameru", lifespan=lifespan)
@@ -184,3 +193,13 @@ app.include_router(memory_routes.router)
 app.include_router(goals_routes.router)
 app.include_router(subscriptions_routes.router)
 app.include_router(imports_routes.router)
+
+# The read-only MCP server (app/mcp_server.py) — a self-contained ASGI app
+# with its own Streamable HTTP transport. Mounted at /mcp; its session
+# manager is started in `lifespan` above. The OAuth protected-resource
+# metadata route is additionally registered at the app root: the SDK
+# advertises it at /.well-known/oauth-protected-resource/mcp (RFC 9728),
+# and the /mcp mount alone would bury it one level deeper where discovery
+# clients cannot reach it.
+app.mount("/mcp", mcp_app)
+app.router.routes.extend(mcp_well_known_routes)
