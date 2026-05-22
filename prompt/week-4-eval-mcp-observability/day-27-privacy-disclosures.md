@@ -16,7 +16,7 @@ Match the privacy promises in `DESIGN.md` §9.4 to reality. Anthropic ZDR reques
   - Test via curl + Lighthouse audit.
 - **CORS:** FastAPI CORS middleware allows only the production origin (e.g. `https://tameru.app`) and `http://localhost:5173` for dev. No wildcards.
 - **Data export:**
-  - `GET /export` — returns a single JSON file: `{user_id, exported_at, transactions: [...], cards: [...], subscriptions: [...], memory: [...], mcp_tokens: [...without hashes...]}`. RLS-scoped.
+  - `GET /export` — returns a single JSON file: `{user_id, exported_at, transactions: [...], cards: [...], subscriptions: [...], memory: [...]}`. RLS-scoped. (No MCP credentials: there is no `mcp_tokens` table — MCP auth is delegated to Supabase's OAuth 2.1 Server, DESIGN.md §7.9.)
   - In Settings: "Export my data" button → triggers a download.
   - Also wire as a chat tool: a new `export_data()` typed tool that returns the export and a download URL valid for 5 minutes (use Supabase Storage signed URL or a one-shot token).
 - **Settings → Privacy section:**
@@ -29,7 +29,6 @@ Match the privacy promises in `DESIGN.md` §9.4 to reality. Anthropic ZDR reques
 ## Don't
 
 - Don't loosen CSP or CORS to fix a missing asset — fix the asset reference instead.
-- Don't include `mcp_tokens.token_hash` in the export. Hashes are sensitive even though they're not the plaintext.
 - Don't claim ZDR is active before Anthropic confirms. Update the copy when it lands.
 
 ## Done when

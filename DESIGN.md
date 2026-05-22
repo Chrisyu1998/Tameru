@@ -25,7 +25,7 @@ This document supersedes PRD v2.1. Material changes from v2.1 are summarized in 
 | All Gemini calls use **`gemini-3.1-flash-lite-preview`** | Author decision to move off 2.5. Flash-Lite (not Pro) is the right variant — it's the direct successor to 2.5 Flash for "high-volume, cost-sensitive LLM traffic" per Google's own positioning, supports vision and grounding, and avoids paying for Pro's reasoning capacity on simple extraction tasks. Note: still in **preview** as of March 2026; see §16 Open Items for the stability risk. Model string is configurable via env var. |
 | Replace live "demo mode" with a **4-screen guided tour** | Static screens with hardcoded fixture data. Eliminates the question "how does AI chat work on fake data," removes the risk of demo data leaking into Supabase, and is buildable in a day. |
 | RLS is enforced by passing the user's JWT to a per-request Supabase client | Service role bypasses RLS. Per-request clients with the user JWT cause Postgres to enforce `auth.uid() = user_id` on every query. The service role is reserved for migrations and the daily auto-logger. |
-| MCP server uses **per-user bearer tokens, read-only** | Per-user tokens scope queries to one user. Read-only eliminates the "leaked token = data corruption" risk. |
+| MCP server is **read-only**, authenticated via **OAuth 2.1** | Read-only eliminates the "leaked credential = data corruption" risk. OAuth 2.1 — delegated to Supabase Auth's OAuth 2.1 Server — is required because Claude.ai's web connector UI accepts no static bearer token or custom header; delegating to Supabase adds no new vendor. Supersedes the original per-user-bearer-token design — see §7.9. |
 | Subscription auto-logger runs as **`pg_cron` SQL function**, not in the FastAPI process | Survives every API deploy. Idempotency via `UNIQUE (subscription_id, date)` constraint. |
 | Multi-device: **prevent**, don't reconcile | Track active device on user row; second sign-in displaces the first. Avoids offline conflict resolution entirely. |
 | `MerchantCategory` simplified — drop `correction_count`, keep `(merchant, category, updated_at)` | Most recent correction wins. Category itself is the signal Gemini needs. |
@@ -187,7 +187,7 @@ V1 begins with one user (Chris). The data model and auth are designed for multi-
 | AI — card lookup | Claude Haiku 4.5 + `web_search_20250305` server tool | Web-grounded card multiplier lookup with citations and a domain allowlist (NerdWallet, TPG, US Credit Card Guide, Doctor of Credit, issuer domain). Replaces Perplexity Sonar; rationale in §6.1 and §0. |
 | AI — agent | Claude Haiku 4.5 / Sonnet 4.6 | Tool use, multi-step reasoning, narrative |
 | Agent runtime | `anthropic` Python SDK — Messages API with `tool_use` blocks. Loop runs in FastAPI. | Custom typed tools, JWT in scope for RLS, full control over middleware (logging, rate limit backoff, cost gating) |
-| MCP | `mcp` Python SDK (HTTP+SSE transport) | Exposes spending data to Claude.ai / Claude Code |
+| MCP | `mcp` Python SDK (Streamable HTTP transport) | Exposes spending data to Claude.ai / Claude Code / Claude Desktop. OAuth 2.1 Resource Server — see §7.9 |
 | Streaming | FastAPI SSE + EventSource | Token-by-token Claude responses |
 | Backend hosting | Railway | Persistent FastAPI service (SSE streams, 4–6s agent loops, `pg_cron`), GitHub-native CI/CD. ~$10/month. |
 | Frontend hosting | Vercel | Static hosting + edge CDN for the Vite-built PWA. Free tier covers v1 and the §17 scaling plan. PR preview URLs for UI iteration. Talks to the Railway API cross-origin via CORS with Bearer-token auth (no cookies). |
@@ -725,9 +725,9 @@ The user describes a transaction by typing or speaking **in the chat surface**. 
 
 Claude determines chart type, grouping, and time range from the natural language request. Recharts renders inline in the chat thread.
 
-### 7.9 MCP Server — Per-User Tokens
+### 7.9 MCP Server — OAuth 2.1
 
-Tameru exposes an MCP server (HTTP+SSE transport) at `https://tameru.app/mcp`. Claude.ai, Claude Code, and any MCP-compatible client can query a user's spending data with their authorization.
+Tameru exposes a read-only MCP server (Streamable HTTP transport) on the Railway backend. Claude.ai (web), Claude Code, Claude Desktop, and any MCP-compatible client can query a user's spending data with their authorization.
 
 **Exposed tools (read-only in v1):**
 
@@ -736,15 +736,23 @@ Tameru exposes an MCP server (HTTP+SSE transport) at `https://tameru.app/mcp`. C
 - `get_subscriptions()`
 - `get_card_multipliers(card_name?)`
 
-**Auth model:**
+**Auth model — OAuth 2.1.** The MCP server is an OAuth 2.1 *Resource Server*; it neither mints nor stores its own credentials. Authorization is delegated to **Supabase Auth's OAuth 2.1 Server** (public beta as of 2026-05) — Tameru already depends on Supabase, so this adds no new vendor, SDK, or sub-processor. There is no `mcp_tokens` table (§8.6).
 
-1. User goes to **Settings → Integrations → Connect to Claude.ai**.
-2. Server generates a 32-byte random token, stores `sha256(token)` in `mcp_tokens(id, user_id, token_hash, name, created_at, last_used_at, revoked_at)`, returns plaintext **once**. Display copy-paste UI.
-3. User configures Claude.ai (or Claude Code) with `Authorization: Bearer tameru_<token>` header pointing at the MCP URL.
-4. On each MCP request, server hashes the bearer token, looks up `user_id`, updates `last_used_at`, scopes all queries to that user.
-5. Revocation: user clicks "Revoke" in Settings (`UPDATE mcp_tokens SET revoked_at = now()`).
+The flow is standard MCP authorization:
 
-**Read-only by design.** No `add_transaction` over MCP in v1. A leaked token (screenshot, GitHub commit) can read data; it cannot mutate it. Write tools may be added in Phase 2 with per-token scopes.
+1. A client (Claude.ai web, Claude Code, Claude Desktop) is pointed at the MCP URL. On an unauthenticated request the server returns `401` with a `WWW-Authenticate` header and serves OAuth Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp` — registered at the app root, not under the `/mcp` mount, so the advertised discovery URL resolves — pointing the client at the Supabase authorization server.
+2. The client registers itself via Dynamic Client Registration (enabled in the Supabase dashboard) and runs the OAuth 2.1 + PKCE authorization-code flow.
+3. The user authenticates and approves a consent screen, granting the client read access to their Tameru data.
+4. The client receives an access token (and refresh token) and presents the access token as `Authorization: Bearer <token>` on every MCP request.
+5. The MCP server validates the access token — a Supabase-signed JWT verified locally against the project JWKS, the same machinery as `app/auth.py` — and scopes all queries to the token's user.
+
+**Why OAuth and not static bearer tokens.** Claude.ai's *web* custom-connector UI supports only OAuth — it has no field for a static bearer token or custom header (Claude Code and Claude Desktop do support headers, but the design targets all three). The MCP authorization spec only *mandates* OAuth 2.1 for public third-party servers; a ~10-user server could spec-legally use static per-user bearer tokens. OAuth is adopted specifically so Claude.ai web works, and Supabase's OAuth 2.1 Server makes it a configuration task rather than a build-your-own-IdP task.
+
+**RLS enforcement.** A Supabase-OAuth access token is a standard Supabase user JWT — `aud` and `role` are `authenticated`, `sub` is the user id, with one extra `client_id` claim; per Supabase's OAuth 2.1 Server documentation it has "full access to user data, same as regular session tokens." It verifies through the same JWKS / ES256 path as a browser session JWT (`app/auth.py::verify_supabase_jwt`), and `supabase_for_user(token)` makes Postgres enforce RLS on `auth.uid()` exactly as for a PWA request. So the MCP server needs no service role and no manual `WHERE user_id` filter — CLAUDE.md invariant 1 is untouched. (Resolved during Day 23a, closing the open item the Day 23 plan flagged. A regular browser session JWT also authenticates to the MCP server — same user, same data, not a privilege gain.)
+
+**Read-only by design.** No `add_transaction` over MCP in v1. A leaked or over-scoped credential can read data; it cannot mutate it. Write tools may be added post-launch with explicit per-grant scopes.
+
+**Revocation.** The user revokes a client's access from **Settings → Connected apps**, which revokes the OAuth grant at the Supabase authorization server.
 
 ### 7.10 Eval Harness
 
@@ -774,7 +782,7 @@ Includes `zh-TW` and `ja-JP` rows so a Haiku model bump can't silently regress m
 
 ## 8. Data Models
 
-User-owned tables (`cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `mcp_tokens`, `users_meta`, `chat_messages`, `chat_turn_trace`) include `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. The audit tables `ai_call_log` and `ai_call_log_daily` differ — see §8.8 and §8.9.
+User-owned tables (`cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `users_meta`, `chat_messages`, `chat_turn_trace`) include `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. The audit tables `ai_call_log` and `ai_call_log_daily` differ — see §8.8 and §8.9.
 
 Every table has:
 
@@ -952,19 +960,11 @@ Both sites upsert as `(user_id, normalize_merchant(merchant), category, updated_
 | reinforced_at | timestamptz | Last mention; used for time decay |
 | created_at | timestamptz | |
 
-### 8.6 `mcp_tokens`
+### 8.6 MCP authorization — no dedicated table
 
-| Field | Type | Description |
-|---|---|---|
-| id | UUID | Primary key |
-| user_id | UUID | FK → auth.users |
-| token_hash | text | SHA-256 of plaintext token |
-| name | text | User-supplied label, e.g. "Claude.ai laptop" |
-| created_at | timestamptz | |
-| last_used_at | timestamptz | |
-| revoked_at | timestamptz | NULL = active |
+MCP server authentication is delegated to Supabase Auth's OAuth 2.1 Server (§7.9). Registered OAuth clients, authorization grants, and access/refresh tokens are stored and managed inside Supabase Auth; Tameru owns no MCP credential table.
 
-**Constraint:** `UNIQUE (token_hash)`.
+The earlier `mcp_tokens` design — per-user bearer tokens hashed at rest — was superseded when the auth model moved to OAuth 2.1 (the Claude.ai web connector accepts no static bearer token). The `20260421120600_mcp_tokens.sql` migration is obsolete; Day 23b ships a migration dropping the table.
 
 ### 8.7 `users_meta`
 
