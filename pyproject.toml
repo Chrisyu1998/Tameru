@@ -17,6 +17,8 @@ dependencies = [
   "sentry-sdk[fastapi]>=2.18",
   "python-multipart>=0.0.20",
   "mcp>=1.27",
+  "python-json-logger>=3.2",
+  "asgi-correlation-id>=4.3",
 ]
 
 [project.optional-dependencies]

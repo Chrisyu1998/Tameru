@@ -1,14 +1,19 @@
-"""Audit logger for every Gemini, Claude, and Perplexity call.
+"""Audit logger for every Gemini and Claude call.
 
 Writes one row to `ai_call_log` per API call. Uses the caller's JWT via
 `supabase_for_user` and the table's narrow INSERT policy (`WITH CHECK
 (user_id = auth.uid())`) — CLAUDE.md invariant 14. Never imports
-`supabase_admin`; `tests/test_no_service_role_leak.py` enforces that.
+`supabase_admin`; `tests/contracts/test_no_service_role_leak.py`
+enforces that.
 
 A failed audit INSERT surfaces as `AICallLogError`. We do not swallow it:
 an AI call that succeeded but whose log failed is worse than one that
 failed loudly, because cost accounting and regression detection (§8.8,
 §11) both silently drift otherwise.
+
+(Perplexity is no longer a provider — card lookup moved to Claude
+`web_search` in DESIGN.md §0; the enum value was dropped in the Day 24
+schema cleanup.)
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ def log_ai_call(
     user_jwt: str,
     *,
     user_id: UUID,
-    provider: Literal["anthropic", "google", "perplexity"],
+    provider: Literal["anthropic", "google"],
     model: str,
     task_type: str,
     prompt_version: str,

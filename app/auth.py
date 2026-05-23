@@ -33,9 +33,11 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import jwt
+import sentry_sdk
 from fastapi import Depends, HTTPException, Request, status
 from jwt import PyJWKClient
 
+from app.context import user_id_var
 from app.db import supabase_for_user
 
 _JWT_ALGORITHMS = ["ES256"]
@@ -54,12 +56,27 @@ class AuthedUser:
 
 
 def get_current_user_jwt(request: Request) -> AuthedUser:
-    """Provide get current user jwt."""
+    """Verify the Bearer JWT and stamp the request-scoped user_id.
+
+    Setting `user_id_var` here is what lets every downstream log record
+    (and every Sentry event) for this request carry the authenticated
+    `user_id` without threading the value through call sites (DESIGN.md
+    §14.5, CLAUDE.md invariant 15). The contextvar is cleared by the
+    per-request middleware in `app.main` on response so a background
+    task does not inherit a stale value.
+    """
     header = request.headers.get("authorization") or request.headers.get("Authorization")
     if not header or not header.lower().startswith("bearer "):
         raise _unauthorized("missing bearer token")
     token = header.split(" ", 1)[1].strip()
-    return verify_supabase_jwt(token)
+    user = verify_supabase_jwt(token)
+    user_id_str = str(user.user_id)
+    user_id_var.set(user_id_str)
+    # Sentry's per-request scope picks this up; no-op when SENTRY_DSN is
+    # unset (dev). Deliberately id-only — no email, IP, or transaction
+    # data per CLAUDE.md "Privacy posture".
+    sentry_sdk.set_user({"id": user_id_str})
+    return user
 
 
 def get_current_user_with_device(

@@ -2,13 +2,16 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.auth import AuthedUser, get_current_user_jwt
 from app.db import supabase_for_user
+from app.logging_config import configure_logging
 from app.mcp_server import mcp_app, mcp_server, mcp_well_known_routes
+from app.routes import admin as admin_routes
 from app.routes import auth as auth_routes
 from app.routes import cards as cards_routes
 from app.routes import chat as chat_routes
@@ -18,6 +21,7 @@ from app.routes import imports as imports_routes
 from app.routes import memory as memory_routes
 from app.routes import subscriptions as subscriptions_routes
 from app.routes import transactions as transactions_routes
+from app.sentry_filters import init_sentry
 
 # Environment variables every authenticated request path depends on. A
 # process can boot without them and still answer /healthz, then 500 on the
@@ -62,12 +66,23 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # name when neither is set.
     if not (os.environ.get("GEMINI_MODEL") or os.environ.get("GEMINI_MODEL_DEFAULT")):
         missing.append("GEMINI_MODEL_DEFAULT")
+    # SENTRY_DSN is required in production; absent in dev means the SDK
+    # is a no-op (DESIGN.md §14.5). Missing prod DSN = no error capture,
+    # which is worse than a noisy boot crash that demands a fix.
+    if os.environ.get("APP_ENV", "").lower() == "production" and not os.environ.get("SENTRY_DSN"):
+        missing.append("SENTRY_DSN")
     if missing:
         raise RuntimeError(
             "Tameru refusing to start — missing required environment "
             "variable(s): " + ", ".join(sorted(missing)) + ". Set them in "
             "Railway's env UI (see .env.example)."
         )
+    # Observability foundation (DESIGN.md §14.5). Must run before any
+    # other startup work so subsequent boot logs already pass through
+    # the JSON formatter + redaction filter; Sentry init is idempotent
+    # and no-ops when SENTRY_DSN is unset (dev).
+    configure_logging()
+    init_sentry()
     # The read-only MCP server (app/mcp_server.py) is mounted at /mcp; its
     # Streamable HTTP transport needs the session manager running for the
     # lifetime of the process.
@@ -138,11 +153,20 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ALLOWED_ORIGINS,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "X-Device-Id", "Content-Type"],
+    allow_headers=["Authorization", "X-Device-Id", "Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
     # Bearer tokens in the Authorization header — never cookies. Keeping
     # credentials off sidesteps SameSite / third-party-cookie complexity.
     allow_credentials=False,
 )
+
+# CorrelationIdMiddleware mounts AFTER CORSMiddleware in the source but
+# runs as the OUTERMOST middleware at request time — Starlette's
+# middleware stack is built LIFO. Honors `X-Request-ID` from Railway's
+# edge if present; mints a fresh UUIDv4 otherwise; echoes the id back in
+# the response header so the frontend can correlate failures with stdout
+# / Sentry. DESIGN.md §14.5.
+app.add_middleware(CorrelationIdMiddleware)
 
 
 @app.exception_handler(Exception)
@@ -193,6 +217,7 @@ app.include_router(memory_routes.router)
 app.include_router(goals_routes.router)
 app.include_router(subscriptions_routes.router)
 app.include_router(imports_routes.router)
+app.include_router(admin_routes.router)
 
 # The read-only MCP server (app/mcp_server.py) — a self-contained ASGI app
 # with its own Streamable HTTP transport. Mounted at /mcp; its session

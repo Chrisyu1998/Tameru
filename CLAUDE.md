@@ -62,6 +62,8 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 
 14. **`ai_call_log` writes from request handlers use the user's JWT and a narrow INSERT policy.** Not the service role. The INSERT policy is `WITH CHECK (user_id = auth.uid())`; there are no UPDATE or DELETE policies, so a compromised JWT cannot scrub audit history (it can only forge rows on its own account, which deceives no one). Service-role writes to `ai_call_log` are reserved for system-level callers with no user JWT in scope — the `pg_cron` rollup and future digest jobs. Do not introduce a service-role `ai_call_log` write path inside a request handler, even if it feels simpler.
 
+15. **Observability is three surfaces, each with one job — don't conflate them.** (DESIGN.md §14.5.) (a) `ai_call_log` is the cost/audit/regression record for AI provider calls, written under the user's JWT (invariant 14). (b) Application logs go to stdout via Python `logging` with a JSON formatter, every record carrying a `correlation_id` (per-request UUID, threaded by `asgi-correlation-id`) and a `user_id` (from a contextvar set in `get_current_user_jwt`); a `PiiRedactionFilter` rewrites forbidden values to `<redacted:reason>` *before* the line is emitted. (c) Sentry catches unhandled exceptions tagged with the same `correlation_id` + `user_id`; `before_send` drops `HTTPException` 4xx and drops events from `app.integrations.{gemini,card_lookup}` / `app.agent.{loop,memory}` *except* `AICallLogError` — the audit-pipeline canary must stay visible. Do not route AI provider failures to Sentry (`ai_call_log` already records them) and do not log request/response bodies. No separate logging vendor (Datadog, Logtail, etc.) at v1 scale — Railway stdout + Sentry is the supported stack.
+
 ## Model usage by task
 
 | Task | Provider/model | Notes |
@@ -79,8 +81,9 @@ Model strings are read from environment variables, not hardcoded — change a mo
 - Anthropic: Zero Data Retention requested for the org. Default 30-day T&S retention drops to 0 with ZDR. Not used for training. Covers both the chat agent and the card-lookup `web_search` path; only the public card name + last 4 are sent on the lookup, no transaction data.
 - Gemini: paid tier only — no training use. Free tier is forbidden.
 - PostHog: structural product events only. **Never** send transaction amounts, merchant names, card details, or chat question text. There is no client-side question classifier — that idea was rejected for being a privacy surface that didn't earn its keep.
+- Application logs (stdout → Railway): same redaction rule as PostHog. A `PiiRedactionFilter` on the root logger replaces values matching the redaction set (transaction amounts, merchant text, chat message text, email, phone, full card numbers, JWTs, the service-role key) with `<redacted:reason>` before any record reaches stdout. Sentry's `before_send` runs the same filter. See DESIGN.md §14.5.
 
-If you find yourself adding any field to a PostHog event that contains user-generated text or numeric financial data, stop.
+If you find yourself adding any field to a PostHog event — or to a log line, or to a Sentry `extra` — that contains user-generated text or numeric financial data, stop.
 
 ## What is in scope and what is not
 
