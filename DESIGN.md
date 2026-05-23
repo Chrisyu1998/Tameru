@@ -438,16 +438,36 @@ Every dashboard metric is shown relative to the user's own personal baseline.
 
 The primary delivery mechanism for spending insight. Reaches users who don't open the app.
 
-**Delivery:** Email via Resend, every Monday morning.
+**Delivery:** Email via Resend, sent **Monday 09:00 ET (14:00 UTC)** by a Railway scheduled service running `python -m app.cron.digest` against cron `0 14 * * 1`. Per-user timezone is Phase 2; v1 hardcodes ET because the v1 user base is invite-only friends/family centered in the Americas. From `"Tameru" <hello@mail.tameru.app>`; Reply-To `hello@mail.tameru.app` (aliased to a real inbox — users hitting reply must reach a human).
 
-**Content (≤5 lines):**
+**Content (≤5 content blocks; one block = one sentence or one data line):**
 
-- Total spend last week vs. weekly average.
-- Top category and whether above or below baseline.
-- One AI-generated observation.
-- One nudge if applicable (rewards or category-related).
+- Total spend last week vs. trailing 8-week average (the just-ended week excluded from the baseline so the comparison isn't self-referential).
+- Top category by sum and whether above or below its own 8-week baseline.
+- One AI-generated observation (Sonnet, ≤100 chars, matter-of-fact).
+- One nudge if applicable (rewards or category-related, ≤100 chars, optional — Sonnet may return `null`).
 
-If it takes more than 15 seconds to read, it's too long.
+If it takes more than 15 seconds to read, it's too long. Brevity is the feature.
+
+**AI provider boundary:** Claude Sonnet 4.6 receives **aggregates only** — category totals, week-over-week deltas. Never merchant names or raw transaction rows. Anthropic has ZDR, but minimum-surface is the privacy posture (CLAUDE.md). The Sonnet call is logged to `ai_call_log` with `task_type='digest'` per CLAUDE.md invariant 14 (service-role write since the cron has no user JWT in scope).
+
+**Eligibility:** an active user is one with (a) a confirmed email, (b) not soft-deleted, (c) `users_meta.weekly_digest_enabled = true`, and (d) at least one `active` transaction in the past 4 weeks (zombie-send filter — silent users at v1 scale are usually inactive accounts, not waiting for nudges). All four predicates live in one SQL query, not a Python loop.
+
+**Idempotency:** every successful send writes an `email_log` row keyed on `(user_id, kind, date_trunc('week', sent_at)) WHERE success` (partial unique index — §8.14). A re-run on the same Monday (manual rerun, Railway worker recycle, transient failure retry) is a zero-send no-op. The plpgsql RPC pattern from memory.md 2026-05-19 (PostgREST can't infer partial-index `on_conflict`) is reused for the `INSERT … ON CONFLICT DO NOTHING` write.
+
+**Opt-out — three paths, one boolean:**
+
+1. **Settings toggle** — Settings → Notifications "Weekly digest email"; PATCH `/me/preferences` flips `users_meta.weekly_digest_enabled` under the user's JWT (owner-UPDATE RLS).
+2. **One-click List-Unsubscribe** per RFC 8058 — every email carries `List-Unsubscribe: <https-url>, <mailto>` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. The URL is an HMAC-tokenized `GET /unsubscribe?user=…&kind=digest&token=…` (signed with `DIGEST_UNSUBSCRIBE_SECRET`, no expiry — a year-old link still works) that flips the same boolean via service role, no login required. Also a **visible** Unsubscribe link in the email body (defense in depth — header alone is insufficient; that's what users actually find). Gmail's ≥5K/day threshold for *required* one-click doesn't apply at v1 scale, but ship it anyway — inbox placement benefits and retrofit-after-reputation-damage is much harder than ship-it-now.
+3. **Resend webhook** — `POST /webhooks/resend` (Svix-signed against `RESEND_WEBHOOK_SECRET`). `email.bounced` with `bounce.type='hard'` or any `email.complained` flips `weekly_digest_enabled=false` for the affected user (looked up by `provider_message_id` on `email_log`) and records `bounce_type` on the matching row. Soft bounces and `email.delivery_delayed` are not surfaced — Resend retries internally.
+
+All three paths converge on the same `weekly_digest_enabled` boolean which the cron predicate reads — the toggle is the single authoritative gate.
+
+**Deliverability prerequisites (one-time ops, not code):** Tameru must own the sending domain (`tameru.app` — to be acquired) and configure SPF + DKIM + DMARC records at the registrar per Resend's setup. Send from the **subdomain** `mail.tameru.app` so a deliverability incident on the digest doesn't contaminate the root. Start DMARC at `p=none`; move to `p=quarantine` after one month of clean reports. Resend's open and click tracking are **disabled** in project settings — open-pixel exfiltrates recipient IP to a third party on every email open; click tracking rewrites every link through `resend.com`. Both violate the privacy posture.
+
+**Email shape:** both HTML (inline styles only — Gmail strips `<style>` blocks and class names) and plaintext, generated together. Plaintext is required for deliverability; spam filters score HTML/text similarity.
+
+**Cost:** ~$0.07/user/month for the Sonnet call × 4 sends/month (§11). At v1's ~10 users this is ~$0.70/month total.
 
 ### 6.5 Subscription Manager
 
@@ -975,6 +995,7 @@ The earlier `mcp_tokens` design — per-user bearer tokens hashed at rest — wa
 | user_id | UUID | PK / FK → auth.users |
 | active_device_id | text | Most recently signed-in device |
 | analytics_opted_out | boolean | Default false |
+| weekly_digest_enabled | boolean | Default true. The single authoritative gate for the §6.4 weekly digest. Flipped by three paths: Settings toggle (user JWT, owner-UPDATE RLS), one-click List-Unsubscribe (service role via HMAC-token route), and Resend bounce/complaint webhook (service role). |
 | home_currency | text | User's single home currency. CHECK constraint on the allowed set (`USD`, `EUR`, `GBP`, `CAD`, `AUD`, `JPY`, `CHF`, `SGD`, `TWD`). Default `USD`. **Immutable** — enforced by a BEFORE UPDATE trigger, not a CHECK, because a CHECK cannot compare OLD to NEW. See CLAUDE.md invariant 13. |
 | created_at | timestamptz | |
 
@@ -1136,6 +1157,34 @@ Per-user spending budgets. One row per `(user, category, period)` slot. Written 
 
 The `/goals` page (`frontend/src/pages/goals.tsx`, peer to `/cards`, `/subscriptions`, `/memory`) is the management surface — `SwipeableRow`-based list with a 5s pending-delete undo, `EditGoalSheet` `BottomSheet` for amount/period edits. The `/breakdown` page renders a "this month vs your budgets" progress strip below the donut, gated on having month-scoped goals — categories without a goal show nothing, which keeps the dashboard one-screen invariant (#9) intact while still surfacing budget context where it matters. Goal *creation* stays in chat via `set_goal`, preserving invariant #8's "chat is the only user-initiated create surface" rule at the tool layer.
 
+### 8.14 `email_log`
+
+Per-send record for the §6.4 weekly digest (and any future scheduled email type — welcome sequence, etc.). Written by `app/cron/digest.py` after every Resend call attempt; updated by `app/routes/webhooks_resend.py` on bounce/complaint events.
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Primary key |
+| user_id | UUID | `NOT NULL`; `REFERENCES auth.users(id) ON DELETE CASCADE` |
+| kind | text | `CHECK (kind IN ('digest'))` — extend the CHECK in a one-line migration when welcome sequence ships |
+| sent_at | timestamptz | Default `now()` |
+| success | boolean | `NOT NULL`. False on Resend SDK error; true on accepted-for-delivery |
+| provider_message_id | text | Nullable on send failure. Resend's `id` field; the webhook lookup key |
+| error_code | text | Nullable; populated when `success=false` |
+| bounce_type | text | Nullable; one of `('hard', 'soft', 'complaint')`. Set later by the Resend webhook on bounce/complaint events |
+
+**Indexes:**
+
+- `email_log_weekly_dedup UNIQUE ON (user_id, kind, date_trunc('week', sent_at)) WHERE success` — the load-bearing idempotency primitive. Re-running the cron the same Monday is a zero-send no-op because the `INSERT … ON CONFLICT DO NOTHING` refuses the duplicate. Partial index (only successful sends count) is deliberate: a transient Resend 5xx must not lock the user out of receiving the digest for the rest of the week.
+- `email_log_provider_message_id ON (provider_message_id) WHERE provider_message_id IS NOT NULL` — webhook lookup.
+
+**RLS shape:** `ENABLE ROW LEVEL SECURITY` with **no policies** — the table is reachable only via the service role. Same posture as `stripe_events` (§8.10). No user-facing reads in v1; a future "show me my email history" Settings panel would add a narrow owner-SELECT policy then.
+
+**Idempotency-write workaround:** PostgREST's `.upsert(on_conflict=...)` cannot pass the partial-index `WHERE success` predicate (memory.md 2026-05-19 — same 42P10 failure that bit the Day 20 CSV import). The cron writes via a SECURITY INVOKER plpgsql RPC `email_log_insert_idempotent(p_row jsonb)` that emits the matching WHERE so Postgres can use the partial index.
+
+### 8.15 *(future — placeholder)*
+
+When the §16 welcome email sequence ships, extend `email_log.kind` CHECK with `'welcome_d0'`, `'welcome_d1'`, `'welcome_d7'`. No schema change beyond the CHECK; the unique-week idempotency rule still holds (a user can receive at most one of each kind per week, which is correct for the welcome sequence too — they should get the day-0 welcome exactly once).
+
 ---
 
 ## 9. Security & Privacy
@@ -1150,18 +1199,20 @@ The FastAPI backend receives `Authorization: Bearer <user_jwt>` from the fronten
 
 **JWT verification:** the backend verifies each incoming JWT locally against the project's asymmetric JWKS at `${SUPABASE_URL}/auth/v1/.well-known/jwks.json` (Supabase issues ES256 tokens signed by rotating EC P-256 keys). `algorithms` is pinned to `["ES256"]` — accepting `RS256` in addition would widen the algorithm-confusion attack surface for zero benefit. `audience` is required to be `"authenticated"` and `issuer` is required to match `${SUPABASE_URL}/auth/v1`, so a token minted by a different Supabase project cannot authenticate. The JWKS is cached in-process and refreshed on a `kid` miss — verification is zero network round trips on the hot path. The shared `SUPABASE_JWT_SECRET` (HS256, legacy) is not used and is deliberately absent from `.env.example`.
 
-The **service role key** is reserved for exactly two callers:
+The **service role key** is reserved for callers with no user JWT in scope:
 
 1. The `pg_cron` daily auto-logger (runs as DB function, no application context).
 2. Schema migrations (run via Supabase CLI from CI).
+3. The weekly digest cron job (`app/cron/digest.py`, §6.4) and any future scheduled email job that iterates users — by definition the cron has no user JWT for the recipient.
+4. The Resend bounce/complaint webhook (`app/routes/webhooks_resend.py`, §6.4) — the request is from Resend, not a logged-in user, so no JWT is in scope.
 
-Application-handler code never uses the service role. This is enforced by code review and by a CI lint that flags imports of `SUPABASE_SERVICE_ROLE_KEY` outside the migrations and cron directories.
+Application **request handlers triggered by a user** never use the service role. This is enforced by code review and by `tests/contracts/test_no_service_role_leak.py` — a directory rule excludes `app/cron/` and `app/scripts/` plus a per-file allowlist (with rationale comments) for the webhook above. Widening either requires the same rationale-comment discipline as `ALLOWED_DIRECT_WRITE_TOOLS`.
 
 **Single active device:** `users_meta.active_device_id` is set on each successful sign-in. If a different device signs in, the previous device's session is revoked (user sees: "You signed in on iPhone — this session has ended"). Eliminates multi-device offline sync conflicts.
 
 ### 9.2 API Key Management
 
-- `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `SENTRY_DSN` — Railway environment variables only. (Perplexity is no longer used as of §0 — card lookup is on the Anthropic key.)
+- `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` (Svix signing secret for the §6.4 bounce/complaint webhook), `DIGEST_UNSUBSCRIBE_SECRET` (HMAC key for one-click unsubscribe tokens; 32 random bytes, base64), `SENTRY_DSN` — Railway environment variables only. (Perplexity is no longer used as of §0 — card lookup is on the Anthropic key.)
 - `.env` in `.gitignore` from day one.
 - Pre-publish git history audit (gitleaks) before making the repo public; rotate any leaked keys.
 - All keys server-side. Never returned in API responses or exposed to the frontend.
