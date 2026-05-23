@@ -40,8 +40,15 @@ logger = logging.getLogger(__name__)
 _AI_INTEGRATION_MODULE_PREFIXES = (
     "app.integrations.gemini",
     "app.integrations.card_lookup",
+    "app.integrations.resend",
     "app.agent.loop",
     "app.agent.memory",
+    # Day 25: digest failures land in email_log + ai_call_log; Sentry
+    # shouldn't double-log Sonnet 5xx or Resend SDK errors from the
+    # cron path. AICallLogError still bypasses rule 2 so the audit
+    # canary stays visible.
+    "app.services.digest",
+    "app.cron.digest",
 )
 
 # The one exception class that *bypasses* rule 2. Named by string so we

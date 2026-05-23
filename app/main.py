@@ -19,8 +19,11 @@ from app.routes import dashboard as dashboard_routes
 from app.routes import goals as goals_routes
 from app.routes import imports as imports_routes
 from app.routes import memory as memory_routes
+from app.routes import preferences as preferences_routes
 from app.routes import subscriptions as subscriptions_routes
 from app.routes import transactions as transactions_routes
+from app.routes import unsubscribe as unsubscribe_routes
+from app.routes import webhooks_resend as webhooks_resend_routes
 from app.sentry_filters import init_sentry
 
 # Environment variables every authenticated request path depends on. A
@@ -39,6 +42,30 @@ _REQUIRED_ENV_VARS = (
     # it would not 500 a request — it would silently mis-advertise the
     # OAuth protected-resource metadata, so fail fast at boot instead.
     "MCP_RESOURCE_SERVER_URL",
+    # Day 25 (DESIGN.md §6.4). The one-click unsubscribe route and the
+    # Resend bounce webhook both run inside the request-serving process;
+    # without these secrets they 500 on the first hit. RESEND_API_KEY is
+    # deliberately NOT required here — it's only used by the cron at
+    # `python -m app.cron.digest`, which loads its own env.
+    "DIGEST_UNSUBSCRIBE_SECRET",
+    "RESEND_WEBHOOK_SECRET",
+    # The unsubscribe and Resend-webhook routes call supabase_admin()
+    # (per-file allowlist on the service-role leak test — CLAUDE.md
+    # invariant 1 admits both as sanctioned callers since their inbound
+    # requests carry no user JWT). Without this, every valid unsubscribe
+    # click and every bounce webhook 500s after Svix/HMAC verification —
+    # a deployment satisfying every other invariant would still serve
+    # broken opt-outs. Codex 2026-05-23.
+    "SUPABASE_SERVICE_ROLE_KEY",
+    # Public URL of this backend (e.g. https://tameru-production.up.railway.app).
+    # The digest cron embeds it in every email's List-Unsubscribe URL,
+    # and the request-serving process needs it for any future feature
+    # that links back to itself in an outbound message. Distinct from
+    # FRONTEND_ORIGIN (the Vercel PWA host) because /unsubscribe is a
+    # FastAPI route, not an SPA route — the Vercel catch-all would
+    # otherwise serve index.html and Gmail one-click POSTs would never
+    # land on the suppression handler.
+    "BACKEND_PUBLIC_URL",
 )
 
 
@@ -218,6 +245,9 @@ app.include_router(goals_routes.router)
 app.include_router(subscriptions_routes.router)
 app.include_router(imports_routes.router)
 app.include_router(admin_routes.router)
+app.include_router(preferences_routes.router)
+app.include_router(unsubscribe_routes.router)
+app.include_router(webhooks_resend_routes.router)
 
 # The read-only MCP server (app/mcp_server.py) — a self-contained ASGI app
 # with its own Streamable HTTP transport. Mounted at /mcp; its session

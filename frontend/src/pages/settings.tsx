@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Bell,
@@ -12,6 +12,10 @@ import {
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
+import {
+  readPreferences,
+  updatePreferences,
+} from "@/lib/preferencesApi";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -293,9 +297,63 @@ function ExportPanel() {
 }
 
 function NotificationsPanel() {
+  // Server-backed (Day 25, DESIGN.md §6.4). Optimistic UI: flip locally,
+  // then PATCH and reconcile against the server's returned canonical
+  // value. The /unsubscribe route and the Resend bounce webhook also
+  // flip this same boolean, so a fresh mount re-reads the server state
+  // in case it changed since this tab was last open.
   const [weekly, setWeekly] = useState(true);
+  const [savingWeekly, setSavingWeekly] = useState(false);
   const [overspend, setOverspend] = useState(true);
   const [quiet, setQuiet] = useState(false);
+
+  // Monotonic request sequence. Each PATCH increments it; only the
+  // response whose sequence matches the latest in-flight value is
+  // allowed to mutate `weekly`. Without this guard, rapid toggling
+  // could let an older PATCH's response land after a newer one's and
+  // leave the UI (and the server, if the older PATCH wins the race on
+  // its side too) showing the stale value. Codex 2026-05-23 P2.
+  const latestRequest = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    readPreferences()
+      .then((prefs) => {
+        if (!cancelled) setWeekly(prefs.weekly_digest_enabled);
+      })
+      .catch(() => {
+        // Network failure: keep the optimistic default; the user can
+        // still toggle, and the next PATCH will reconcile.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleWeeklyChange = (next: boolean) => {
+    // Defense in depth: ToggleRow's `disabled` prop already blocks
+    // clicks while saving. This guard catches any path that bypasses
+    // the prop (programmatic call, future caller).
+    if (savingWeekly) return;
+    setWeekly(next);
+    setSavingWeekly(true);
+    const myRequest = ++latestRequest.current;
+    updatePreferences({ weekly_digest_enabled: next })
+      .then((prefs) => {
+        if (myRequest !== latestRequest.current) return;
+        setWeekly(prefs.weekly_digest_enabled);
+      })
+      .catch(() => {
+        if (myRequest !== latestRequest.current) return;
+        // Revert the latest user choice on failure so the UI doesn't
+        // lie about persisted state.
+        setWeekly(!next);
+      })
+      .finally(() => {
+        if (myRequest !== latestRequest.current) return;
+        setSavingWeekly(false);
+      });
+  };
 
   return (
     <div>
@@ -305,10 +363,11 @@ function NotificationsPanel() {
       />
       <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <ToggleRow
-          label="weekly summary"
-          desc="a quiet recap every sunday morning."
+          label="weekly digest email"
+          desc="a quiet recap every monday morning. unsubscribe link in every send."
           checked={weekly}
-          onChange={setWeekly}
+          onChange={handleWeeklyChange}
+          disabled={savingWeekly}
         />
         <ToggleRow
           label="overspend nudge"
@@ -332,11 +391,13 @@ function ToggleRow({
   desc,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   desc: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 py-3.5">
@@ -348,10 +409,16 @@ function ToggleRow({
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-disabled={disabled}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
           "relative h-6 w-10 flex-shrink-0 rounded-full transition-colors",
-          checked ? "bg-moss" : "bg-sunken"
+          checked ? "bg-moss" : "bg-sunken",
+          // Disabled-while-saving treatment: dim + not-allowed cursor.
+          // Defense-in-depth alongside the `disabled` attribute, which
+          // already blocks pointer events.
+          disabled && "opacity-50 cursor-not-allowed"
         )}
       >
         <span

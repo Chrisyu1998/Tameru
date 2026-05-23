@@ -453,7 +453,13 @@ If it takes more than 15 seconds to read, it's too long. Brevity is the feature.
 
 **Eligibility:** an active user is one with (a) a confirmed email, (b) not soft-deleted, (c) `users_meta.weekly_digest_enabled = true`, and (d) at least one `active` transaction in the past 4 weeks (zombie-send filter — silent users at v1 scale are usually inactive accounts, not waiting for nudges). All four predicates live in one SQL query, not a Python loop.
 
-**Idempotency:** every successful send writes an `email_log` row keyed on `(user_id, kind, date_trunc('week', sent_at)) WHERE success` (partial unique index — §8.14). A re-run on the same Monday (manual rerun, Railway worker recycle, transient failure retry) is a zero-send no-op. The plpgsql RPC pattern from memory.md 2026-05-19 (PostgREST can't infer partial-index `on_conflict`) is reused for the `INSERT … ON CONFLICT DO NOTHING` write.
+**Idempotency — two layers:**
+
+*Layer 1 — reserve-then-send (DB).* The cron writes an `email_log` row with `success=true` BEFORE calling Resend (via the `email_log_insert_idempotent` RPC against the partial unique index on `(user_id, kind, date_trunc('week', sent_at AT TIME ZONE 'UTC')) WHERE success`). If the insert conflicts, the slot is already taken — skip without composing or sending. If the insert succeeds, send; on Resend rejection flip the reserved row's `success=false` to release the slot for a same-week retry; on success stamp `provider_message_id` so the webhook can look it up. **Failures AFTER Resend accepts the message must NOT release the slot** — releasing would let the next cron run re-send a message the recipient already has. Reserving before sending is what closes the cross-process race; the post-send-no-release rule closes the same-process post-send-failure race.
+
+*Layer 2 — `Idempotency-Key` header (provider).* Every `POST /emails` to Resend carries a `digest:{user_id}:{week_start_date}` value in the `Idempotency-Key` header. Resend dedupes by this key for ~24h on their side: if the SDK's underlying `urllib3` retries the POST after a transient TCP error (we don't control its retry policy, and it doesn't coordinate with our DB lock), Resend returns the cached response instead of creating a second send. Closes the in-flight-retry vector the partial unique index can't see.
+
+The tradeoff between the two layers is the false-negative window: a worker crash between reserve and send (Layer 1) means the user gets no digest this week — a documented bounded loss at v1 scale, preferable to duplicates that would generate spam complaints. A stale-reservation reaper is the path if this ever happens in practice.
 
 **Opt-out — three paths, one boolean:**
 
@@ -1174,12 +1180,14 @@ Per-send record for the §6.4 weekly digest (and any future scheduled email type
 
 **Indexes:**
 
-- `email_log_weekly_dedup UNIQUE ON (user_id, kind, date_trunc('week', sent_at)) WHERE success` — the load-bearing idempotency primitive. Re-running the cron the same Monday is a zero-send no-op because the `INSERT … ON CONFLICT DO NOTHING` refuses the duplicate. Partial index (only successful sends count) is deliberate: a transient Resend 5xx must not lock the user out of receiving the digest for the rest of the week.
+- `email_log_weekly_dedup UNIQUE ON (user_id, kind, date_trunc('week', sent_at AT TIME ZONE 'UTC')) WHERE success` — the load-bearing idempotency primitive. The `AT TIME ZONE 'UTC'` cast invokes the unambiguously-IMMUTABLE `date_trunc(text, timestamp)` overload (Postgres rejects STABLE expressions in index definitions; the 2-arg `date_trunc(text, timestamptz)` is STABLE and the 3-arg form's volatility varies by Postgres build). Re-running the cron the same Monday is a zero-send no-op because the `INSERT … ON CONFLICT DO NOTHING` refuses the duplicate. Partial index (only successful sends count) is deliberate: a transient Resend 5xx must not lock the user out of receiving the digest for the rest of the week.
 - `email_log_provider_message_id ON (provider_message_id) WHERE provider_message_id IS NOT NULL` — webhook lookup.
 
 **RLS shape:** `ENABLE ROW LEVEL SECURITY` with **no policies** — the table is reachable only via the service role. Same posture as `stripe_events` (§8.10). No user-facing reads in v1; a future "show me my email history" Settings panel would add a narrow owner-SELECT policy then.
 
-**Idempotency-write workaround:** PostgREST's `.upsert(on_conflict=...)` cannot pass the partial-index `WHERE success` predicate (memory.md 2026-05-19 — same 42P10 failure that bit the Day 20 CSV import). The cron writes via a SECURITY INVOKER plpgsql RPC `email_log_insert_idempotent(p_row jsonb)` that emits the matching WHERE so Postgres can use the partial index.
+**Idempotency-write workaround:** PostgREST's `.upsert(on_conflict=...)` cannot pass the partial-index `WHERE success` predicate (memory.md 2026-05-19 — same 42P10 failure that bit the Day 20 CSV import). The cron writes via a SECURITY DEFINER plpgsql RPC `email_log_insert_idempotent(p_user_id, p_kind, p_success, p_provider_message_id, p_error_code)` that emits the matching WHERE so Postgres can use the partial index. The function REVOKEs EXECUTE from PUBLIC/anon/authenticated and GRANTs only to service_role (memory.md 2026-05-18 privilege rule) so the DEFINER bypass cannot be invoked by a regular JWT.
+
+**Reserve-then-send usage:** the cron calls this RPC with `p_success=true` and `p_provider_message_id=NULL` BEFORE invoking Resend. Empty SETOF return means the partial unique conflict fired (week slot taken — skip user). One-row return is the freshly-inserted reservation; the cron then sends and either UPDATEs `provider_message_id` on success or flips `success=false` on failure to release the slot for a same-week retry. This ordering is the actual duplicate-send guard — see §6.4 idempotency paragraph for why the alternative (log after send) leaves a real race.
 
 ### 8.15 *(future — placeholder)*
 
@@ -1212,7 +1220,7 @@ Application **request handlers triggered by a user** never use the service role.
 
 ### 9.2 API Key Management
 
-- `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` (Svix signing secret for the §6.4 bounce/complaint webhook), `DIGEST_UNSUBSCRIBE_SECRET` (HMAC key for one-click unsubscribe tokens; 32 random bytes, base64), `SENTRY_DSN` — Railway environment variables only. (Perplexity is no longer used as of §0 — card lookup is on the Anthropic key.)
+- `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (now also required by the request-serving process — the §6.4 `/unsubscribe` and `/webhooks/resend` routes call `supabase_admin` per invariant 1's third/fourth sanctioned-caller carve-outs), `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` (Svix signing secret for the §6.4 bounce/complaint webhook), `DIGEST_UNSUBSCRIBE_SECRET` (HMAC key for one-click unsubscribe tokens; 32 random bytes, base64), `BACKEND_PUBLIC_URL` (public hostname of the Railway backend; distinct from `FRONTEND_ORIGIN` because §6.4's `/unsubscribe` is a FastAPI route, not an SPA route — Vercel's catch-all rewrite would otherwise serve `index.html` and Gmail's one-click POST would never land on the suppression handler), `ANTHROPIC_DIGEST_MODEL` (optional override for the §6.4 Sonnet narrative model; defaults to `claude-sonnet-4-6`. Kept distinct from `ANTHROPIC_MODEL` so a chat-agent downgrade to Haiku doesn't drag the digest down with it), `SENTRY_DSN` — Railway environment variables only. (Perplexity is no longer used as of §0 — card lookup is on the Anthropic key.)
 - `.env` in `.gitignore` from day one.
 - Pre-publish git history audit (gitleaks) before making the repo public; rotate any leaked keys.
 - All keys server-side. Never returned in API responses or exposed to the frontend.
