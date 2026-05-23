@@ -55,15 +55,29 @@ class AuthedUser:
     email: str
 
 
-def get_current_user_jwt(request: Request) -> AuthedUser:
+async def get_current_user_jwt(request: Request) -> AuthedUser:
     """Verify the Bearer JWT and stamp the request-scoped user_id.
 
     Setting `user_id_var` here is what lets every downstream log record
     (and every Sentry event) for this request carry the authenticated
     `user_id` without threading the value through call sites (DESIGN.md
-    §14.5, CLAUDE.md invariant 15). The contextvar is cleared by the
-    per-request middleware in `app.main` on response so a background
-    task does not inherit a stale value.
+    §14.5, CLAUDE.md invariant 15). Python's per-task ContextVar
+    scoping clears the value naturally when the request task ends, so
+    no per-response middleware is needed.
+
+    Async (not sync) so the contextvar set here propagates to sync
+    downstream code. FastAPI schedules sync dependencies via
+    `run_in_threadpool`, and a ContextVar.set inside a threadpool
+    modifies only the thread's local context copy — it never reaches
+    the main asyncio task. The route handler (also scheduled via
+    threadpool for sync routes) would then start with a fresh context
+    copy from the main task, where user_id_var is still None — so
+    uvicorn.access lines and any in-handler httpx calls would log
+    `user_id: null` even on authenticated requests. By making this dep
+    async, the set hits the main task's context, which is what gets
+    copied INTO every downstream threadpool dispatch. JWT verification
+    is fast enough (PyJWKClient caches keys in-process) that running
+    it inline on the event loop is fine.
     """
     header = request.headers.get("authorization") or request.headers.get("Authorization")
     if not header or not header.lower().startswith("bearer "):
