@@ -209,7 +209,13 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      # Source-upload deploy: CI uploads the frontend source tree and
+      # Source-upload deploy: CI uploads the source tree from the REPO
+      # ROOT (note the working-directory override below), and Vercel
+      # appends its project-side `Root Directory = frontend` setting,
+      # landing on the right path. Running from `frontend/` here would
+      # double the prefix (`frontend/frontend`) because Vercel always
+      # joins its own Root Directory onto whatever you upload.
+      #
       # Vercel runs `npm install` + `vite build` on their servers, where
       # project env vars (VITE_SUPABASE_URL, etc.) are in scope natively
       # at build time. The earlier `--prebuilt` flow ran `vercel build`
@@ -219,4 +225,5 @@ jobs:
       # server-side eliminates both. CI still gates the deploy via the
       # `needs:` chain above — tests must pass before this step runs.
       - name: Deploy to Vercel (Vercel builds server-side)
+        working-directory: .
         run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
