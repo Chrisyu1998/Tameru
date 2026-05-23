@@ -1,36 +1,35 @@
 """Admin observability surface — Day 24 (DESIGN.md §14, §14.5).
 
-Read-only summary of recent AI token usage, gated to the env-configured
-allowlist `ADMIN_USER_IDS`. v1 ships exactly one admin endpoint and no
-admin UI — a Supabase dashboard SQL query is the second-line debugging
-path for anything this doesn't cover.
+Read-only summary of recent AI token usage, gated to membership in the
+`admins` table (migration `20260522130300_ai_call_log_admin_select.sql`).
+v1 ships exactly one admin endpoint and no admin UI — a Supabase
+dashboard SQL query is the second-line debugging path for anything
+this doesn't cover.
 
-Gating choice: an env-var allowlist (parsed each call) rather than a
-`users_meta.is_admin` column. At v1 scale there is one admin (the
-author), so the schema bloat does not pay rent. Non-admin callers
-receive a 404, not a 403 — minimizing endpoint disclosure to attackers
-who probe for admin routes.
+Gating choice: a small `admins` table is the single source of truth.
+An earlier draft used an `ADMIN_USER_IDS` env var + a `app.admin_user_ids`
+postgres setting, both of which had to be kept in sync; the postgres
+setting also required `ALTER DATABASE`, which Supabase Free tier
+denies. A table works on every tier, survives restarts, and is the
+same source of truth for both the route's admittance check (here)
+*and* the cross-user SELECT policy on `ai_call_log`. There is no env
+var to forget to set.
+
+Non-admin callers receive a 404, not a 403 — minimizing endpoint
+disclosure to attackers who probe for admin routes.
 
 Read posture: queries `ai_call_log` directly under the admin's JWT.
-Cross-user visibility comes from migration
-`20260522130300_ai_call_log_admin_select.sql`, which adds an admin
-SELECT policy that passes when `auth.uid()` appears in the
-`app.admin_user_ids` postgres custom setting. Two configurations must
-agree at deploy time:
-  * `ADMIN_USER_IDS` env var on Railway (gates the FastAPI route).
-  * `app.admin_user_ids` postgres setting in the Supabase dashboard
-    (widens RLS so the cross-user SELECT actually returns rows).
-If only the env var is set, the route admits the admin but RLS still
-scopes them to their own rows — a sandboxed default. If only the
-postgres setting is set, the route 404s and the RLS widening is
-unreachable from the admin endpoint anyway.
+Cross-user visibility comes from the migration above, which adds an
+admin SELECT policy that returns true when the caller's `auth.uid()`
+appears in the `admins` table.
+
+To add yourself as admin (run once in Supabase SQL Editor):
+  INSERT INTO admins (user_id) VALUES ('<your-uuid>');
 """
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -71,17 +70,25 @@ class AICallSummaryResponse(BaseModel):
 
 
 def require_admin(user: AuthedUser = Depends(get_current_user_jwt)) -> AuthedUser:
-    """FastAPI dep: 404 any caller not in `ADMIN_USER_IDS`.
+    """FastAPI dep: 404 any caller not in the `admins` table.
 
-    Reads the env var on each call (not at import time) so a deploy
-    that adds an admin id does not require a re-import to take effect.
-    Cheap enough — the expected length is 1 at v1 scale.
+    Queries `admins` under the caller's JWT. The table's RLS lets
+    every user see only their own admins row (or none), so this is a
+    presence check disguised as a SELECT: empty result → 404, one row
+    → admin. No cross-user disclosure even if a non-admin probes.
 
     Returns 404 (not 403) to minimize endpoint disclosure — a prober
     cannot distinguish "this route does not exist" from "this route
     exists but I'm not allowed."
     """
-    if user.user_id not in _admin_user_ids():
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("admins")
+        .select("user_id")
+        .eq("user_id", str(user.user_id))
+        .execute()
+    )
+    if not resp.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
     return user
 
@@ -120,26 +127,6 @@ def get_aicalls_summary(
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
-
-
-def _admin_user_ids() -> frozenset[UUID]:
-    """Parse the `ADMIN_USER_IDS` env var into a typed frozenset.
-
-    Empty / unset → empty set (the route exists but admits no one).
-    Comma-separated UUIDs; malformed entries are silently dropped so a
-    typo in one entry does not lock out the rest.
-    """
-    raw = os.environ.get("ADMIN_USER_IDS", "")
-    out: set[UUID] = set()
-    for piece in raw.split(","):
-        piece = piece.strip()
-        if not piece:
-            continue
-        try:
-            out.add(UUID(piece))
-        except ValueError:
-            continue
-    return frozenset(out)
 
 
 def _aggregate(rows: list[dict]) -> list[AICallSummaryRow]:

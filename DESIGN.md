@@ -1013,7 +1013,7 @@ Append-only audit log of every Gemini and Claude API call. (Perplexity is no lon
 **RLS shape:** two `SELECT` policies (Postgres OR's them) and a narrow `INSERT` policy. **No** UPDATE or DELETE policies. This preserves CLAUDE.md invariant 1 — the in-handler logger writes with the user's JWT, not the service role. A compromised user JWT can forge token-spend rows on the attacker's own account (not a meaningful threat) but cannot scrub or alter existing audit history. System-level callers that have no user JWT (the `pg_cron` daily rollup, future digest jobs) use the service role, which bypasses RLS entirely.
 
 - **Owner SELECT** — `USING (user_id = auth.uid())`. Every authenticated user sees their own rows.
-- **Admin SELECT** — `USING (auth.uid()::text = ANY (string_to_array(coalesce(current_setting('app.admin_user_ids', true), ''), ',')))`. Cross-user visibility for the admin observability endpoint (`app/routes/admin.py`). The allowlist is the postgres custom setting `app.admin_user_ids` (comma-separated UUIDs), set in the Supabase dashboard's Custom Postgres Config. Unset → empty allowlist → policy matches no one (default in dev). Migration `20260522130300_ai_call_log_admin_select.sql`.
+- **Admin SELECT** — `USING (EXISTS (SELECT 1 FROM admins WHERE user_id = auth.uid()))`. Cross-user visibility for the admin observability endpoint (`app/routes/admin.py`). Admin membership lives in a small `admins` table (`user_id uuid PRIMARY KEY REFERENCES auth.users`), managed by service-role INSERT/DELETE in the Supabase SQL Editor. The same table is the source of truth for the FastAPI route's admittance check, so RLS and route gating cannot drift. Migration `20260522130300_ai_call_log_admin_select.sql`. (An earlier draft used a `current_setting('app.admin_user_ids')` GUC — dropped because `ALTER DATABASE` is denied on Supabase Free tier.)
 - **Owner INSERT** — `WITH CHECK (user_id = auth.uid())`. Application loggers attribute every row to the calling JWT.
 
 ### 8.9 `ai_call_log_daily` (rollup)
@@ -1037,7 +1037,7 @@ Daily aggregation of `ai_call_log` rows older than 90 days.
 
 **System-level calls (NULL `user_id` in `ai_call_log`) are not rolled up here** — Postgres forbids NULLs in a PK column, and a sentinel UUID would break the FK. The aggregator skips them; they remain queryable in `ai_call_log` during its 90-day hot window. If system-call aggregates become useful later, add a separate rollup table keyed only on `(date, provider, model, task_type)`.
 
-**RLS shape:** same as §8.8 — owner-`SELECT` + admin-`SELECT` (gated by `app.admin_user_ids`), writes via service role.
+**RLS shape:** same as §8.8 — owner-`SELECT` + admin-`SELECT` (gated by membership in the `admins` table), writes via service role.
 
 ### 8.10 `stripe_events` (forward plan only — not in v1)
 

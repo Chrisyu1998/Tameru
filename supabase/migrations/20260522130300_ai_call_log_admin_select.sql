@@ -8,49 +8,48 @@
 -- Without this widening, that endpoint silently returns only the
 -- admin's own rows — useless for monitoring the rest of the user base.
 --
--- The widening is expressed as an ADDITIONAL policy on each table.
--- Postgres OR's SELECT policies together: a regular user still passes
--- via the owner policy on their own rows, and an admin additionally
--- passes via this policy on ALL rows. Non-admins gain nothing from
--- this policy.
+-- Design: a small `admins` table is the single source of truth. Earlier
+-- drafts used a `current_setting('app.admin_user_ids')` GUC, which
+-- required `ALTER DATABASE postgres SET ...` — denied on Supabase Free
+-- tier. A table works on every tier and survives Postgres restarts.
 --
--- The admin set is read from the custom postgres setting
--- `app.admin_user_ids` — comma-separated UUIDs. This matches the
--- pattern in 20260522130200 (the aggregator schedule reads
--- `app.environment`). Set it on the production Supabase project:
---   Dashboard → Database → Custom Postgres Config:
---     app.admin_user_ids = '<your-admin-uuid>,<other-admin-uuid>'
--- Local Supabase leaves it unset; the policy matches no one and the
--- admin route remains scoped to its caller's own rows (a sensible
--- sandboxed default for dev).
+-- Single source of truth: the Python route (`require_admin` in
+-- app/routes/admin.py) also queries this table, so route admittance
+-- and RLS widening cannot drift apart. The previous design used a
+-- separate `ADMIN_USER_IDS` env var that had to be kept in sync.
 --
--- The string_to_array + ANY pattern lets us put the allowlist in a
--- single postgres setting rather than reflecting it into Postgres as
--- rows or roles. `coalesce(..., '')` is what makes the unset case
--- safe — `current_setting('app.admin_user_ids', true)` returns NULL
--- when unset, and `string_to_array(NULL, ',')` would in turn return
--- NULL, which `= ANY` evaluates as NULL (treated as false by the
--- USING clause). The coalesce makes the failure mode explicit: unset
--- setting means an empty allowlist.
+-- To add an admin (run in Supabase SQL Editor — service_role context):
+--   INSERT INTO admins (user_id) VALUES ('<your-uuid>');
+-- To remove:
+--   DELETE FROM admins WHERE user_id = '<their-uuid>';
 
+CREATE TABLE IF NOT EXISTS admins (
+    user_id  UUID        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    added_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admins FORCE  ROW LEVEL SECURITY;
+
+-- A user can see their own admins row (telling them whether they're
+-- admin) but not anyone else's. INSERT / UPDATE / DELETE have no
+-- policies → only service_role (Supabase dashboard SQL Editor,
+-- migrations) can manage admin membership. Same posture as
+-- `ai_call_log`: writes are out-of-band, reads are scoped.
+CREATE POLICY admins_self_read ON admins
+    FOR SELECT
+    USING (user_id = auth.uid());
+
+-- The cross-user SELECT widening on ai_call_log + ai_call_log_daily.
+-- Postgres OR's SELECT policies together: a regular user still passes
+-- via the owner policy on their own rows; an admin additionally passes
+-- via these policies on all rows. The EXISTS subquery executes inside
+-- the caller's RLS scope, so it sees only the caller's own admins row
+-- (or none) — non-admins get false, admins get true.
 CREATE POLICY ai_call_log_admin_read ON ai_call_log
     FOR SELECT
-    USING (
-        auth.uid()::text = ANY (
-            string_to_array(
-                coalesce(current_setting('app.admin_user_ids', true), ''),
-                ','
-            )
-        )
-    );
+    USING (EXISTS (SELECT 1 FROM admins WHERE user_id = auth.uid()));
 
 CREATE POLICY ai_call_log_daily_admin_read ON ai_call_log_daily
     FOR SELECT
-    USING (
-        auth.uid()::text = ANY (
-            string_to_array(
-                coalesce(current_setting('app.admin_user_ids', true), ''),
-                ','
-            )
-        )
-    );
+    USING (EXISTS (SELECT 1 FROM admins WHERE user_id = auth.uid()));
