@@ -19,6 +19,8 @@ dependencies = [
   "mcp>=1.27",
   "python-json-logger>=3.2",
   "asgi-correlation-id>=4.3",
+  "resend>=2.30,<3.0",
+  "svix>=1.40",
 ]
 
 [project.optional-dependencies]

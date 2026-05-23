@@ -62,13 +62,21 @@ _JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 # leak-guard contract test (tests/contracts/test_no_service_role_leak.py)
 # scans source for that literal token (memory.md 2026-05-20).
 _SERVICE_ROLE_RE = re.compile(r"sb_secret_[A-Za-z0-9_-]+")
-# Decimal-amount pattern: matches "$12.34", "12.34", "1,234.56" with at
-# least two fraction digits so we don't redact innocuous integers like
-# "200ms" or "page 3". The leading negative-lookbehind keeps the match
-# anchored at a word boundary.
+# Amount pattern: requires either a `$` prefix OR comma-thousand
+# grouping (e.g. `1,234.56`) as the disambiguating signal. An earlier
+# version matched bare `25.99`-style decimals, which false-positively
+# ate IP address octet pairs (`172.16` in `172.16.0.2:44809` got
+# rewritten to `<redacted:amount>.0.2:44809` in the Railway access
+# log). The same regex also false-matched semver (`1.2.3` octet pairs)
+# and date fragments. Bare decimal-without-currency-prefix is too
+# ambiguous to redact safely; transaction amounts in app logs almost
+# always carry a `$` prefix or land in an `extra={"amount": ...}` slot
+# (caught by the by-name redactor regardless of value).
 _AMOUNT_RE = re.compile(
-    r"(?<![A-Za-z0-9._])\$?-?\d{1,3}(?:,\d{3})*(?:\.\d{2,})(?![A-Za-z0-9])"
-    r"|(?<![A-Za-z0-9._])\$\d+(?:\.\d+)?(?![A-Za-z0-9])"
+    # Currency-prefixed: $25, $25.99, $1234, $1,234.56
+    r"(?<![A-Za-z0-9._])\$-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![A-Za-z0-9])"
+    # No prefix but comma-thousand grouping is the signal: 1,234.56
+    r"|(?<![A-Za-z0-9._])-?\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![A-Za-z0-9])"
 )
 
 _VALUE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (

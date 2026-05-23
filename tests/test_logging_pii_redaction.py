@@ -76,6 +76,28 @@ def test_redact_string_passes_innocuous_content_through() -> None:
     assert redact_string(line) == line
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "client 172.16.0.2:44809",                              # IPv4 + port
+        "from 2600:1f18:38df:9500:773b:a8b6:f8bd:9386",         # IPv6
+        "version v1.2.3",                                       # semver
+        "iso 2026-05-22T20:15:02Z",                             # ISO timestamp
+        "port 5173",                                            # bare integer
+        "uuid 4bf67dad-1234-5678-9abc-def012345678",            # UUID
+        "elapsed 200ms",                                        # latency
+    ],
+)
+def test_redact_string_preserves_innocuous_decimals(raw: str) -> None:
+    """IP addresses, semver, UUIDs, dates, and port numbers all contain
+    decimal-looking digit groups that the original amount regex
+    false-positively redacted (an IP `172.16.0.2` was emitted as
+    `<redacted:amount>.0.2:port` in the Railway access log). The
+    tightened regex requires a `$` prefix or comma-thousand grouping
+    as the disambiguating signal; bare decimals pass through."""
+    assert redact_string(raw) == raw
+
+
 def test_redact_string_handles_non_string_inputs() -> None:
     """`None` / ints / floats pass through unchanged — the caller is
     expected to coerce before calling, but the function must not raise."""
