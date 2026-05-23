@@ -16,8 +16,11 @@ import { PendingSyncBanner } from "@/components/PendingSyncBanner";
 export default function Layout() {
   const pathname = useLocation().pathname;
   // Onboarding + chat are full-screen — no sidebar, no bottom nav.
+  // OAuth consent is also a focused decision moment — no chrome.
   const isBare =
-    pathname.startsWith("/onboarding") || pathname.startsWith("/chat");
+    pathname.startsWith("/onboarding") ||
+    pathname.startsWith("/chat") ||
+    pathname.startsWith("/oauth/");
 
   if (isBare) {
     return (

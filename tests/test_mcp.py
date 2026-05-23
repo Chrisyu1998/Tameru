@@ -1,4 +1,4 @@
-"""Day 23a — MCP server tests (app/mcp_server.py).
+"""MCP server tests (app/mcp_server.py) — Day 23a + 23b.
 
 The MCP server is an OAuth 2.1 Resource Server. Its token check accepts
 any valid Supabase JWT, and a Supabase OAuth-2.1-Server access token is
@@ -10,6 +10,31 @@ hosted-OAuth infrastructure is required.
 Real local Supabase + real RLS, same posture as tests/test_tools.py: the
 tools query Postgres under the user's JWT, so the cross-user isolation
 assertions exercise the property that actually matters.
+
+**Day 23b revoke-then-MCP-401 path — not automated.** The user-facing
+end-to-end ("user taps Disconnect in Settings → Claude.ai loses access
+within ~5 min") cannot be honestly automated in v1 for two structural
+reasons, both documented in the day-23b prompt:
+
+1. ``supabase-py`` 2.28 does not yet expose the ``auth.oauth.*`` methods
+   (``listGrants`` / ``revokeGrant`` etc.). Those landed in
+   ``@supabase/auth-js`` first; the Python SDK lags. So a Python test
+   cannot perform the revoke step against local Supabase.
+2. Even if it could, the access JWT Claude.ai already holds is
+   *stateless* — Supabase's ``revokeGrant`` invalidates the session +
+   refresh token immediately, but the access token signature remains
+   valid until its ``exp``. Production bounds that residual window via
+   the ``JWT expiry limit = 300s`` setting in
+   ``supabase/MCP_OAUTH_SETUP.md``; a test would either need to wait 5
+   real minutes or mint a JWT with a forged ``exp`` (we don't hold the
+   ES256 signing key — see ``app/auth.py``).
+
+What we do automate: the ``TameruTokenVerifier`` rejects malformed,
+empty, and signature-corrupted tokens (this file), and the SDK's auth
+middleware turns ``None`` from the verifier into ``401``. That covers
+every code path the production revoke flow eventually hits. The
+remaining end-to-end claim — "after Disconnect, Claude.ai gets 401" — is
+a Day 28 UAT item.
 """
 
 from __future__ import annotations

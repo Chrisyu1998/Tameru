@@ -15,15 +15,28 @@ import { BottomSheet } from "@/components/BottomSheet";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
 import { signOut } from "@/lib/auth";
-import { initialTokens } from "@/lib/claudeTokens";
+import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 
 type SheetKey = "import" | "notifications" | "export" | "signout" | null;
 
 export default function MorePage() {
-  // Mock connected-state for the Claude row chip.
-  const claudeConnected = initialTokens.length > 0;
+  // Live "is anything connected via OAuth" probe for the row chip.
+  // Best-effort: a failure leaves the chip at "not connected" so the
+  // user can still navigate in and see a real error message there.
+  const [claudeConnected, setClaudeConnected] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.auth.oauth.listGrants();
+      if (cancelled) return;
+      setClaudeConnected(!error && (data?.length ?? 0) > 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [openSheet, setOpenSheet] = useState<SheetKey>(null);
   const email = useAppStore((s) => s.user?.email ?? "");
   const handle = email.split("@")[0] || "you";

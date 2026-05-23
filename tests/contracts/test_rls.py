@@ -22,7 +22,6 @@ user_id = ?` clause for the query to be safe — RLS does the filtering.
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from datetime import date
 
@@ -46,7 +45,6 @@ USER_OWNED_TABLES = [
     ("subscriptions", "_row_subscriptions", "id", True),
     ("merchant_category", "_row_merchant_category", "id", False),
     ("user_memory", "_row_user_memory", "id", False),
-    ("mcp_tokens", "_row_mcp_tokens", "id", False),
     ("users_meta", "_row_users_meta", "user_id", False),
     ("chat_messages", "_row_chat_messages", "id", False),
     ("chat_turn_trace", "_row_chat_turn_trace", "id", False),
@@ -348,15 +346,6 @@ def _row_user_memory(user_id: str, **_):
         "user_id": user_id,
         "fact": f"fact-{_tag()}",
         "category": "spending_pattern",
-    }
-
-def _row_mcp_tokens(user_id: str, **_):
-    """Support row mcp tokens."""
-    token_hash = hashlib.sha256(_tag().encode()).hexdigest()
-    return {
-        "user_id": user_id,
-        "token_hash": token_hash,
-        "name": f"token-{_tag()}",
     }
 
 def _row_users_meta(user_id: str, **_):

@@ -27,7 +27,7 @@ Every table from `DESIGN.md` §8 created via Supabase CLI migrations checked int
   - Partial index `(status, next_billing_date) WHERE status = 'active'` — the `pg_cron` auto-logger (§14.3) scans this daily; without it, scan cost grows with total subscriptions instead of active ones.
 - `..._merchant_category.sql` — including `UNIQUE (user_id, merchant)`.
 - `..._user_memory.sql` — including index `(user_id, relevance_score DESC)` for memory retrieval.
-- `..._mcp_tokens.sql` — including `UNIQUE (token_hash)`.
+- `..._mcp_tokens.sql` — including `UNIQUE (token_hash)`. **Superseded by Day 23b** — MCP auth moved to OAuth 2.1 via Supabase's OAuth Server, so this table is dropped (see DESIGN.md §8.6).
 - `..._users_meta.sql` — including:
   - `home_currency text NOT NULL DEFAULT 'USD'` with a CHECK constraint on the allowed set (`USD, EUR, GBP, CAD, AUD, JPY, CHF, SGD, TWD`). CLAUDE.md invariant 13.
   - A `BEFORE UPDATE` trigger that raises if `home_currency` changes (immutability enforcement — a CHECK can't compare OLD to NEW). `WHEN (OLD.home_currency IS DISTINCT FROM NEW.home_currency)` in the trigger clause.
@@ -35,6 +35,8 @@ Every table from `DESIGN.md` §8 created via Supabase CLI migrations checked int
 - `..._ai_call_log_daily.sql`.
 
 ### Every user-owned table (cards, transactions, subscriptions, merchant_category, user_memory, mcp_tokens, users_meta)
+
+*(`mcp_tokens` was dropped in Day 23b — see DESIGN.md §8.6. Treat this section as scoped to the surviving tables.)*
 
 - `user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`.
   - CASCADE is deliberate: account deletion must clean up user data (GDPR / user deletion requests). RESTRICT would make deletion fail.

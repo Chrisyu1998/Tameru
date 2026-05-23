@@ -61,7 +61,7 @@ End-to-end auth: user signs in with Google via Supabase, gets a JWT, FastAPI val
 Target: local Supabase stack only. Tests must **not** point at the hosted project. The test's `conftest.py` should assert `SUPABASE_URL` resolves to a localhost/127.0.0.1 host and refuse to run otherwise — this is a footgun prevention measure, not paranoia.
 
 - Fixtures: seed two users (A and B) into the local stack via `supabase_admin()` + `auth.admin.create_user` in a session-scoped fixture, then sign each in via password to get a JWT. Clean up on teardown.
-- For each RLS-protected, user-owned table — `cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `mcp_tokens`, `users_meta`:
+- For each RLS-protected, user-owned table — `cards`, `transactions`, `subscriptions`, `merchant_category`, `user_memory`, `mcp_tokens`, `users_meta` *(note: `mcp_tokens` was dropped in Day 23b — see DESIGN.md §8.6)*:
   - Insert a row as user A via `supabase_for_user(jwt_a)`.
   - As user B via `supabase_for_user(jwt_b)`, run `.select("*")` **without any `user_id` filter in the query** — this is the whole point of the test. RLS must return zero rows even when the app "forgot" the WHERE clause. **Assert: zero rows.**
   - As user B, attempt `.update(...)` on A's row id. **Assert: rejected / zero rows affected.**

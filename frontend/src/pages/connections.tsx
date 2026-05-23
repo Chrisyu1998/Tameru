@@ -1,142 +1,197 @@
-import { useState } from "react";
-import { AlertTriangle, Check, Copy } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Copy, ExternalLink, RefreshCcw } from "lucide-react";
 import { BottomSheet } from "@/components/BottomSheet";
-import {
-  formatLastUsed,
-  generateTokenSecret,
-  initialTokens,
-  type ClaudeToken,
-} from "@/lib/claudeTokens";
+import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
+/*
+ * Day 23b — Connected apps.
+ *
+ * Lists OAuth grants the user has approved (Claude.ai web, Claude Code,
+ * Claude Desktop, anything MCP-capable) and lets them disconnect. The
+ * data source is `supabase.auth.oauth.listGrants()` — called with the
+ * user's session JWT, no FastAPI bridge (DESIGN.md §7.9, CLAUDE.md
+ * invariant 1 untouched).
+ *
+ * Disconnect calls `supabase.auth.oauth.revokeGrant({clientId})`, which
+ * deletes the session + invalidates the refresh token at Supabase. The
+ * access JWT the client already holds remains valid until its `exp`
+ * (≤5min under our `JWT expiry limit = 300s` setting — see
+ * supabase/MCP_OAUTH_SETUP.md). The UI copy reflects this honestly.
+ */
+
+type Grant = {
+  clientId: string;
+  clientName: string;
+  clientUri: string | null;
+  grantedAt: string;
+};
+
+type LoadState =
+  | { kind: "loading" }
+  | { kind: "ready"; grants: Grant[] }
+  | { kind: "error"; message: string };
+
+const MCP_PATH = "/mcp";
+
 export default function ConnectionsPage() {
-  const [tokens, setTokens] = useState<ClaudeToken[]>(initialTokens);
-  const [name, setName] = useState("");
-  const [revealed, setRevealed] = useState<{
-    secret: string;
-    name: string;
-  } | null>(null);
+  const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const [pendingDisconnect, setPendingDisconnect] = useState<Grant | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
-  const canGenerate = name.trim().length > 0;
+  const load = useCallback(async () => {
+    setState({ kind: "loading" });
+    const { data, error } = await supabase.auth.oauth.listGrants();
+    if (error) {
+      setState({
+        kind: "error",
+        message: error.message || "couldn't load connected apps.",
+      });
+      return;
+    }
+    const grants: Grant[] = (data ?? []).map((g) => ({
+      clientId: g.client.id,
+      clientName: g.client.name,
+      clientUri: g.client.uri || null,
+      grantedAt: g.granted_at,
+    }));
+    setState({ kind: "ready", grants });
+  }, []);
 
-  const handleGenerate = () => {
-    if (!canGenerate) return;
-    const secret = generateTokenSecret();
-    const tok: ClaudeToken = {
-      id: `tok-${Date.now()}`,
-      name: name.trim(),
-      lastUsedAt: null,
-      createdAt: new Date().toISOString(),
-    };
-    setTokens((prev) => [tok, ...prev]);
-    setRevealed({ secret, name: tok.name });
-    setName("");
-  };
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const revoke = (id: string) => {
-    setTokens((prev) => prev.filter((t) => t.id !== id));
+  const confirmDisconnect = async () => {
+    if (pendingDisconnect === null || disconnecting) return;
+    setDisconnecting(true);
+    const { error } = await supabase.auth.oauth.revokeGrant({
+      clientId: pendingDisconnect.clientId,
+    });
+    setDisconnecting(false);
+    if (error) {
+      // Surface the failure into the list state so the user sees a real
+      // message rather than a silently-dismissed sheet.
+      setState({
+        kind: "error",
+        message: error.message || "couldn't disconnect that app.",
+      });
+      setPendingDisconnect(null);
+      return;
+    }
+    setPendingDisconnect(null);
+    await load();
   };
 
   return (
     <div className="mx-auto w-full max-w-2xl px-5 pt-8 pb-20">
       <header>
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          claude connections
+          connected apps
         </h1>
         <p className="mt-3 max-w-prose text-sm leading-relaxed text-ink-secondary">
-          generate a token to ask claude about your spending — from{" "}
-          <span className="text-ink">claude.ai</span> or{" "}
-          <span className="text-ink">claude code</span>. tokens are{" "}
-          <span className="text-ink">read-only</span>: claude can see your
-          ledger but can't add, edit, or delete anything.
+          apps you've allowed to read your spending — like{" "}
+          <span className="text-ink">claude.ai</span>. access is{" "}
+          <span className="text-ink">read-only</span>: connected apps can
+          see your ledger but can't add, edit, or delete anything.
         </p>
       </header>
 
-      {/* Generate form */}
-      <section className="mt-7 rounded-2xl border border-hairline bg-surface px-4 py-4">
-        <label
-          htmlFor="token-name"
-          className="block text-[0.78rem] uppercase tracking-wider text-ink-tertiary"
-        >
-          name this token
-        </label>
-        <input
-          id="token-name"
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. claude.ai laptop"
-          className="mt-1.5 block w-full bg-transparent text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:outline-none"
+      <SetupInstructions />
+
+      <section className="mt-10 border-t border-hairline pt-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
+            current connections
+          </h2>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex items-center gap-1 text-[0.78rem] text-ink-tertiary hover:text-ink"
+            aria-label="refresh"
+          >
+            <RefreshCcw className="h-3.5 w-3.5" /> refresh
+          </button>
+        </div>
+
+        <GrantList
+          state={state}
+          onDisconnect={(grant) => setPendingDisconnect(grant)}
         />
-        <button
-          type="button"
-          onClick={handleGenerate}
-          disabled={!canGenerate}
-          className={cn(
-            "mt-4 inline-flex h-11 items-center justify-center rounded-2xl px-5 text-sm font-medium transition-colors",
-            canGenerate
-              ? "bg-moss text-surface hover:bg-moss-deep"
-              : "bg-sunken text-ink-quaternary cursor-not-allowed"
-          )}
-        >
-          generate token
-        </button>
       </section>
 
-      {/* Existing tokens */}
-      <div className="mt-10 border-t border-hairline pt-5">
-        <h2 className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
-          existing tokens
-        </h2>
-        {tokens.length === 0 ? (
-          <p className="mt-4 text-sm text-ink-tertiary">no tokens yet.</p>
-        ) : (
-          <ul className="mt-3 divide-y divide-hairline">
-            {tokens.map((t) => (
-              <li
-                key={t.id}
-                className="flex items-center justify-between gap-3 py-3"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[0.95rem] text-ink">{t.name}</p>
-                  <p className="text-[0.75rem] text-ink-tertiary">
-                    {formatLastUsed(t.lastUsedAt)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => revoke(t.id)}
-                  className="text-[0.85rem] font-medium text-over hover:underline"
-                >
-                  revoke
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <RevealSheet
-        revealed={revealed}
-        onConfirmCopied={() => setRevealed(null)}
+      <DisconnectSheet
+        grant={pendingDisconnect}
+        busy={disconnecting}
+        onCancel={() => (disconnecting ? undefined : setPendingDisconnect(null))}
+        onConfirm={confirmDisconnect}
       />
     </div>
   );
 }
 
-function RevealSheet({
-  revealed,
-  onConfirmCopied,
+function GrantList({
+  state,
+  onDisconnect,
 }: {
-  revealed: { secret: string; name: string } | null;
-  onConfirmCopied: () => void;
+  state: LoadState;
+  onDisconnect: (grant: Grant) => void;
 }) {
+  if (state.kind === "loading") {
+    return (
+      <p className="mt-4 text-sm text-ink-tertiary">loading connections…</p>
+    );
+  }
+  if (state.kind === "error") {
+    return (
+      <div
+        role="alert"
+        className="mt-4 rounded-2xl border border-hairline bg-warn-wash px-3 py-2.5"
+      >
+        <p className="text-sm leading-snug text-ink">{state.message}</p>
+      </div>
+    );
+  }
+  if (state.grants.length === 0) {
+    return (
+      <p className="mt-4 text-sm text-ink-tertiary">
+        no apps connected yet.
+      </p>
+    );
+  }
+  return (
+    <ul className="mt-3 divide-y divide-hairline">
+      {state.grants.map((g) => (
+        <li
+          key={g.clientId}
+          className="flex items-center justify-between gap-3 py-3"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[0.95rem] text-ink">{g.clientName}</p>
+            <p className="text-[0.75rem] text-ink-tertiary">
+              {formatGrantedAt(g.grantedAt)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onDisconnect(g)}
+            className="text-[0.85rem] font-medium text-over hover:underline"
+          >
+            disconnect
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function SetupInstructions() {
   const [copied, setCopied] = useState(false);
+  const mcpUrl = resolveMcpUrl();
 
   const copy = async () => {
-    if (!revealed) return;
     try {
-      await navigator.clipboard.writeText(revealed.secret);
+      await navigator.clipboard.writeText(mcpUrl);
     } catch {
       // ignore — user can still select manually
     }
@@ -145,87 +200,135 @@ function RevealSheet({
   };
 
   return (
+    <section className="mt-7 rounded-2xl border border-hairline bg-surface px-4 py-4">
+      <p className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
+        add tameru in claude.ai
+      </p>
+      <ol className="mt-2 space-y-1.5 text-[0.85rem] leading-relaxed text-ink-secondary">
+        <li>
+          1. in claude.ai, open <span className="text-ink">settings → connectors</span>
+          {" "}and choose <span className="text-ink">add custom connector</span>.
+        </li>
+        <li>
+          2. paste this server url:
+        </li>
+      </ol>
+      <div className="mt-2 flex items-center gap-2 rounded-xl border border-hairline bg-sunken px-3 py-2.5">
+        <p className="flex-1 truncate font-mono text-[0.82rem] text-ink">
+          {mcpUrl}
+        </p>
+        <button
+          type="button"
+          onClick={copy}
+          className="inline-flex items-center gap-1 text-[0.78rem] text-ink-secondary hover:text-ink"
+        >
+          <Copy className="h-3.5 w-3.5" /> {copied ? "copied" : "copy"}
+        </button>
+      </div>
+      <p className="mt-3 text-[0.78rem] text-ink-tertiary">
+        claude.ai will open a tameru consent page — approve to finish.
+        nothing to paste back here.
+      </p>
+    </section>
+  );
+}
+
+function DisconnectSheet({
+  grant,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  grant: Grant | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
     <BottomSheet
-      open={revealed !== null}
-      // Block all dismiss paths until the user confirms they've copied it.
-      onClose={() => {}}
-      blockDismiss
-      ariaLabel="token generated"
+      open={grant !== null}
+      onClose={onCancel}
+      ariaLabel="disconnect app"
     >
-      {revealed && (
+      {grant && (
         <div className="pb-2">
           <h2 className="font-serif text-2xl text-ink lowercase-title">
-            token generated
+            disconnect {grant.clientName.toLowerCase()}?
           </h2>
-          <p className="mt-1 text-[0.8rem] text-ink-tertiary">
-            for <span className="text-ink-secondary">{revealed.name}</span>
-          </p>
 
           <div className="mt-4 flex items-start gap-2 rounded-xl bg-warn-wash px-3 py-2.5">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-warn" />
             <p className="text-[0.82rem] leading-snug text-ink-secondary">
-              copy this now — you won't be able to see it again.
+              the app loses access within a few minutes. an in-flight
+              session may stay readable until its token expires.
             </p>
           </div>
 
-          <div className="mt-4 rounded-xl border border-hairline bg-sunken px-3 py-3">
-            <p className="break-all font-mono text-[0.82rem] leading-relaxed text-ink">
-              {revealed.secret}
+          {grant.clientUri && (
+            <p className="mt-3 inline-flex items-center gap-1 text-[0.78rem] text-ink-tertiary">
+              <ExternalLink className="h-3 w-3" />
+              <span className="truncate">{safeHost(grant.clientUri)}</span>
             </p>
-          </div>
+          )}
 
           <button
             type="button"
-            onClick={copy}
+            onClick={onConfirm}
+            disabled={busy}
             className={cn(
-              "mt-3 inline-flex h-10 items-center gap-2 rounded-2xl border px-4 text-sm font-medium transition-colors",
-              copied
-                ? "border-moss bg-moss-wash text-moss-deep"
-                : "border-hairline bg-surface text-ink hover:bg-elevated"
+              "mt-6 inline-flex h-12 w-full items-center justify-center rounded-2xl px-5 text-sm font-medium transition-colors",
+              busy
+                ? "bg-sunken text-ink-quaternary cursor-not-allowed"
+                : "bg-over text-surface hover:opacity-90",
             )}
           >
-            {copied ? (
-              <>
-                <Check className="h-4 w-4" /> copied
-              </>
-            ) : (
-              <>
-                <Copy className="h-4 w-4" /> copy token
-              </>
-            )}
+            {busy ? "disconnecting…" : "disconnect"}
           </button>
-
-          <p className="mt-4 text-[0.78rem] text-ink-tertiary">
-            lost it? revoke this token and generate a new one.
-          </p>
-
-          <div className="mt-5 rounded-xl border border-hairline bg-surface px-3 py-3">
-            <p className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-              setup
-            </p>
-            <ol className="mt-1.5 space-y-1 text-[0.78rem] leading-relaxed text-ink-tertiary">
-              <li>
-                1. in claude.ai or claude code, add a new mcp connection.
-              </li>
-              <li>
-                2. server url:{" "}
-                <span className="font-mono text-ink-secondary">
-                  https://api.tameru.app/mcp
-                </span>
-              </li>
-              <li>3. paste the token above as the bearer credential.</li>
-            </ol>
-          </div>
-
           <button
             type="button"
-            onClick={onConfirmCopied}
-            className="mt-6 inline-flex h-12 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
+            onClick={onCancel}
+            disabled={busy}
+            className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-2xl border border-hairline bg-surface px-5 text-sm text-ink hover:bg-elevated disabled:cursor-not-allowed disabled:text-ink-quaternary"
           >
-            i've copied this — done
+            cancel
           </button>
         </div>
       )}
     </BottomSheet>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the public MCP endpoint URL the user pastes into Claude.ai.
+ * Derived from VITE_API_URL (the repo's existing convention — see
+ * `lib/api.ts` and `.env.example`) + `/mcp`. Don't hardcode `tameru.app`
+ * — the real prod host is the Railway URL, dev is localhost
+ * (DESIGN.md §10.1 deployment URLs).
+ */
+function resolveMcpUrl(): string {
+  const base = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+  if (!base) return MCP_PATH;
+  return `${base.replace(/\/$/, "")}${MCP_PATH}`;
+}
+
+function formatGrantedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "connected";
+  return `connected ${d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })}`;
+}
+
+function safeHost(uri: string): string {
+  try {
+    return new URL(uri).host;
+  } catch {
+    return uri;
+  }
 }

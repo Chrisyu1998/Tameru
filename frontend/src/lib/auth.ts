@@ -87,20 +87,32 @@ export async function checkDevice(
   );
 }
 
-export async function signInWithGoogle(): Promise<void> {
+export async function signInWithGoogle(returnTo?: string): Promise<void> {
   // Supabase redirects to Google, then back to the app's origin with the
   // session in the URL hash. detectSessionInUrl on the client picks it up
   // and fires onAuthStateChange — the post-auth dispatch lives in Splash.
+  //
+  // `returnTo` is opt-in for flows that must preserve their own URL state
+  // across the OAuth round-trip (e.g., the OAuth consent page needs to
+  // hold onto `?authorization_id=...`). Default is `${origin}/`, which
+  // routes through the onboarding gate.
   await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: `${window.location.origin}/` },
+    options: { redirectTo: returnTo ?? `${window.location.origin}/` },
   });
 }
 
-export async function signInWithMagicLink(email: string): Promise<void> {
+export async function signInWithMagicLink(
+  email: string,
+  returnTo?: string,
+): Promise<void> {
+  // Same `returnTo` semantics as signInWithGoogle. supabase-js's
+  // detectSessionInUrl consumes the auth params from the URL hash, not
+  // the query string, so a `?authorization_id=...` query param on
+  // `returnTo` survives the redirect untouched.
   await supabase.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: `${window.location.origin}/` },
+    options: { emailRedirectTo: returnTo ?? `${window.location.origin}/` },
   });
 }
 

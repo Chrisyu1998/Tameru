@@ -18,8 +18,33 @@ In the Supabase dashboard for the Tameru project:
 3. **Enable Dynamic Client Registration.** MCP clients (Claude.ai,
    Claude Code, Claude Desktop) register themselves; without DCR each
    client would need a manually-created entry.
-4. Note the discovery URL Supabase exposes:
+4. **Set the authorization (consent) path to `/oauth/consent`** — the
+   route the PWA hosts. (Distinct from Supabase's own
+   `{SUPABASE_URL}/oauth/authorize` endpoint — Tameru's `/oauth/consent`
+   is the consent UI that endpoint delegates to.) Supabase's OAuth
+   Server does not ship a hosted consent UI; Tameru renders consent
+   itself using the user-facing `supabase.auth.oauth.*` methods
+   (DESIGN.md §7.9, Day 23b).
+5. Note the discovery URL Supabase exposes:
    `https://<project-ref>.supabase.co/.well-known/oauth-authorization-server/auth/v1`
+
+Then, under **Project Settings → JWT Keys** (the *project-level* settings
+page, not under Authentication — Authentication → Sessions controls
+*refresh* tokens and Pro-gated session timeouts, which is a different
+knob):
+
+6. **Set `JWT expiry limit` = 300** (5 minutes). Default is 3600 (1
+   hour). Direct URL:
+   `https://supabase.com/dashboard/project/<project-ref>/settings/jwt`.
+
+   Rationale: an OAuth grant revocation deletes the session + refresh
+   token immediately, but the access JWT the MCP client already holds is
+   stateless and stays valid until its `exp`. A short TTL is how the
+   post-revocation residual window is bounded without adding a
+   per-request session lookup at the MCP layer (which would force
+   service-role access and amend CLAUDE.md invariant 1). 5 min ⇒ at most
+   ~5 min between "user taps Disconnect" and "Claude.ai loses access."
+   See DESIGN.md §7.9 (**Revocation**).
 
 Tameru creates and stores no client secret — clients register
 dynamically, and the user approves a consent screen at connect time.
@@ -52,5 +77,8 @@ filter — CLAUDE.md invariant 1 stands unchanged.
 
 ## What Day 23b covers
 
-Connecting from Claude.ai web end-to-end, the consent screen, the
-"Connected apps" Settings UI, and dropping the `mcp_tokens` table.
+Connecting from Claude.ai web end-to-end, the Tameru-hosted consent
+screen at `/oauth/consent`, the "Connected apps" Settings UI (calling
+`supabase.auth.oauth.getUserGrants` / `revokeGrant` directly from the
+PWA), the short-JWT-TTL configuration that bounds the post-revocation
+window, and dropping the `mcp_tokens` table.

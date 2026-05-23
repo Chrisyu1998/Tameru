@@ -38,7 +38,7 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 
 2. **The Codex agent loop runs in FastAPI using the Messages API with `tool_use` blocks.** Not Codex Managed Agents (designed for long-running autonomous work in Anthropic's container — wrong fit for 4–6s chat turns and DB-backed tools). Not LangChain. Not the standalone Agent SDK as a wrapper. The loop is ~80 lines and lives in our process so the user's JWT is in scope when typed tools execute.
 
-3. **MCP server is read-only and uses per-user bearer tokens.** Tokens are 32 random bytes, stored as `sha256` in `mcp_tokens`, returned to the user once. No `add_transaction` over MCP in v1 — leaked tokens read data; they cannot mutate it.
+3. **MCP server is read-only and authenticates via OAuth 2.1.** Authorization is delegated to Supabase Auth's OAuth 2.1 Server — Tameru's MCP server is an OAuth 2.1 *Resource Server*, not its own credential store, so there is no `mcp_tokens` table (DESIGN.md §7.9, §8.6). OAuth is required because Claude.ai's web connector UI accepts no static bearer token or custom header. No `add_transaction` over MCP in v1 — a leaked or over-scoped credential reads data; it cannot mutate it. The original v3 design — per-user 32-byte bearer tokens stored as `sha256` — was superseded during Day 23 planning.
 
 4. **Subscription auto-logger is a `pg_cron` SQL function, not a FastAPI background task.** Idempotency from `UNIQUE (subscription_id, date)` on `transactions` plus `INSERT ... ON CONFLICT DO NOTHING`. Concurrent runs prevented via `pg_try_advisory_lock`. `next_billing_date` advances only after successful insert in the same transaction.
 

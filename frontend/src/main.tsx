@@ -17,6 +17,7 @@ import GoalsPage from './pages/goals';
 import MorePage from './pages/more';
 import SettingsPage from './pages/settings';
 import ConnectionsPage from './pages/connections';
+import OauthConsentPage from './pages/oauth.consent';
 import PrivacyPage from './pages/privacy';
 import BreakdownPage from './pages/breakdown.index';
 import CategoryListPage from './pages/breakdown.category';
@@ -84,6 +85,13 @@ function App() {
           {/* Always reachable — the gate's destination and the 404. */}
           <Route path="/onboarding" element={<OnboardingWizard />} />
           <Route path="/onboarding/tour" element={<TourPage />} />
+          {/* OAuth consent — Supabase redirects here with ?authorization_id=.
+              Not the OAuth authorize endpoint itself (that's on Supabase's
+              Auth Server); this is the consent UI Supabase delegates to.
+              Not behind RequireOnboarded: a signed-in Supabase user without
+              completed Tameru onboarding is an edge case the consent page
+              handles directly (Day 23b). */}
+          <Route path="/oauth/consent" element={<OauthConsentPage />} />
           <Route path="*" element={<NotFoundPage />} />
           {/* Gated: require a JWT and a confirmed home_currency. */}
           <Route element={<RequireOnboarded />}>

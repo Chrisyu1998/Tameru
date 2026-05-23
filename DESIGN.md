@@ -742,7 +742,7 @@ The flow is standard MCP authorization:
 
 1. A client (Claude.ai web, Claude Code, Claude Desktop) is pointed at the MCP URL. On an unauthenticated request the server returns `401` with a `WWW-Authenticate` header and serves OAuth Protected Resource Metadata (RFC 9728) at `/.well-known/oauth-protected-resource/mcp` — registered at the app root, not under the `/mcp` mount, so the advertised discovery URL resolves — pointing the client at the Supabase authorization server.
 2. The client registers itself via Dynamic Client Registration (enabled in the Supabase dashboard) and runs the OAuth 2.1 + PKCE authorization-code flow.
-3. The user authenticates and approves a consent screen, granting the client read access to their Tameru data.
+3. The user authenticates and approves a consent screen, granting the client read access to their Tameru data. **The consent screen is Tameru-hosted**, at `/oauth/consent` in the PWA. (The OAuth authorize endpoint itself lives on Supabase's Auth Server at `{SUPABASE_URL}/oauth/authorize` — Tameru's `/oauth/consent` is the consent UI that endpoint delegates to. Two different hosts, distinct names, no ambiguity in logs.) Supabase's OAuth 2.1 Server does not ship a hosted consent UI; the page is a thin frontend implementation against the user-facing `supabase.auth.oauth.*` methods (`getAuthorizationDetails` → render `client_name` + read-only reassurance → `approveAuthorization` / `denyAuthorization`). No per-scope picker in v1 — a valid grant is read-only by construction, so one Allow button is the entire decision.
 4. The client receives an access token (and refresh token) and presents the access token as `Authorization: Bearer <token>` on every MCP request.
 5. The MCP server validates the access token — a Supabase-signed JWT verified locally against the project JWKS, the same machinery as `app/auth.py` — and scopes all queries to the token's user.
 
@@ -752,7 +752,7 @@ The flow is standard MCP authorization:
 
 **Read-only by design.** No `add_transaction` over MCP in v1. A leaked or over-scoped credential can read data; it cannot mutate it. Write tools may be added post-launch with explicit per-grant scopes.
 
-**Revocation.** The user revokes a client's access from **Settings → Connected apps**, which revokes the OAuth grant at the Supabase authorization server.
+**Revocation.** The user revokes a client's access from **Settings → Connected apps**, which calls `supabase.auth.oauth.revokeGrant(client_id)` directly from the PWA using the user's session JWT (no FastAPI bridge — invariant 1 untouched). Revocation deletes the session and invalidates the refresh token immediately at Supabase. The access JWT the MCP client already holds is stateless and remains valid until its `exp`; **Supabase's `JWT expiry limit` is set to 300s (5 min)** specifically to bound this residual window without adding a per-request server-side session lookup at the MCP layer (which would require service-role access). So "Disconnect" is effective within ~5 minutes, not literally instantaneous. Tighter immediacy would require either an `auth.sessions` check on every MCP request (service-role lookup → invariant-1 amendment) or a stateful access-token revocation list — both rejected for v1 at the ~10-user scale.
 
 ### 7.10 Eval Harness
 
@@ -1440,6 +1440,42 @@ One process means deploys interrupt in-flight SSE streams. Mitigations:
 - Resumable streams: not v1.
 
 If a future SLO requires no dropped streams, scale horizontally (Railway supports replicas) and add a Redis pub/sub for stream session state.
+
+### 14.5 Application logs — structured, correlated, redacted
+
+Three observability surfaces, each owning one job:
+
+| Surface | Source | Audience | For |
+|---|---|---|---|
+| `ai_call_log` (§8.8) | One row per AI provider call, written under the user's JWT (invariant 14) | Cost accounting, prompt-version regression detection, per-user spend | The author + the eval suite (§7.10) |
+| Application logs | `logging.getLogger(__name__).info/warning/exception(...)` → stdout | Debugging, forensics, "what path did this request take" | Railway log viewer |
+| Sentry (§14.2) | Unhandled exceptions + explicit `capture_exception` | Catching 5xx the author doesn't know about yet | Author email/alert |
+
+Conflating these is the canonical failure mode — e.g., routing AI failures to Sentry double-pages the author for every Gemini 5xx (`ai_call_log` already records it), or routing application logs into `ai_call_log` pollutes the cost dashboard. Each surface stays in its lane.
+
+**Structured stdout.** A single JSON formatter (`python-json-logger`) on the root logger emits `{timestamp, level, logger, message, correlation_id, user_id, ...extra}` per record. Uvicorn access/error logs are reformatted through the same formatter so the entire stream is one schema. `LOG_LEVEL` defaults to `INFO` in production, `DEBUG` in dev (resolved from `APP_ENV`).
+
+**Correlation IDs.** `asgi-correlation-id` middleware sits outermost in the FastAPI middleware stack. It honors `X-Request-ID` from Railway's edge if present, mints a fresh UUIDv4 otherwise, and echoes the value back in the response header. The formatter reads the id from the library's contextvar; Sentry tags every event with the same id. One value spans stdout, Sentry, and the response header — `grep <id>` in Railway pinpoints every line of one request, and the same id appears in the Sentry alert.
+
+**`user_id` propagation.** A `user_id_var: ContextVar[str | None]` is set inside `get_current_user_jwt` after JWT verification (cleared by middleware on response). The formatter reads it; Sentry's `set_user({"id": ...})` reads it. No email, no IP, no transaction data flows to either.
+
+**PII redaction at the formatter layer.** A logging `Filter` walks every record's `message` + `extra` keys and replaces values matching the redaction set with `<redacted:reason>` rather than dropping the whole record (silent drops hide bugs). Redaction set, mirroring the §13 privacy posture: transaction amounts (decimal-pattern detector), merchant text, chat message text, email addresses, phone numbers, full card numbers, JWTs, Supabase service-role key. Sentry's `before_send` runs the same filter over `event.request.data`, `event.request.query_string`, `event.extra`, and `event.breadcrumbs[*].data`; `send_default_pii=False`.
+
+**Sentry's `before_send` filter rules.**
+
+1. Drop `fastapi.HTTPException` (4xx are expected; 5xx HTTPExceptions are surfaced by the `internal_error` handler in `app/main.py`).
+2. Drop events whose originating module starts with `app.integrations.gemini`, `app.integrations.card_lookup`, `app.agent.loop`, or `app.agent.memory` — those failures already write `ai_call_log` rows with `success = false` (§14.2 "don't double-log").
+3. **Exception to rule 2:** if the exception class is `AICallLogError`, the event ships. `AICallLogError` means the AI call succeeded but the audit INSERT failed — the audit pipeline itself is broken, which is exactly what Sentry exists to catch.
+
+**Log-level convention.**
+
+- `DEBUG` — dev-only state. Never enabled in production.
+- `INFO` — meaningful state transitions: request start/end, JWT verified, cron fired, RLS-scoped query returned N rows.
+- `WARNING` — recoverable bad state: rate limit hit, fallback path taken, retried call.
+- `ERROR` — caught exception that doesn't crash the request. Always paired with `logger.exception(...)` so the traceback is in the record.
+- `CRITICAL` — unused in v1.
+
+**Out of scope at v1 scale.** No separate logging vendor (Datadog, Logtail, Better Stack); Railway stdout is enough. No log aggregation pipeline (Vector, Fluentbit); Railway already does this. No request/response body logging; privacy and cost both vote against it. No `structlog`; stdlib `logging` + the JSON formatter is simpler and a one-line swap if needed later.
 
 ---
 
