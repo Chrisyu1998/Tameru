@@ -305,9 +305,9 @@ function DisconnectSheet({
 /**
  * Resolve the public MCP endpoint URL the user pastes into Claude.ai.
  * Derived from VITE_API_URL (the repo's existing convention — see
- * `lib/api.ts` and `.env.example`) + `/mcp`. Don't hardcode `tameru.app`
- * — the real prod host is the Railway URL, dev is localhost
- * (DESIGN.md §10.1 deployment URLs).
+ * `lib/api.ts` and `.env.example`) + `/mcp`. Don't hardcode the brand
+ * domain — the real prod host is the Railway URL until a custom domain
+ * is wired up; dev is localhost (DESIGN.md §10.1 deployment URLs).
  */
 function resolveMcpUrl(): string {
   const base = (import.meta.env.VITE_API_URL as string | undefined) ?? "";

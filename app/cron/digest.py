@@ -492,7 +492,7 @@ def _unsubscribe_urls(user_id: UUID) -> tuple[str, str]:
     token = make_unsubscribe_token(user_id, "digest")
     https = f"{base}/unsubscribe?user={user_id}&kind=digest&token={token}"
     mailto_subject = f"user={user_id}+kind=digest+token={token}"
-    mailto = f"mailto:unsubscribe@mail.tameru.app?subject={mailto_subject}"
+    mailto = f"mailto:unsubscribe@mail.tameru.xyz?subject={mailto_subject}"
     return https, mailto
 
 

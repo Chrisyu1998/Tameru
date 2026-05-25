@@ -84,7 +84,7 @@ def send_digest_email(
         the partial unique index can't see. Required, not optional —
         a missing key would silently re-open the gap.
       from_address: Override the default `RESEND_FROM` env (mostly for
-        tests). Production sends from `"Tameru" <hello@mail.tameru.app>`.
+        tests). Production sends from `"Tameru" <hello@mail.tameru.xyz>`.
       reply_to: Override the default `RESEND_REPLY_TO` env. Production
         routes replies to a real inbox so user feedback reaches a human.
 
@@ -94,8 +94,8 @@ def send_digest_email(
       Never raises — the cron loop must continue past a single user's
       failure.
     """
-    from_value = from_address or os.environ.get("RESEND_FROM") or "Tameru <hello@mail.tameru.app>"
-    reply_to_value = reply_to or os.environ.get("RESEND_REPLY_TO") or "hello@mail.tameru.app"
+    from_value = from_address or os.environ.get("RESEND_FROM") or "Tameru <hello@mail.tameru.xyz>"
+    reply_to_value = reply_to or os.environ.get("RESEND_REPLY_TO") or "hello@mail.tameru.xyz"
 
     params: resend.Emails.SendParams = {
         "from": from_value,

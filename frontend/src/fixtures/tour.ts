@@ -121,7 +121,7 @@ export const tourChatMessages: ChatMessage[] = [
 /** Static email shape for Screen 4. Subject + from + body bullets. */
 export const tourDigest = {
   subject: "Your week, in brief",
-  from: "Tameru <weekly@tameru.app>",
+  from: "Tameru <weekly@tameru.xyz>",
   preheader: "A quiet week.",
   bullets: [
     {

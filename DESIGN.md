@@ -9,7 +9,7 @@
 | Version | 3.1 (adds forward plan for scaling) |
 | Status | Approved — implementation |
 | Stack | React PWA · FastAPI · Supabase · Anthropic API (Messages + `tool_use` + `web_search`) · Gemini API · PostHog |
-| Domain | tameru.app (candidate) |
+| Domain | tameru.xyz (registered 2026-05-23) |
 
 This document supersedes PRD v2.1. Material changes from v2.1 are summarized in §0. v3.1 is a planning-only revision: **current scope is unchanged** — still ~10-user invite-only, free for everyone, no Stripe, no paid tier. v3.1 adds a **forward plan** describing what would need to happen *if* v1 is successful and scaling to ~100 users becomes the next step, plus a reconsidered mobile-strategy stance admitting Swift as a possible future migration. See §0.1 summary and §17 detail.
 
@@ -212,7 +212,7 @@ Railway runs FastAPI as a persistent service from a Dockerfile. ~$10/month. CI/C
 
 **Frontend on Vercel, not co-located on Railway.** The Vite-built PWA is static assets; Vercel's edge CDN gives materially better first-paint for global users (the v1 user base includes people outside the US), and Vercel's Git-native deploys provide per-PR preview URLs useful while iterating on the web surface. Co-locating the frontend on Railway would lose both and save effectively nothing — Vercel's free tier covers v1 and the §17 scaling target. A PWA shell is a natural CDN workload: after first load the Service Worker serves it locally anyway, so the edge wins first-paint without adding privacy surface.
 
-**How the two origins talk.** Frontend at `https://tameru.app` (Vercel); API at `https://api.tameru.app` (Railway). FastAPI's `CORSMiddleware` explicitly allowlists the frontend origin (§9.3). Authentication is Bearer token in the `Authorization` header — never cookies — so `allow_credentials=False` and there is no SameSite or third-party-cookie complexity. This is the same shape a future Swift iOS client expects (one API host, multiple clients, no frontend-specific branching — invariant 12), which means the web/iOS split in §10 reuses this boundary rather than re-litigating it.
+**How the two origins talk.** Frontend at `https://tameru.xyz` (Vercel); API at `https://api.tameru.xyz` (Railway). FastAPI's `CORSMiddleware` explicitly allowlists the frontend origin (§9.3). Authentication is Bearer token in the `Authorization` header — never cookies — so `allow_credentials=False` and there is no SameSite or third-party-cookie complexity. This is the same shape a future Swift iOS client expects (one API host, multiple clients, no frontend-specific branching — invariant 12), which means the web/iOS split in §10 reuses this boundary rather than re-litigating it.
 
 **Reversibility.** The frontend is a static `dist/` directory; moving it off Vercel to Cloudflare Pages, Netlify, or Railway static hosting is under an hour of work and changes nothing on the backend. This keeps the hosting-split decision cheap to revisit.
 
@@ -438,7 +438,7 @@ Every dashboard metric is shown relative to the user's own personal baseline.
 
 The primary delivery mechanism for spending insight. Reaches users who don't open the app.
 
-**Delivery:** Email via Resend, sent **Monday 09:00 ET (14:00 UTC)** by a Railway scheduled service running `python -m app.cron.digest` against cron `0 14 * * 1`. Per-user timezone is Phase 2; v1 hardcodes ET because the v1 user base is invite-only friends/family centered in the Americas. From `"Tameru" <hello@mail.tameru.app>`; Reply-To `hello@mail.tameru.app` (aliased to a real inbox — users hitting reply must reach a human).
+**Delivery:** Email via Resend, sent **Monday 09:00 ET (14:00 UTC)** by a Railway scheduled service running `python -m app.cron.digest` against cron `0 14 * * 1`. Per-user timezone is Phase 2; v1 hardcodes ET because the v1 user base is invite-only friends/family centered in the Americas. From `"Tameru" <hello@mail.tameru.xyz>`; Reply-To `hello@mail.tameru.xyz` (aliased to a real inbox — users hitting reply must reach a human).
 
 **Content (≤5 content blocks; one block = one sentence or one data line):**
 
@@ -469,7 +469,7 @@ The tradeoff between the two layers is the false-negative window: a worker crash
 
 All three paths converge on the same `weekly_digest_enabled` boolean which the cron predicate reads — the toggle is the single authoritative gate.
 
-**Deliverability prerequisites (one-time ops, not code):** Tameru must own the sending domain (`tameru.app` — to be acquired) and configure SPF + DKIM + DMARC records at the registrar per Resend's setup. Send from the **subdomain** `mail.tameru.app` so a deliverability incident on the digest doesn't contaminate the root. Start DMARC at `p=none`; move to `p=quarantine` after one month of clean reports. Resend's open and click tracking are **disabled** in project settings — open-pixel exfiltrates recipient IP to a third party on every email open; click tracking rewrites every link through `resend.com`. Both violate the privacy posture.
+**Deliverability prerequisites (one-time ops, not code):** Tameru owns the sending domain `tameru.xyz` (registered 2026-05-23) and configures SPF + DKIM + DMARC records at the registrar per Resend's setup. Send from the **subdomain** `mail.tameru.xyz` so a deliverability incident on the digest doesn't contaminate the root. Start DMARC at `p=none`; move to `p=quarantine` after one month of clean reports. Resend's open and click tracking are **disabled** in project settings — open-pixel exfiltrates recipient IP to a third party on every email open; click tracking rewrites every link through `resend.com`. Both violate the privacy posture.
 
 **Email shape:** both HTML (inline styles only — Gmail strips `<style>` blocks and class names) and plaintext, generated together. Plaintext is required for deliverability; spam filters score HTML/text similarity.
 
@@ -1229,7 +1229,7 @@ Application **request handlers triggered by a user** never use the service role.
 
 - HTTPS enforced on Railway. Service Worker and PWA install require TLS.
 - CSP: `script-src 'self'`. No external script CDNs. Everything bundled via Vite.
-- CORS: FastAPI's `CORSMiddleware` allowlists an explicit set of origins — the Vercel frontend (`https://tameru.app` in prod, via the `FRONTEND_ORIGIN` env var) plus `http://localhost:5173` for the Vite dev server. No wildcards; no `*.vercel.app` catch-all (any Vercel tenant could then reach the API). `allow_credentials=False` because we authenticate via Bearer token in the `Authorization` header, not cookies — this sidesteps SameSite and third-party-cookie complications entirely. Allowed headers: `Authorization`, `X-Device-Id`, `Content-Type`. Preview-deploy URLs (Vercel PR previews) are not reachable from prod API in v1; if preview-against-prod ever becomes necessary, it goes through a staging backend, not a CORS wildcard.
+- CORS: FastAPI's `CORSMiddleware` allowlists an explicit set of origins — the Vercel frontend (`https://tameru.xyz` in prod, via the `FRONTEND_ORIGIN` env var) plus `http://localhost:5173` for the Vite dev server. No wildcards; no `*.vercel.app` catch-all (any Vercel tenant could then reach the API). `allow_credentials=False` because we authenticate via Bearer token in the `Authorization` header, not cookies — this sidesteps SameSite and third-party-cookie complications entirely. Allowed headers: `Authorization`, `X-Device-Id`, `Content-Type`. Preview-deploy URLs (Vercel PR previews) are not reachable from prod API in v1; if preview-against-prod ever becomes necessary, it goes through a staging backend, not a CORS wildcard.
 
 ### 9.4 Privacy Posture & AI Provider Data Retention
 
