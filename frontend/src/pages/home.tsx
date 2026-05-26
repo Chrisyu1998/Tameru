@@ -8,6 +8,7 @@ import {
 } from "@/lib/ledger";
 import { useDashboardSummary } from "@/lib/dashboardApi";
 import { useAppStore } from "@/store";
+import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
 const PREFILL_CHIPS = ["coffee $5.50", "lunch with M $24"];
@@ -32,6 +33,10 @@ export default function HomePage() {
       return;
     }
     setHintDismissed(isFirstHintDismissed());
+    // feature_used: dashboard — fires once per page mount. StrictMode
+    // double-mounts in dev produce two events; that's a dev-only
+    // artifact, not a production concern.
+    track("feature_used", { feature: "dashboard" });
   }, [navigate, shouldGate]);
 
   if (!onboarded) return null;

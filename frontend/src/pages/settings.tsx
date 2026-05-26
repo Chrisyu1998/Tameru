@@ -6,6 +6,7 @@ import {
   Download,
   Lock,
   Plug,
+  Shield,
   Upload,
   User,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import {
   readPreferences,
   updatePreferences,
 } from "@/lib/preferencesApi";
+import { identifyUser, setOptOut } from "@/lib/analytics";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -42,7 +44,8 @@ type SectionId =
   | "connections"
   | "import"
   | "export"
-  | "notifications";
+  | "notifications"
+  | "privacy";
 
 interface Section {
   id: SectionId;
@@ -67,6 +70,7 @@ const sections: Section[] = [
     label: "notifications",
     icon: <Bell className="h-4 w-4" />,
   },
+  { id: "privacy", label: "privacy", icon: <Shield className="h-4 w-4" /> },
 ];
 
 export default function SettingsPage() {
@@ -162,6 +166,7 @@ function SectionContent({ id }: { id: SectionId }) {
   if (id === "import") return <ImportPanel />;
   if (id === "export") return <ExportPanel />;
   if (id === "notifications") return <NotificationsPanel />;
+  if (id === "privacy") return <PrivacyPanel />;
   // connections is a Link, never rendered as a panel
   return null;
 }
@@ -316,18 +321,20 @@ function NotificationsPanel() {
   const latestRequest = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
+    // Tie the mount-time read into the same monotonic sequence as the
+    // PATCH path. Without this, a slow read resolving *after* the
+    // user's first toggle would overwrite the persisted value with the
+    // stale pre-toggle one (Codex 2026-05-23 P2).
+    const myRequest = ++latestRequest.current;
     readPreferences()
       .then((prefs) => {
-        if (!cancelled) setWeekly(prefs.weekly_digest_enabled);
+        if (myRequest !== latestRequest.current) return;
+        setWeekly(prefs.weekly_digest_enabled);
       })
       .catch(() => {
         // Network failure: keep the optimistic default; the user can
         // still toggle, and the next PATCH will reconcile.
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   const handleWeeklyChange = (next: boolean) => {
@@ -382,6 +389,98 @@ function NotificationsPanel() {
           onChange={setQuiet}
         />
       </div>
+    </div>
+  );
+}
+
+function PrivacyPanel() {
+  // Day 26 — PostHog opt-out toggle. Mirrors NotificationsPanel's
+  // optimistic-write + monotonic-sequence pattern so rapid toggling can't
+  // strand the UI on a stale state. The PostHog SDK is updated in
+  // lockstep with the server PATCH via setOptOut(); the inline copy is
+  // explicit that prior data is not wiped (full data deletion is a §17
+  // scaling-plan deliverable; the disclosure prose itself lives on Day
+  // 27's privacy disclosures work).
+  //
+  // Source of truth for the initial value is /me (auth.refreshHomeCurrency
+  // mirrors it into the store), so we render synchronously from the
+  // store. A PATCH read-back is unnecessary on mount.
+  const optedOutFromStore = useAppStore((s) => s.analyticsOptedOut);
+  const setOptedOutInStore = useAppStore((s) => s.setAnalyticsOptedOut);
+  const userId = useAppStore((s) => s.user?.id ?? null);
+  const initial = optedOutFromStore ?? false;
+  const [optedOut, setOptedOut] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const latestRequest = useRef(0);
+
+  // Reconcile if /me resolves after this panel first rendered.
+  useEffect(() => {
+    if (typeof optedOutFromStore === "boolean") {
+      setOptedOut(optedOutFromStore);
+    }
+  }, [optedOutFromStore]);
+
+  /**
+   * Apply the new opt-out state to the SDK. On opt-in, also re-bind
+   * the current user's id — `setOptOut(true)` calls `posthog.reset()`
+   * which rotates the anonymous distinct id, so without re-identifying
+   * here, subsequent events would be captured anonymously until a
+   * page reload triggered another /me → identifyUser(). Day 26 P3.
+   */
+  const applyOptOutAndIdentify = (nextOptedOut: boolean) => {
+    setOptOut(nextOptedOut);
+    if (!nextOptedOut && userId) {
+      identifyUser(userId);
+    }
+  };
+
+  const handleChange = (next: boolean) => {
+    if (saving) return;
+    setOptedOut(next);
+    setSaving(true);
+    setOptedOutInStore(next);
+    // Flip the SDK in lockstep so an outbound event mid-PATCH doesn't
+    // leak past the user's choice. On failure we revert both.
+    applyOptOutAndIdentify(next);
+    const myRequest = ++latestRequest.current;
+    updatePreferences({ analytics_opted_out: next })
+      .then((prefs) => {
+        if (myRequest !== latestRequest.current) return;
+        setOptedOut(prefs.analytics_opted_out);
+        setOptedOutInStore(prefs.analytics_opted_out);
+        applyOptOutAndIdentify(prefs.analytics_opted_out);
+      })
+      .catch(() => {
+        if (myRequest !== latestRequest.current) return;
+        setOptedOut(!next);
+        setOptedOutInStore(!next);
+        applyOptOutAndIdentify(!next);
+      })
+      .finally(() => {
+        if (myRequest !== latestRequest.current) return;
+        setSaving(false);
+      });
+  };
+
+  return (
+    <div>
+      <PanelHeading
+        title="privacy"
+        subtitle="what tameru measures, and what it doesn't."
+      />
+      <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
+        <ToggleRow
+          label="pause product analytics"
+          desc="stops feature-usage events immediately. transaction data is never sent to analytics."
+          checked={optedOut}
+          onChange={handleChange}
+          disabled={saving}
+        />
+      </div>
+      <p className="mt-3 px-1 text-[0.78rem] text-ink-tertiary">
+        events already collected stay until manual deletion. detailed
+        privacy disclosures live on the privacy page.
+      </p>
     </div>
   );
 }

@@ -57,6 +57,7 @@ import {
   type TransactionRowWire,
 } from "./transactionsApi";
 import { ApiError } from "./api";
+import { track } from "./analytics";
 import { useAppStore } from "../store";
 import type {
   ActiveCardExistsDetail,
@@ -83,6 +84,22 @@ export interface ChatLastError {
   message: string;
   /** The exact user message to re-fire when the user taps Retry. */
   pendingMessage: string;
+}
+
+/**
+ * Per-page-load session metrics used by Day 26 analytics. Session is
+ * defined as a single conversation: starts on the first successful turn
+ * after `newChat()` (or app boot) and ends on the next `newChat()` /
+ * sign-out. Lost on page reload (acceptable at v1 — cross-reload
+ * sessions are rare and worth less than the persistence complexity).
+ */
+interface SessionMetrics {
+  /** Conversation id of the active session, mirrored for the end event. */
+  conversationId: string | null;
+  /** Date.now() when the first turn of this session committed. */
+  startedAt: number | null;
+  /** Number of successful round-trips in this session. */
+  turnCount: number;
 }
 
 interface ChatState {
@@ -152,6 +169,61 @@ let state: ChatState = {
   lastError: null,
   capEngaged: isDailyCapEngaged(),
 };
+
+/**
+ * Module-scoped session metrics. Lives outside ChatState because no UI
+ * reads it — only the Day 26 analytics events do. A page reload resets
+ * it; that's fine (a "session" here is roughly "from new-chat to
+ * new-chat within one tab"). When `conversationId` is non-null on app
+ * boot but `startedAt` is null, the previous session's start is unknown
+ * — we deliberately do NOT synthesize a fake start and we do NOT fire
+ * `chat_session_started` for it; the next user-initiated newChat() will
+ * close it out silently and a fresh send() will open a new measured
+ * session.
+ */
+const sessionMetrics: SessionMetrics = {
+  conversationId: null,
+  startedAt: null,
+  turnCount: 0,
+};
+
+function fireSessionEndIfActive(): void {
+  if (
+    sessionMetrics.conversationId === null ||
+    sessionMetrics.startedAt === null ||
+    sessionMetrics.turnCount === 0
+  ) {
+    sessionMetrics.conversationId = null;
+    sessionMetrics.startedAt = null;
+    sessionMetrics.turnCount = 0;
+    return;
+  }
+  track("chat_session_ended", {
+    conversation_id: sessionMetrics.conversationId,
+    turn_count: sessionMetrics.turnCount,
+    duration_ms: Date.now() - sessionMetrics.startedAt,
+  });
+  sessionMetrics.conversationId = null;
+  sessionMetrics.startedAt = null;
+  sessionMetrics.turnCount = 0;
+}
+
+// Day 26 (Codex 2026-05-23 P2): without this listener, `chat_session_ended`
+// only fires when the user explicitly taps "new chat" — every other
+// session-ending path (tab close, browser back to a different origin,
+// PWA backgrounded on iOS) leaves a `chat_session_started` with no
+// matching end event, breaking duration/turn-count analytics for the
+// most common case. `pagehide` is the right lifecycle hook (more
+// reliable than `beforeunload` on iOS per memory.md 2026-05-17), and
+// posthog-js uses `navigator.sendBeacon` automatically during page
+// unload so the queued event still ships. The `window` guard is for
+// jsdom/test environments where `addEventListener` exists but the
+// event never fires — registering it is harmless.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    fireSessionEndIfActive();
+  });
+}
 
 const listeners = new Set<Listener>();
 
@@ -235,6 +307,9 @@ export const chatStore = {
    * doesn't outlive the conversation it belonged to.
    */
   newChat() {
+    // Fire chat_session_ended *before* nulling state.conversationId so
+    // the event carries the right id. No-op if no active session.
+    fireSessionEndIfActive();
     writePersistedConvoId(null);
     setState({
       messages: [],
@@ -243,6 +318,22 @@ export const chatStore = {
       lastError: null,
       streamingText: "",
     });
+  },
+
+  /**
+   * Explicit session-end hook for non-newChat session boundaries.
+   * Called from auth.ts on sign-out / token-expiry so an in-flight
+   * chat session doesn't leak past the session that owned it. The
+   * `pagehide` listener above covers the tab-close path; this covers
+   * the in-app sign-out path (Codex 2026-05-23 P2).
+   *
+   * Does NOT clear the rest of the chat state — that's `newChat()`'s
+   * job. Sign-out's `clearSession()` doesn't touch chat thread state
+   * either; the next sign-in starts fresh by rehydrating from the
+   * server-side conversation_id.
+   */
+  endSession() {
+    fireSessionEndIfActive();
   },
 
   /**
@@ -314,6 +405,15 @@ export const chatStore = {
       client_request_id: draft.clientRequestId,
     };
 
+    // Pre-confirm snapshot: used to decide whether this confirm is the
+    // user's first transaction (fires `firstTransaction` analytics
+    // milestone). `loaded === false` means the ledger hasn't been pulled
+    // yet — we can't know first-transaction status, so we skip the
+    // milestone rather than risk a false positive.
+    const ledgerPre = ledger.getSnapshot();
+    const isFirstTransaction =
+      ledgerPre.loaded && ledgerPre.transactions.length === 0;
+
     try {
       const result = await confirmTransaction(body);
       const tx = result.transaction;
@@ -321,6 +421,9 @@ export const chatStore = {
       // via ledger.refresh(); calling it here would re-trip a network round
       // trip that we don't need since `tx` already has the row.
       ledger.addTransaction(tx);
+      if (isFirstTransaction) {
+        track("onboarding_step_completed", { step: "firstTransaction" });
+      }
       // Flip the parse card to committed first; append the entry-moment
       // insight bubble after so it visually lands beneath the card.
       const committedMessages = state.messages.map((m) =>
@@ -448,6 +551,7 @@ export const chatStore = {
     try {
       const card = await confirmCard(body);
       ledger.addCard(card);
+      track("feature_used", { feature: "card_added" });
       const committedMessages = state.messages.map((m) =>
         m.id === msgId && m.role === "assistant" && m.kind === "card-parse"
           ? { ...m, draft, committedCardId: card.id, pendingSync: false }
@@ -563,6 +667,7 @@ export const chatStore = {
     try {
       const sub = await confirmSubscription(body);
       addSubscriptionLocal(sub);
+      track("feature_used", { feature: "subscription_added" });
       const committedMessages = state.messages.map((m) =>
         m.id === msgId &&
         m.role === "assistant" &&
@@ -996,6 +1101,8 @@ async function _streamOnce(messageText: string): Promise<void> {
       // tokens.
     },
     onDone: (payload) => {
+      const isFirstTurnOfSession =
+        sessionMetrics.conversationId !== payload.conversation_id;
       if (state.conversationId !== payload.conversation_id) {
         writePersistedConvoId(payload.conversation_id);
       }
@@ -1005,6 +1112,19 @@ async function _streamOnce(messageText: string): Promise<void> {
         streamingText: "",
         lastError: null,
       });
+      // Day 26 session metrics. A change in the resolved conversation_id
+      // means we've crossed into a new conversation (first turn after
+      // newChat() or app boot). Fire chat_session_started exactly once
+      // per session; bump turn_count on every successful done.
+      if (isFirstTurnOfSession) {
+        sessionMetrics.conversationId = payload.conversation_id;
+        sessionMetrics.startedAt = Date.now();
+        sessionMetrics.turnCount = 0;
+        track("chat_session_started", {
+          conversation_id: payload.conversation_id,
+        });
+      }
+      sessionMetrics.turnCount += 1;
       _renderTurn({
         conversation_id: payload.conversation_id,
         assistant_text: accumulated,

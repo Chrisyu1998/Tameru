@@ -127,8 +127,10 @@ def healthz() -> dict[str, bool]:
 
 
 @app.get("/me")
-def me(user: AuthedUser = Depends(get_current_user_jwt)) -> dict[str, str | None]:
-    """Returns the verified JWT identity plus the user's home currency.
+def me(
+    user: AuthedUser = Depends(get_current_user_jwt),
+) -> dict[str, str | bool | None]:
+    """Returns the verified JWT identity plus the user's preference columns.
 
     `home_currency` is null when no `users_meta` row exists yet (new user
     who hasn't completed onboarding's currency picker). The frontend keys
@@ -137,19 +139,28 @@ def me(user: AuthedUser = Depends(get_current_user_jwt)) -> dict[str, str | None
     gate (uses `get_current_user_jwt`, not `get_current_user_with_device`)
     because the frontend has to read this *before* it knows whether to
     bootstrap or claim — see app/auth.py.
+
+    `analytics_opted_out` and `weekly_digest_enabled` ride along so the
+    Day 26 PostHog wrapper can initialize opted-out by default and only
+    flip to opted-in once this response confirms — no events leak between
+    SDK boot and the first user action. Pre-bootstrap users (no
+    `users_meta` row) default to the column defaults: opted in to
+    analytics (false), opted in to the digest (true).
     """
     client = supabase_for_user(user.jwt)
     resp = (
         client.table("users_meta")
-        .select("home_currency")
+        .select("home_currency, analytics_opted_out, weekly_digest_enabled")
         .eq("user_id", str(user.user_id))
         .execute()
     )
-    home_currency = resp.data[0]["home_currency"] if resp.data else None
+    row = resp.data[0] if resp.data else {}
     return {
         "user_id": str(user.user_id),
         "email": user.email,
-        "home_currency": home_currency,
+        "home_currency": row.get("home_currency"),
+        "analytics_opted_out": bool(row.get("analytics_opted_out", False)),
+        "weekly_digest_enabled": bool(row.get("weekly_digest_enabled", True)),
     }
 
 

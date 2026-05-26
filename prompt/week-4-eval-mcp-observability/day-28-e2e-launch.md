@@ -26,14 +26,14 @@ A Playwright suite covers the golden path. PWA Lighthouse score holds ≥ 90. Pr
   - All migrations applied to prod.
   - All env vars set in Railway.
   - `pg_cron` jobs scheduled and verified (subscription auto-logger, AICallLog aggregator, memory prune).
-  - Resend domain verified, weekly digest test send works.
+  - Resend domain verified, weekly digest test send works, digest CTA links to `${FRONTEND_ORIGIN}/?source=digest` (Day 26b).
   - Anthropic ZDR request filed.
   - Sentry receiving events.
-  - PostHog receiving events.
+  - PostHog receiving events from the whitelist (Day 26) — verify at least `chat_session_started`, `feature_used`, `onboarding_step_completed`, and `weekly_digest_opened` (fire by tapping the digest CTA from a real inbox) all land. Verify an opted-out test user produces zero PostHog network requests across a full session.
   - Eval harness latest run: categorization ≥ 88%, chat extraction amount+merchant ≥ 93%, multi-hop tool sequence ≥ 85%.
   - Domain bound, HTTPS valid.
-  - `.env.example` matches actual required env vars.
-  - Privacy disclosure copy matches reality.
+  - `.env.example` matches actual required env vars (including `VITE_POSTHOG_KEY` and `VITE_POSTHOG_HOST=https://us.i.posthog.com`).
+  - Privacy disclosure copy matches reality — §9.4 (AI providers, ZDR status) **and** §9.5 (PostHog whitelist, US Cloud region) both rendered in Settings.
 - **Invite first 3 friends:**
   - Add their emails to a Supabase auth allowlist (or just share the URL — Google OAuth lets them sign up).
   - Send a 3-line message: what it is, what's missing, what feedback you want.

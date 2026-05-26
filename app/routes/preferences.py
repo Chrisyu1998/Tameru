@@ -1,13 +1,16 @@
-"""User preferences endpoint (Day 25 — `weekly_digest_enabled`).
+"""User preferences endpoint.
 
-Reads and updates the user-toggleable columns on `users_meta`.
+Reads and updates the user-toggleable columns on `users_meta`. v1 columns:
+`weekly_digest_enabled` (Day 25) and `analytics_opted_out` (Day 26).
 
 Service-role usage forbidden here — preferences are user-owned data
 and RLS does the work via the `users_meta_owner` policy
-(`USING/CHECK user_id = auth.uid()`). The same boolean is also flipped
-by the one-click unsubscribe route and the Resend webhook, which use
-service role *because* they have no user JWT in scope (CLAUDE.md
-invariant 1). All three paths converge on the same column.
+(`USING/CHECK user_id = auth.uid()`). The `weekly_digest_enabled` boolean
+is also flipped by the one-click unsubscribe route and the Resend
+webhook, which use service role *because* they have no user JWT in
+scope (CLAUDE.md invariant 1). All three paths converge on the same
+column. `analytics_opted_out` has no service-role write path — only
+the user can change it.
 """
 
 from __future__ import annotations
@@ -34,15 +37,27 @@ class PreferencesPatch(BaseModel):
     immutability rule).
     """
     weekly_digest_enabled: bool | None = Field(default=None)
+    analytics_opted_out: bool | None = Field(default=None)
 
     model_config = {"extra": "forbid"}
+
+
+class PreferencesResponse(BaseModel):
+    """Canonical state of every preference column after the write.
+
+    Returned by both PATCH and the empty-body PATCH used by the frontend
+    as a read endpoint. Pydantic models the shape explicitly so the
+    contract is part of the type system instead of a loose dict.
+    """
+    weekly_digest_enabled: bool
+    analytics_opted_out: bool
 
 
 @router.patch("/preferences")
 def patch_preferences(
     body: PreferencesPatch,
     user: AuthedUser = Depends(get_current_user_with_device),
-) -> dict[str, bool]:
+) -> PreferencesResponse:
     """Update one or more preference columns on the user's `users_meta` row.
 
     RLS owner-UPDATE policy scopes the write to `auth.uid() = user_id`
@@ -62,11 +77,12 @@ def patch_preferences(
     # optimistic value and use the server's. Cheap at one row.
     resp = (
         client.table("users_meta")
-        .select("weekly_digest_enabled")
+        .select("weekly_digest_enabled, analytics_opted_out")
         .eq("user_id", str(user.user_id))
         .execute()
     )
     row = resp.data[0] if resp.data else {}
-    return {
-        "weekly_digest_enabled": bool(row.get("weekly_digest_enabled", True)),
-    }
+    return PreferencesResponse(
+        weekly_digest_enabled=bool(row.get("weekly_digest_enabled", True)),
+        analytics_opted_out=bool(row.get("analytics_opted_out", False)),
+    )

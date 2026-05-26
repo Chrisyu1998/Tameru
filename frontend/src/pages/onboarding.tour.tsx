@@ -10,6 +10,7 @@ import { DigestEmailPreview } from "@/components/tour/DigestEmailPreview";
 import { tourFixtures } from "@/fixtures/tour";
 import { useAppStore } from "@/store";
 import { markOnboarded } from "@/lib/onboarding";
+import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
 interface TourScreen {
@@ -62,8 +63,12 @@ export default function TourPage() {
   //   - "log my first transaction": authed users land on `/` (their real
   //     home); unauthed users get the signin deep link so they don't
   //     bounce back to splash.
-  const importCsvCta = () => navigate("/onboarding?step=csvImport");
+  const importCsvCta = () => {
+    track("onboarding_step_completed", { step: "tourCompleted" });
+    navigate("/onboarding?step=csvImport");
+  };
   const logFirstCta = () => {
+    track("onboarding_step_completed", { step: "tourCompleted" });
     if (fullyOnboarded) {
       markOnboarded();
       navigate("/");

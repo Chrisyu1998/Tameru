@@ -5,6 +5,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 import { DeviceDisplacedModal } from './components/DeviceDisplacedModal';
 import { UpdateToast } from './components/UpdateToast';
 import { initAuth, startDeviceCheckPoll } from './lib/auth';
+import { initAnalytics } from './lib/analytics';
 import { setupAutoDrain } from './lib/offline_queue';
 import { useAppStore } from './store';
 import Layout, { NotFoundPage } from './pages/_layout';
@@ -55,6 +56,12 @@ function App() {
   useEffect(() => {
     let pollHandle: number | null = null;
     let teardownDrain: (() => void) | null = null;
+    // Init PostHog FIRST (synchronous) and BEFORE initAuth fires off the
+    // /me fetch. The SDK starts opted out via opt_out_capturing_by_default;
+    // initAuth's refreshHomeCurrency() flips that to opted-in after /me
+    // confirms analytics_opted_out === false. The strict ordering is the
+    // load-bearing piece of the leak-free-init invariant (Day 26).
+    initAnalytics();
     initAuth().then(() => {
       setAuthReady(true);
       pollHandle = startDeviceCheckPoll();

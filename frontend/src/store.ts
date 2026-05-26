@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+import { setOptOut } from './lib/analytics';
+
 /*
  * App-wide store. Source of truth for what api.ts attaches to each request:
  *   - jwt: from the Supabase JS session (initAuth + onAuthStateChange in
@@ -23,12 +25,21 @@ export type User = {
 
 export type HomeCurrency = string | null | undefined;
 
+/**
+ * Day 26: opt-out is mirrored here so analytics.track() can decide
+ * synchronously. `undefined` means "not yet resolved from /me" — the
+ * PostHog SDK stays opted out until this flips to a concrete boolean.
+ * The leak-free-init invariant in analytics.ts depends on this tristate.
+ */
+export type AnalyticsOptOut = boolean | undefined;
+
 type AppStore = {
   user: User | null;
   jwt: string | null;
   deviceId: string | null;
   displaced: boolean;
   homeCurrency: HomeCurrency;
+  analyticsOptedOut: AnalyticsOptOut;
   setSession: (next: {
     user: User | null;
     jwt: string | null;
@@ -37,6 +48,7 @@ type AppStore = {
   clearSession: () => void;
   setDisplaced: (next: boolean) => void;
   setHomeCurrency: (next: HomeCurrency) => void;
+  setAnalyticsOptedOut: (next: AnalyticsOptOut) => void;
 };
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -45,18 +57,36 @@ export const useAppStore = create<AppStore>((set) => ({
   deviceId: null,
   displaced: false,
   homeCurrency: undefined,
+  analyticsOptedOut: undefined,
   setSession: (next) => set(next),
   // clearSession keeps deviceId — it's a per-browser identifier, not a
   // session secret, and re-using it across sign-ins lets the user reclaim
   // their previous "this is browser A" identity if they sign in again.
-  // homeCurrency goes back to undefined so a re-sign-in re-fetches /me.
-  clearSession: () =>
+  // homeCurrency and analyticsOptedOut both go back to undefined so a
+  // re-sign-in re-fetches /me and PostHog's leak-free-init invariant
+  // (opted out until the next /me resolves) still holds.
+  //
+  // Day 26: also flip the PostHog SDK opted-out here. Without this, an
+  // opted-in user who signs out (or whose Supabase session expires)
+  // leaves the SDK opted in — subsequent public surfaces (onboarding,
+  // tour) would still fire events under that anonymous distinct id
+  // until the next /me resolves and re-confirms the preference. Done
+  // inside the setter so every clearSession caller (auth state change,
+  // device-displaced modal, anything future) gets it for free —
+  // there's no "remember to also opt out" footgun. setOptOut() is a
+  // no-op when posthog-js isn't initialized (no project key), so
+  // tests and key-less dev builds aren't affected.
+  clearSession: () => {
+    setOptOut(true);
     set((s) => ({
       user: null,
       jwt: null,
       deviceId: s.deviceId,
       homeCurrency: undefined,
-    })),
+      analyticsOptedOut: undefined,
+    }));
+  },
   setDisplaced: (next) => set({ displaced: next }),
   setHomeCurrency: (next) => set({ homeCurrency: next }),
+  setAnalyticsOptedOut: (next) => set({ analyticsOptedOut: next }),
 }));

@@ -309,7 +309,7 @@ export function useVoice({
       const code = mapErrorCode(event.error);
       const next: VoiceError = { code, raw: event.error };
       setError(next);
-      track("error_shown", { code: `voice_${code.replace(/-/g, "_")}` });
+      track("error_shown", { code: voiceErrorAnalyticsCode(code) });
       clearSilenceTimer();
       settledRef.current = true;
     };
@@ -418,6 +418,35 @@ function mapErrorCode(raw: string): VoiceErrorCode {
       return "audio-capture";
     default:
       return "unknown";
+  }
+}
+
+/**
+ * Convert the internal `VoiceErrorCode` (kebab-case) to the analytics
+ * `ErrorCode` literal (`voice_*` snake_case). Used by the onerror path
+ * so the firing call stays a literal that satisfies the analytics
+ * whitelist. Kept separate from `mapErrorCode` because analytics codes
+ * and overlay codes serve different purposes and may diverge later.
+ */
+function voiceErrorAnalyticsCode(
+  code: VoiceErrorCode,
+):
+  | "voice_not_allowed"
+  | "voice_no_speech"
+  | "voice_network"
+  | "voice_audio_capture"
+  | "voice_unknown" {
+  switch (code) {
+    case "not-allowed":
+      return "voice_not_allowed";
+    case "no-speech":
+      return "voice_no_speech";
+    case "network":
+      return "voice_network";
+    case "audio-capture":
+      return "voice_audio_capture";
+    case "unknown":
+      return "voice_unknown";
   }
 }
 

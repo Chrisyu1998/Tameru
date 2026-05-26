@@ -14,6 +14,7 @@ import {
   type CardNetwork,
   type CardProgram,
 } from "@/lib/cardsApi";
+import { track } from "@/lib/analytics";
 
 /*
  * Day 14 onboarding step — UX frame 4 "Add First Card."
@@ -173,6 +174,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         // join key for these rows; it's structural padding.
         client_request_id: crypto.randomUUID(),
       });
+      track("feature_used", { feature: "card_added" });
       onSaved();
     } catch (e) {
       if (isActiveCardExistsError(e)) {

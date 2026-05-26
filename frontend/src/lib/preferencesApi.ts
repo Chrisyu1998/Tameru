@@ -1,18 +1,21 @@
 /*
- * Client for /me/preferences — the user-toggleable columns on users_meta
- * (currently just weekly_digest_enabled per Day 25, DESIGN.md §6.4).
+ * Client for /me/preferences — the user-toggleable columns on users_meta.
  *
- * Read path: the toggle's initial value comes from /me (which would need
- * to start returning preferences too) — for v1 we just default-on in the
- * UI and write to the server on first toggle, then trust the server's
- * returned canonical state. A cleaner solution would extend /me; deferred
- * to keep Day 25's surface tight.
+ * v1 columns:
+ *   - weekly_digest_enabled  (Day 25, DESIGN.md §6.4)
+ *   - analytics_opted_out    (Day 26, DESIGN.md §9.5)
+ *
+ * The initial value of both columns now rides on /me (see lib/auth.ts
+ * MeResponse), so first paint already knows the user's preference and
+ * no double round-trip is required. PATCH still returns the canonical
+ * post-write state so callers can drop their optimistic value.
  */
 
 import { apiJson } from './api';
 
 export interface Preferences {
   weekly_digest_enabled: boolean;
+  analytics_opted_out: boolean;
 }
 
 export type PreferencesPatch = Partial<Preferences>;
@@ -26,7 +29,8 @@ export async function updatePreferences(patch: PreferencesPatch): Promise<Prefer
 
 export async function readPreferences(): Promise<Preferences> {
   // PATCH with empty body is a no-op write that returns canonical state.
-  // Cheaper than adding a GET endpoint server-side for one boolean at v1.
+  // Kept for callers that need to re-read after a side-effect (e.g. the
+  // /unsubscribe route flipping weekly_digest_enabled out of band).
   return apiJson<Preferences>('/me/preferences', {
     method: 'PATCH',
     body: {},

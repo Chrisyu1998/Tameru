@@ -9,8 +9,33 @@ import { CsvImportStep } from "@/features/onboarding/CsvImportStep";
 import { CsvProcessingStep } from "@/features/onboarding/CsvProcessingStep";
 import { OnboardingHeader } from "@/features/onboarding/OnboardingHeader";
 import { markOnboarded } from "@/lib/onboarding";
+import { track, type OnboardingStepName } from "@/lib/analytics";
 import { useAppStore } from "@/store";
 import type { Currency, OnboardingStep } from "@/features/onboarding/types";
+
+/**
+ * Mapping from wizard steps to their `onboarding_step_completed` event
+ * literal. `splash` and `csvProcessing` aren't analytics milestones
+ * (transient / not user-completed), so they map to `null` and the
+ * transition handler no-ops. `signin` is intentionally absent — real
+ * sign-in doesn't flow through goTo() (SignInStep ignores onContinue;
+ * Google OAuth navigates away, magic link round-trips through the
+ * URL), so the canonical fire-point is the `SIGNED_IN` event in
+ * `lib/auth.ts`'s onAuthStateChange handler. Leaving `signin` out
+ * here prevents a double-fire if a future SignInStep refactor adds
+ * an `onContinue` path.
+ */
+const COMPLETION_EVENT: Partial<Record<OnboardingStep, OnboardingStepName>> = {
+  philosophy: "philosophy",
+  currency: "currency",
+  addCard: "addCard",
+  csvImport: "csvImport",
+};
+
+function fireStepCompleted(step: OnboardingStep): void {
+  const name = COMPLETION_EVENT[step];
+  if (name) track("onboarding_step_completed", { step: name });
+}
 
 const STEP_ORDER: OnboardingStep[] = [
   "splash",
@@ -102,8 +127,17 @@ export default function OnboardingWizard() {
     }
   }, [jwt, homeCurrency, navigate, requested]);
 
-  const goTo = (next: OnboardingStep) => setStep(next);
+  const goTo = (next: OnboardingStep) => {
+    // Fire `onboarding_step_completed` for the step we're leaving,
+    // not the one we're entering. The transition is the completion
+    // signal — bailing out via the back button doesn't count.
+    fireStepCompleted(step);
+    setStep(next);
+  };
   const finish = () => {
+    // csvImport's "skip" / "done" both land here; treat as csvImport
+    // step completion regardless of whether rows were imported.
+    fireStepCompleted(step);
     markOnboarded();
     navigate("/");
   };

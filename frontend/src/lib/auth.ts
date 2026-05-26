@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 import { apiJson } from './api';
 import { useAppStore } from '../store';
+import { identifyUser, setOptOut, track } from './analytics';
+import { chatStore } from './chatStore';
 
 /*
  * Day 7 — single-active-device + home-currency capture.
@@ -37,6 +39,11 @@ export type MeResponse = {
   user_id: string;
   email: string;
   home_currency: AllowedCurrency | null;
+  // Day 26: rides along on /me so the PostHog wrapper can resolve the
+  // user's choice before lighting up. Defaults match the column defaults
+  // (analytics opted in / digest opted in) for pre-bootstrap users.
+  analytics_opted_out: boolean;
+  weekly_digest_enabled: boolean;
 };
 
 export type CheckDeviceResponse = {
@@ -117,6 +124,11 @@ export async function signInWithMagicLink(
 }
 
 export async function signOut(): Promise<void> {
+  // The SDK opt-out + distinct_id rotation happens in store.clearSession()
+  // (Day 26 P2 fix), which fires from onAuthStateChange's null branch
+  // when supabase.auth.signOut() resolves. Centralizing the side effect
+  // there means the device-displaced modal's defensive clearSession()
+  // and any future session-ending path also get it for free.
   await supabase.auth.signOut();
 }
 
@@ -137,7 +149,7 @@ export function initAuth(): Promise<void> {
   _initPromise = (async () => {
     const deviceId = getOrCreateDeviceId();
 
-    supabase.auth.onAuthStateChange((_event, session) => {
+    supabase.auth.onAuthStateChange((event, session) => {
       if (session) {
         useAppStore.getState().setSession({
           user: { id: session.user.id, email: session.user.email ?? '' },
@@ -146,11 +158,20 @@ export function initAuth(): Promise<void> {
         });
         // Best-effort: refresh home_currency on every auth change so the
         // onboarding gate sees the latest server view (e.g. post-bootstrap
-        // re-auth on a different tab).
-        void refreshHomeCurrency();
+        // re-auth on a different tab). On a Supabase 'SIGNED_IN' event we
+        // also fire the `signin` onboarding milestone — but only after
+        // /me resolves and `setOptOut(false)` has run, otherwise the
+        // SDK is still opted-out-by-default and the capture drops.
+        // Skipped on TOKEN_REFRESHED / USER_UPDATED / INITIAL_SESSION
+        // (those are passive). The signin path also catches re-sign-in
+        // from the device-displaced modal. (Codex 2026-05-23 P2/P3.)
+        void refreshHomeCurrency({ fireSigninMilestone: event === 'SIGNED_IN' });
       } else {
-        // Sign-out / token-refresh-failed — clear the JWT but keep deviceId
-        // around so we don't churn it on a re-sign-in.
+        // Sign-out / token-refresh-failed — end any in-flight chat
+        // session for analytics (Codex 2026-05-23 P2) then clear the
+        // JWT. clearSession itself opts the SDK out (store.ts) so any
+        // events captured between now and the next /me are dropped.
+        chatStore.endSession();
         useAppStore.getState().clearSession();
       }
     });
@@ -201,10 +222,63 @@ export function initAuth(): Promise<void> {
  * /auth/bootstrap yet, and bootstrap itself sets active_device_id in the
  * same transaction. Calling claim_device first would fail.
  */
-export async function refreshHomeCurrency(): Promise<void> {
+interface RefreshHomeCurrencyOptions {
+  /**
+   * When true and /me confirms the user is opted in, fires the
+   * `onboarding_step_completed: signin` analytics event after
+   * `setOptOut(false)` and `identifyUser()` have run. Set only from
+   * the `SIGNED_IN` Supabase event path — `INITIAL_SESSION` and
+   * `TOKEN_REFRESHED` are passive and don't qualify. Required because
+   * the SDK is opted-out-by-default at boot and after every
+   * `clearSession()`, so firing the milestone any earlier than this
+   * point silently drops the event (Codex 2026-05-23 P2).
+   */
+  fireSigninMilestone?: boolean;
+}
+
+export async function refreshHomeCurrency(
+  options: RefreshHomeCurrencyOptions = {},
+): Promise<void> {
+  // Snapshot identity at fetch start so a sign-out (or sign-in as a
+  // different user) that races the in-flight /me can't apply stale
+  // side effects on resolution. Without this guard, an opt-out flip
+  // by clearSession() can be undone by a late /me from the prior
+  // session, re-enabling PostHog and re-identifying the previous user
+  // (Codex 2026-05-23 P2).
+  const startingJwt = useAppStore.getState().jwt;
+  const startingUserId = useAppStore.getState().user?.id ?? null;
   try {
     const me = await fetchMe();
+    const current = useAppStore.getState();
+    // Bail out if the session changed under us. Three races to
+    // catch: (a) signed-out mid-flight (jwt now null); (b) signed in
+    // as a different user (user.id differs from snapshot); (c) /me
+    // returned data for someone else (defense in depth — backend
+    // shouldn't, but a misrouted response shouldn't move analytics).
+    if (
+      current.jwt !== startingJwt ||
+      current.user?.id !== startingUserId ||
+      current.user?.id !== me.user_id
+    ) {
+      return;
+    }
     useAppStore.getState().setHomeCurrency(me.home_currency);
+    // Day 26: mirror analytics opt-out from /me into the store and flip
+    // the PostHog SDK to match. This is the leak-free-init invariant's
+    // commit point — before this resolves, the SDK is opted out via
+    // opt_out_capturing_by_default. identifyUser ties subsequent events
+    // to user_id; no email/name/PII attached (DESIGN.md §9.5).
+    useAppStore.getState().setAnalyticsOptedOut(me.analytics_opted_out);
+    setOptOut(me.analytics_opted_out);
+    if (!me.analytics_opted_out) {
+      identifyUser(me.user_id);
+      // Fire the signin milestone *after* opt-in has actually taken
+      // effect, otherwise the SDK is still opted out from the init
+      // default and the capture drops on the floor.
+      if (options.fireSigninMilestone) {
+        track('onboarding_step_completed', { step: 'signin' });
+      }
+    }
     if (me.home_currency !== null) {
       const { deviceId } = useAppStore.getState();
       if (deviceId) {

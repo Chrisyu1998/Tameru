@@ -33,7 +33,11 @@ def test_patch_flips_weekly_digest(client, user_a):
         json={"weekly_digest_enabled": False},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"weekly_digest_enabled": False}
+    body = resp.json()
+    assert body["weekly_digest_enabled"] is False
+    # Day 26 expanded the response shape to include analytics_opted_out;
+    # the unrelated column must round-trip unchanged.
+    assert "analytics_opted_out" in body
 
     after = (
         db.table("users_meta")
@@ -50,6 +54,43 @@ def test_patch_flips_weekly_digest(client, user_a):
     ).execute()
 
 
+def test_patch_flips_analytics_opted_out(client, user_a):
+    """PATCH with analytics_opted_out=true flips the column under the user's JWT (Day 26).
+
+    Owner-UPDATE RLS scopes the write; no service-role path. The
+    response carries the canonical post-write state of all preference
+    columns so the frontend can drop optimistic UI state without a
+    follow-up read.
+    """
+    db = supabase_for_user(user_a.jwt)
+    db.table("users_meta").update({"analytics_opted_out": False}).eq(
+        "user_id", user_a.id
+    ).execute()
+
+    resp = client.patch(
+        "/me/preferences",
+        headers=_headers(user_a),
+        json={"analytics_opted_out": True},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["analytics_opted_out"] is True
+
+    after = (
+        db.table("users_meta")
+        .select("analytics_opted_out")
+        .eq("user_id", user_a.id)
+        .execute()
+        .data[0]
+    )
+    assert after["analytics_opted_out"] is True
+
+    # Cleanup: restore for downstream tests.
+    db.table("users_meta").update({"analytics_opted_out": False}).eq(
+        "user_id", user_a.id
+    ).execute()
+
+
 def test_patch_empty_body_returns_state_no_write(client, user_a):
     """Empty PATCH is a read — returns canonical state without writing.
 
@@ -57,13 +98,15 @@ def test_patch_empty_body_returns_state_no_write(client, user_a):
     avoids adding a separate GET endpoint for one boolean.
     """
     db = supabase_for_user(user_a.jwt)
-    db.table("users_meta").update({"weekly_digest_enabled": True}).eq(
-        "user_id", user_a.id
-    ).execute()
+    db.table("users_meta").update(
+        {"weekly_digest_enabled": True, "analytics_opted_out": False}
+    ).eq("user_id", user_a.id).execute()
 
     resp = client.patch("/me/preferences", headers=_headers(user_a), json={})
     assert resp.status_code == 200
-    assert resp.json() == {"weekly_digest_enabled": True}
+    body = resp.json()
+    assert body["weekly_digest_enabled"] is True
+    assert body["analytics_opted_out"] is False
 
 
 def test_patch_unknown_field_rejected(client, user_a):

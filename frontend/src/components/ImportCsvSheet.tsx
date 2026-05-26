@@ -15,6 +15,7 @@ import {
 } from "@/lib/importsApi";
 import { commitCsv, type ImportStreamError } from "@/lib/imports_stream";
 import { ApiError } from "@/lib/api";
+import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
 /**
@@ -142,11 +143,15 @@ export function ImportCsvSheet({ open, onClose }: ImportCsvSheetProps) {
         ),
       onDone: (result) => {
         setPhase({ kind: "done", result });
-        // Refresh the ledger so /breakdown, sidebar totals, etc.
-        // reflect the imported rows immediately. Fire-and-forget —
-        // a failure logs in `ledger.refresh()` and the user can
-        // hard-reload as a manual fallback.
+        // Fire feature_used only when the import actually committed at
+        // least one row. A zero-insert run (all duplicates / all skips)
+        // isn't a use of the import feature in the analytics sense.
         if (result.inserted > 0) {
+          track("feature_used", { feature: "csv_import" });
+          // Refresh the ledger so /breakdown, sidebar totals, etc.
+          // reflect the imported rows immediately. Fire-and-forget —
+          // a failure logs in `ledger.refresh()` and the user can
+          // hard-reload as a manual fallback.
           void ledger.refresh();
         }
       },

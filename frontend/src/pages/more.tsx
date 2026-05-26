@@ -240,21 +240,22 @@ function NotificationsSheet({
 
   // Re-read every time the sheet opens — the Settings page or the
   // unsubscribe/webhook paths may have flipped the column out of band
-  // since last open.
+  // since last open. The read shares the same monotonic sequence as
+  // writes (Codex 2026-05-23 P2): without this, a slow open-time read
+  // resolving *after* a user toggle would overwrite the just-persisted
+  // value with the stale pre-toggle one.
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
+    const myRequest = ++latestRequest.current;
     readPreferences()
       .then((prefs) => {
-        if (!cancelled) setDigest(prefs.weekly_digest_enabled);
+        if (myRequest !== latestRequest.current) return;
+        setDigest(prefs.weekly_digest_enabled);
       })
       .catch(() => {
         // Network failure: keep whatever value we have; user can
         // still toggle and the PATCH will reconcile.
       });
-    return () => {
-      cancelled = true;
-    };
   }, [open]);
 
   const handleDigestChange = (next: boolean) => {

@@ -22,6 +22,7 @@ import {
 } from "@/lib/chat";
 import { chatStore, useChatStore } from "@/lib/chatStore";
 import type { Card, Transaction } from "@/lib/fixtures";
+import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
 const SILENCE_WINDOW_MS = 1500;
@@ -47,6 +48,11 @@ export default function ChatPage() {
   useEffect(() => {
     const seed = consumeChatSeed();
     if (seed) setInput(seed + " ");
+    // feature_used: chat — fires once per page mount. The actual
+    // chat_session_started analytics event is gated on a successful
+    // first turn (see chatStore._streamOnce onDone); this is the
+    // "user opened the chat surface" measure.
+    track("feature_used", { feature: "chat" });
   }, []);
 
   // On mount, if the store has a persisted conversation id but no in-memory
