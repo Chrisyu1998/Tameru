@@ -473,6 +473,8 @@ All three paths converge on the same `weekly_digest_enabled` boolean which the c
 
 **Email shape:** both HTML (inline styles only — Gmail strips `<style>` blocks and class names) and plaintext, generated together. Plaintext is required for deliverability; spam filters score HTML/text similarity.
 
+**"View this week in Tameru" CTA (Day 26b).** The email includes a button-styled link to `${FRONTEND_ORIGIN}/?source=digest` (the Vercel PWA host, NOT `BACKEND_PUBLIC_URL` — `/` is the SPA root, not a FastAPI route). The PWA fires the `weekly_digest_opened` PostHog event (§9.5 whitelist) on landing when the query param is present, then strips it via `history.replaceState`. No open-tracking pixel, no Resend webhook, no per-user token in the URL (the event carries no identity claim — `weekly_digest_opened` props are `Record<string, never>`). The CTA button is a navigation affordance, NOT one of the ≤5 prose content blocks — the prose ceiling still applies to the region above it.
+
 **Cost:** ~$0.07/user/month for the Sonnet call × 4 sends/month (§11). At v1's ~10 users this is ~$0.70/month total.
 
 ### 6.5 Subscription Manager
@@ -1253,7 +1255,7 @@ PostHog tracks **product usage**, not financial behavior. The "client-side quest
 - `chat_session_started`, `chat_session_ended` (timestamp, turn count, total duration)
 - `feature_used` (enum: `dashboard | manual_entry | chat | csv_import | card_added | subscription_added`)
 - `onboarding_step_completed` (step name)
-- `weekly_digest_opened`
+- `weekly_digest_opened` — fired client-side from the PWA landing handler (`frontend/src/lib/digestLanding.ts`) when the URL carries `?source=digest`, NOT from Resend. The digest email's CTA links to `${FRONTEND_ORIGIN}/?source=digest`; the handler runs after `initAuth()` resolves (so the PostHog SDK has flipped out of opt-out-by-default) and strips the param via `history.replaceState`. Anonymous-device clicks (no Supabase session on the landing device) are an accepted measurement gap at v1 scale — without a session `setOptOut(false)` never runs, the SDK stays opted-out-by-default, and `track()` no-ops. The underreport is a constant fraction that doesn't bias week-over-week trends; invariant 5 (single active device per user) means most digest taps come from the device that already holds the session. NOT worked around via localStorage-stash-and-replay or anonymous opt-in — both would violate the leak-free-init invariant above for a measurement gain that doesn't gate any Phase 1 decision.
 - `error_shown` (error type code only, no message)
 
 **Never tracked:** transaction amounts, merchant names, card details, question text, or any other financial data.

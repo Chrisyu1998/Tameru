@@ -236,7 +236,7 @@ def test_sonnet_failure_falls_back():
 
 
 def test_render_email_shape():
-    """Rendered email is ≤5 content blocks; both HTML and plaintext present."""
+    """Rendered email is ≤5 prose blocks + CTA; both HTML and plaintext present."""
     payload = DigestPayload(
         user_id=USER_ID,
         week_start=datetime(2026, 5, 11, tzinfo=ET),
@@ -252,12 +252,17 @@ def test_render_email_shape():
         observation="Dining was higher than usual this week.",
         nudge=None,
     )
-    rendered = render_email(payload, unsubscribe_url="https://x/unsub?u=1&token=t")
+    rendered = render_email(
+        payload,
+        unsubscribe_url="https://x/unsub?u=1&token=t",
+        app_cta_url="https://app.example/?source=digest",
+    )
     assert rendered.subject.startswith("Tameru")
-    # Plaintext: total + top + observation + unsubscribe = 4 blocks
-    # (no nudge in this fixture).
+    # Plaintext: total + top + observation + CTA + unsubscribe = 5 blocks
+    # (CTA is a navigation affordance, NOT one of the ≤5 *prose* blocks
+    # per DESIGN.md §6.4; the prose count is 3 here without a nudge).
     text_blocks = [b for b in rendered.text.strip().split("\n\n") if b.strip()]
-    assert len(text_blocks) == 4
+    assert len(text_blocks) == 5
     assert "Unsubscribe: https://x/unsub" in rendered.text
     # HTML carries both inline-styled paragraphs and the unsubscribe link.
     assert 'style="' in rendered.html
@@ -265,6 +270,60 @@ def test_render_email_shape():
     # Inline style only — no <style> block, no class names.
     assert "<style" not in rendered.html
     assert ' class="' not in rendered.html
+
+
+def test_render_email_includes_cta_html_and_text():
+    """Day 26b — CTA appears in HTML (anchor) and plaintext (label + URL)."""
+    payload = _basic_payload()
+    rendered = render_email(
+        payload,
+        unsubscribe_url="https://x/unsub?u=1&token=t",
+        app_cta_url="https://app.example/?source=digest",
+    )
+
+    # HTML: a button-styled anchor pointing at the CTA URL.
+    assert 'href="https://app.example/?source=digest"' in rendered.html
+    assert "View this week in Tameru" in rendered.html
+
+    # Plaintext: CTA label + URL on its own line, ABOVE the Unsubscribe
+    # line. Splitting on blank lines: total, top, observation, CTA, unsub.
+    text_blocks = [b for b in rendered.text.strip().split("\n\n") if b.strip()]
+    cta_line = "View this week in Tameru: https://app.example/?source=digest"
+    assert cta_line in text_blocks
+    assert text_blocks.index(cta_line) < text_blocks.index(
+        "Unsubscribe: https://x/unsub?u=1&token=t"
+    )
+
+
+def test_render_email_requires_app_cta_url_kwarg():
+    """Day 26b — omitting app_cta_url raises TypeError (kwarg-only, required).
+
+    The signature is keyword-only because positional ordering would
+    silently swap unsubscribe_url and app_cta_url; the TypeError is the
+    structural guard against that.
+    """
+    payload = _basic_payload()
+    with pytest.raises(TypeError):
+        render_email(payload, unsubscribe_url="https://x/unsub?u=1&token=t")  # type: ignore[call-arg]
+
+
+def _basic_payload() -> DigestPayload:
+    """Minimal DigestPayload fixture for CTA-rendering tests."""
+    return DigestPayload(
+        user_id=USER_ID,
+        week_start=datetime(2026, 5, 11, tzinfo=ET),
+        week_end=datetime(2026, 5, 17, 23, 59, 59, tzinfo=ET),
+        week_total=Decimal("300.00"),
+        baseline_avg=Decimal("200.00"),
+        top_category=CategoryRollup(
+            category="Dining",
+            week_total=Decimal("150.00"),
+            baseline_avg=Decimal("100.00"),
+        ),
+        home_currency="USD",
+        observation="Dining was higher than usual this week.",
+        nudge=None,
+    )
 
 
 # ---------------------------------------------------------------------------

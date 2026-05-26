@@ -6,6 +6,7 @@ import { DeviceDisplacedModal } from './components/DeviceDisplacedModal';
 import { UpdateToast } from './components/UpdateToast';
 import { initAuth, startDeviceCheckPoll } from './lib/auth';
 import { initAnalytics } from './lib/analytics';
+import { initDigestLandingTracking } from './lib/digestLanding';
 import { setupAutoDrain } from './lib/offline_queue';
 import { useAppStore } from './store';
 import Layout, { NotFoundPage } from './pages/_layout';
@@ -64,6 +65,13 @@ function App() {
     initAnalytics();
     initAuth().then(() => {
       setAuthReady(true);
+      // Day 26b — fire `weekly_digest_opened` if the URL carries
+      // `?source=digest`. MUST run after initAuth() resolves (which is
+      // what flips PostHog out of opt-out-by-default via setOptOut from
+      // refreshHomeCurrency); running earlier would no-op for opted-in
+      // users. Anonymous landings stay no-ops by design — see
+      // digestLanding.ts header for the accepted-gap rationale.
+      initDigestLandingTracking();
       pollHandle = startDeviceCheckPoll();
       // Offline-queue drain: listens for the `online` event, drains
       // queued confirms on app mount when already online, and rebinds the

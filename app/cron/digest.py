@@ -105,7 +105,9 @@ def send_weekly_digests(
             try:
                 payload, _call_log = compose_digest(admin, user_id)
                 unsubscribe_url, _mailto = _unsubscribe_urls(user_id)
-                rendered = render_email(payload, unsubscribe_url)
+                rendered = render_email(
+                    payload, unsubscribe_url, app_cta_url=_app_cta_url()
+                )
                 print(f"--- DRY RUN: {email} ---")
                 print(f"Subject: {rendered.subject}")
                 print()
@@ -136,7 +138,9 @@ def send_weekly_digests(
         try:
             payload, call_log = compose_digest(admin, user_id)
             unsubscribe_url, unsubscribe_mailto = _unsubscribe_urls(user_id)
-            rendered = render_email(payload, unsubscribe_url)
+            rendered = render_email(
+                payload, unsubscribe_url, app_cta_url=_app_cta_url()
+            )
         except Exception as exc:
             report.failed += 1
             logger.exception(
@@ -494,6 +498,26 @@ def _unsubscribe_urls(user_id: UUID) -> tuple[str, str]:
     mailto_subject = f"user={user_id}+kind=digest+token={token}"
     mailto = f"mailto:unsubscribe@mail.tameru.xyz?subject={mailto_subject}"
     return https, mailto
+
+
+def _app_cta_url() -> str:
+    """Build the "View this week in Tameru" CTA URL (Day 26b).
+
+    Points at the Vercel PWA host (FRONTEND_ORIGIN), NOT
+    BACKEND_PUBLIC_URL — the CTA lands the user on the SPA at `/`.
+    `?source=digest` is what the PWA landing handler reads to fire the
+    `weekly_digest_opened` PostHog event, then strips.
+
+    `.rstrip("/")` normalizes a trailing slash so we don't emit
+    `https://x.xyz//?source=digest`. Lazy read matches the
+    `_unsubscribe_urls` pattern; the cron is a separate Railway service
+    so `app/main.py`'s `_REQUIRED_ENV_VARS` lifespan check doesn't
+    protect it — this is where the cron's fail-loud lives.
+    """
+    base = os.environ.get("FRONTEND_ORIGIN", "").rstrip("/")
+    if not base:
+        raise RuntimeError("FRONTEND_ORIGIN is not set for the digest cron.")
+    return f"{base}/?source=digest"
 
 
 def _safe_log_ai_call(admin, *, user_id: UUID, call_log: SonnetCallLog) -> None:

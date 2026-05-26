@@ -465,6 +465,36 @@ def test_send_failure_does_not_halt_batch(user_a, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Day 26b — CTA URL builder (unit tests, no DB).
+# ---------------------------------------------------------------------------
+
+
+def test_app_cta_url_clean_origin(monkeypatch):
+    """`_app_cta_url` builds `{origin}/?source=digest` from a clean FRONTEND_ORIGIN."""
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://tameru.xyz")
+    assert cron_digest._app_cta_url() == "https://tameru.xyz/?source=digest"
+
+
+def test_app_cta_url_strips_trailing_slash(monkeypatch):
+    """Trailing-slash FRONTEND_ORIGIN must NOT produce a double-slash URL.
+
+    Load-bearing per memory.md 2026-05-26 — a value like
+    `https://tameru.xyz/` would otherwise emit `https://tameru.xyz//?source=digest`
+    which still resolves but breaks URL-equality assertions and reads
+    confusingly in any log line.
+    """
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://tameru.xyz/")
+    assert cron_digest._app_cta_url() == "https://tameru.xyz/?source=digest"
+
+
+def test_app_cta_url_raises_when_unset(monkeypatch):
+    """Missing FRONTEND_ORIGIN fails loud — Day 26b's cron-side fail-loud."""
+    monkeypatch.delenv("FRONTEND_ORIGIN", raising=False)
+    with pytest.raises(RuntimeError, match="FRONTEND_ORIGIN"):
+        cron_digest._app_cta_url()
+
+
+# ---------------------------------------------------------------------------
 # Fixtures + helpers.
 # ---------------------------------------------------------------------------
 
@@ -477,6 +507,10 @@ def _required_env(monkeypatch):
     # host in prod), not the Vercel frontend — /unsubscribe is a FastAPI
     # route. Tests use a stub origin.
     monkeypatch.setenv("BACKEND_PUBLIC_URL", "https://api-test.local")
+    # Day 26b — the CTA URL points at the Vercel PWA host. Tests use a
+    # stub origin; the `_app_cta_url` unit tests below verify the
+    # trailing-slash normalization and the fail-loud behavior directly.
+    monkeypatch.setenv("FRONTEND_ORIGIN", "https://app-test.local")
 
 
 def _seed_recent_tx(user) -> None:

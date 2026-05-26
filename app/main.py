@@ -98,6 +98,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # which is worse than a noisy boot crash that demands a fix.
     if os.environ.get("APP_ENV", "").lower() == "production" and not os.environ.get("SENTRY_DSN"):
         missing.append("SENTRY_DSN")
+    # FRONTEND_ORIGIN is the Vercel PWA host added to the CORS allowlist
+    # (`_cors_allowed_origins()`). Unconditionally required would break
+    # local boots — `.env.example` documents it as commented-out for dev
+    # because http://localhost:5173 is always allowed. In production a
+    # missing value means every browser request 4xxs on the CORS preflight,
+    # so fail loud there. The digest cron's own module-level check
+    # (`app/cron/digest.py::_app_cta_url`) covers the cron service
+    # regardless of APP_ENV.
+    if os.environ.get("APP_ENV", "").lower() == "production" and not os.environ.get("FRONTEND_ORIGIN"):
+        missing.append("FRONTEND_ORIGIN")
     if missing:
         raise RuntimeError(
             "Tameru refusing to start — missing required environment "

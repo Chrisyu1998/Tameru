@@ -175,7 +175,12 @@ def compose_digest(
     return payload, sonnet_call_log
 
 
-def render_email(payload: DigestPayload, unsubscribe_url: str) -> RenderedEmail:
+def render_email(
+    payload: DigestPayload,
+    unsubscribe_url: str,
+    *,
+    app_cta_url: str,
+) -> RenderedEmail:
     """Render the digest into HTML + plaintext bodies (≤5 content blocks each).
 
     Inline styles only — Gmail strips `<style>` blocks and class names.
@@ -183,6 +188,11 @@ def render_email(payload: DigestPayload, unsubscribe_url: str) -> RenderedEmail:
     the List-Unsubscribe header carries the same URL: the header is
     what Gmail/Yahoo's "Unsubscribe" button hits; the body link is what
     users actually find when they want out.
+
+    `app_cta_url` is the "View this week in Tameru" CTA target — the
+    Vercel PWA host with `?source=digest` appended (Day 26b). Required
+    kwarg: omitting it raises `TypeError`. The CTA is a navigation
+    affordance, NOT one of the ≤5 prose content blocks.
     """
     week_label = payload.week_start.strftime("%b %-d") + "–" + payload.week_end.strftime("%-d")
     delta = payload.week_total - payload.baseline_avg
@@ -211,10 +221,13 @@ def render_email(payload: DigestPayload, unsubscribe_url: str) -> RenderedEmail:
 
     subject = f"Tameru — week of {week_label}"
 
-    # Plaintext: one block per line, blank lines between.
+    # Plaintext: one block per line, blank lines between. The CTA line
+    # sits above Unsubscribe — closer to the prose, separate from the
+    # housekeeping footer.
     text_blocks = [line_total, line_top, line_observation]
     if line_nudge:
         text_blocks.append(line_nudge)
+    text_blocks.append(f"View this week in Tameru: {app_cta_url}")
     text_blocks.append(f"Unsubscribe: {unsubscribe_url}")
     text = "\n\n".join(text_blocks) + "\n"
 
@@ -225,6 +238,15 @@ def render_email(payload: DigestPayload, unsubscribe_url: str) -> RenderedEmail:
     p_style = (
         "margin:0 0 12px 0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"
         "'Segoe UI',sans-serif;color:#1a1a1a;"
+    )
+    # Inline-styled pill button. Class names are stripped by Gmail, so
+    # every visual property lives on the `style` attribute. Single
+    # dark-on-light treatment to match the digest's restrained tone.
+    cta_wrap_style = "margin:24px 0 0 0;"
+    cta_link_style = (
+        "display:inline-block;padding:10px 20px;background:#1a1a1a;"
+        "color:#fafafa;text-decoration:none;border-radius:8px;"
+        "font:14px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
     )
     unsub_style = (
         "margin:24px 0 0 0;font:12px/1.5 -apple-system,BlinkMacSystemFont,"
@@ -237,6 +259,14 @@ def render_email(payload: DigestPayload, unsubscribe_url: str) -> RenderedEmail:
     ]
     if line_nudge:
         parts.append(f'<p style="{p_style}">{_html_escape(line_nudge)}</p>')
+    # CTA sits after the prose, before the unsubscribe footer — Day 26b.
+    parts.append(
+        f'<p style="{cta_wrap_style}">'
+        f'<a href="{_html_escape(app_cta_url)}" style="{cta_link_style}">'
+        f"View this week in Tameru"
+        f"</a>"
+        f"</p>"
+    )
     parts.append(
         f'<p style="{unsub_style}">'
         f'<a href="{_html_escape(unsubscribe_url)}" style="color:#888;">Unsubscribe</a>'
