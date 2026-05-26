@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Bell,
@@ -18,6 +18,10 @@ import { signOut } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
+import {
+  readPreferences,
+  updatePreferences,
+} from "@/lib/preferencesApi";
 
 type SheetKey = "import" | "notifications" | "export" | "signout" | null;
 
@@ -219,8 +223,59 @@ function NotificationsSheet({
   open: boolean;
   onClose: () => void;
 }) {
+  // Server-backed (Day 25, DESIGN.md §6.4). Same pattern as Settings →
+  // Notifications panel in settings.tsx: read on mount/open, optimistic
+  // PATCH on toggle, ignore stale responses via a request-sequence ref.
+  // No "save" button — each toggle persists immediately (per-write
+  // PATCH), so a separate save step would lie about when the value is
+  // persisted. `nudges` stays purely local for now — Day 25's only
+  // server-backed column is `weekly_digest_enabled`.
   const [digest, setDigest] = useState(true);
+  const [savingDigest, setSavingDigest] = useState(false);
   const [nudges, setNudges] = useState(true);
+
+  // Monotonic counter so a stale PATCH response can't overwrite a
+  // newer user toggle. See settings.tsx for the long-form rationale.
+  const latestRequest = useRef(0);
+
+  // Re-read every time the sheet opens — the Settings page or the
+  // unsubscribe/webhook paths may have flipped the column out of band
+  // since last open.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    readPreferences()
+      .then((prefs) => {
+        if (!cancelled) setDigest(prefs.weekly_digest_enabled);
+      })
+      .catch(() => {
+        // Network failure: keep whatever value we have; user can
+        // still toggle and the PATCH will reconcile.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const handleDigestChange = (next: boolean) => {
+    if (savingDigest) return;
+    setDigest(next);
+    setSavingDigest(true);
+    const myRequest = ++latestRequest.current;
+    updatePreferences({ weekly_digest_enabled: next })
+      .then((prefs) => {
+        if (myRequest !== latestRequest.current) return;
+        setDigest(prefs.weekly_digest_enabled);
+      })
+      .catch(() => {
+        if (myRequest !== latestRequest.current) return;
+        setDigest(!next);
+      })
+      .finally(() => {
+        if (myRequest !== latestRequest.current) return;
+        setSavingDigest(false);
+      });
+  };
 
   return (
     <BottomSheet open={open} onClose={onClose} ariaLabel="notifications">
@@ -234,9 +289,10 @@ function NotificationsSheet({
       <div className="mt-5 divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <ToggleRow
           label="weekly digest"
-          desc="a quiet recap every sunday morning."
+          desc="a quiet recap every monday morning. unsubscribe link in every send."
           checked={digest}
-          onChange={setDigest}
+          onChange={handleDigestChange}
+          disabled={savingDigest}
         />
         <ToggleRow
           label="entry nudges"
@@ -251,7 +307,7 @@ function NotificationsSheet({
         onClick={onClose}
         className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
       >
-        save
+        done
       </button>
     </BottomSheet>
   );
@@ -262,11 +318,13 @@ function ToggleRow({
   desc,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   desc: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 py-3.5">
@@ -278,10 +336,13 @@ function ToggleRow({
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-disabled={disabled}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
           "relative h-6 w-10 flex-shrink-0 rounded-full transition-colors",
-          checked ? "bg-moss" : "bg-sunken"
+          checked ? "bg-moss" : "bg-sunken",
+          disabled && "opacity-50 cursor-not-allowed"
         )}
       >
         <span
