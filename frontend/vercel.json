@@ -2,5 +2,28 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https://bvehjjrtcnnhjmsyoheb.supabase.co wss://bvehjjrtcnnhjmsyoheb.supabase.co https://tameru-production.up.railway.app https://api.tameru.xyz https://us.i.posthog.com https://us-assets.i.posthog.com https://*.ingest.us.sentry.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(self), geolocation=(), payment=()"
+        }
+      ]
+    }
   ]
 }

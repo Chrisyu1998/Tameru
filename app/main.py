@@ -3,9 +3,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from asgi_correlation_id import CorrelationIdMiddleware
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
 
 from app.auth import AuthedUser, get_current_user_jwt
 from app.db import supabase_for_user
@@ -22,6 +24,7 @@ from app.routes import memory as memory_routes
 from app.routes import preferences as preferences_routes
 from app.routes import subscriptions as subscriptions_routes
 from app.routes import transactions as transactions_routes
+from app.routes import export as export_routes
 from app.routes import unsubscribe as unsubscribe_routes
 from app.routes import webhooks_resend as webhooks_resend_routes
 from app.sentry_filters import init_sentry
@@ -174,6 +177,32 @@ def me(
     }
 
 
+# Minimal hardening for the JSON API (Day 27). The full CSP lives at the
+# Vercel edge — CSP protects the document origin, and this process serves
+# only JSON to a cross-origin Bearer-authenticated client (no HTML, no
+# scripts). The three headers below still matter even without a document:
+#   - X-Content-Type-Options: nosniff blocks MIME-sniffing on JSON
+#     responses, neutralizing the rare "API returns text the browser
+#     decides to execute as a script" trick.
+#   - X-Frame-Options: DENY ensures error pages or any HTML accidentally
+#     served from this origin can't be framed (modern browsers prefer CSP
+#     frame-ancestors, set on the Vercel side; this is the legacy-browser
+#     fallback for the API origin).
+#   - Referrer-Policy: no-referrer keeps the API origin out of outbound
+#     Referer headers if the user ever clicks a link rendered from a JSON
+#     response (e.g. a 404 page from a typo'd URL).
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach hardening headers to every JSON-API response."""
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """Run the request and stamp hardening headers on the response."""
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
@@ -207,6 +236,11 @@ app.add_middleware(
     # credentials off sidesteps SameSite / third-party-cookie complexity.
     allow_credentials=False,
 )
+
+# Added BEFORE CorrelationIdMiddleware in source so it sits OUTSIDE Cors
+# in the runtime stack — the headers therefore ride on preflight 200s and
+# on the synthesized 500 from `_unhandled_exception_handler`.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # CorrelationIdMiddleware mounts AFTER CORSMiddleware in the source but
 # runs as the OUTERMOST middleware at request time — Starlette's
@@ -267,6 +301,7 @@ app.include_router(subscriptions_routes.router)
 app.include_router(imports_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(preferences_routes.router)
+app.include_router(export_routes.router)
 app.include_router(unsubscribe_routes.router)
 app.include_router(webhooks_resend_routes.router)
 

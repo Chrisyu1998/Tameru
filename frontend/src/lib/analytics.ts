@@ -76,7 +76,16 @@ export type Event =
         // forbids a separate manual-entry form in v1, so the literal is
         // reserved for the post-Phase-1 path and is intentionally
         // omitted from the v1 union.
-        feature: 'dashboard' | 'chat' | 'csv_import' | 'card_added' | 'subscription_added';
+        // `data_export` fires from the "Export my data" button on the
+        // /privacy and Settings → Privacy surfaces (Day 27, §9.6) — a
+        // structural usage signal only; no payload size or filename.
+        feature:
+          | 'dashboard'
+          | 'chat'
+          | 'csv_import'
+          | 'card_added'
+          | 'subscription_added'
+          | 'data_export';
       };
     }
   | { name: 'onboarding_step_completed'; props: { step: OnboardingStepName } }

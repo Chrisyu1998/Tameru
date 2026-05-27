@@ -1242,9 +1242,16 @@ Financial data lives in your Supabase project under RLS. The only third-party eg
 - **Anthropic:** Zero Data Retention (ZDR) requested for the Tameru organization. Default retention is 30 days for trust & safety; ZDR brings this to zero. Not used for training under any tier. Card-multiplier lookups also go through Anthropic via the `web_search` server tool — the public card name + last 4 are sent; no transaction data.
 - **Google Gemini:** paid tier only. Paid tier does not use API data for training. Free tier does — never used.
 
-**User disclosure copy:**
+**User disclosure copy.** The in-app copy (rendered by
+`frontend/src/components/PrivacyDisclosure.tsx`, shown on both
+`/privacy` and `Settings → Privacy`) is hedged until Anthropic confirms
+ZDR — the paragraph below is the granted-state version; the in-app copy
+mirrors the "requested, not yet active" wording above. When Anthropic
+grants ZDR, drop the hedge in both surfaces (this paragraph and the
+component) in the same PR; see `docs/zdr_request.md` for the request
+log.
 
-> Tameru sends the merchant name and amount of each transaction to Anthropic and Google in order to categorize it and answer your questions. Both providers are configured for no data retention beyond the API call itself, and neither uses your data for training. Card multiplier lookups go to Anthropic too (via the same configured no-retention setup) and include only the public card name and last 4 digits — no transaction data.
+> When you chat with Tameru, your message goes to Anthropic — that covers the chat agent (adding transactions, answering questions) and the `web_search` card-multiplier lookup (public card name + last 4 only, never transaction data). Anthropic's default 30-day trust & safety retention drops to zero under ZDR (requested for the Tameru org); not used for training under any tier. Google Gemini receives the merchant name and amount of each transaction to pick a category (the `propose_transaction` Gemini fallback when Claude doesn't supply one), and parses CSV imports and receipt photos when those features are used. Gemini is on its paid tier, which does not use API data for training; the free tier is forbidden.
 
 ### 9.5 PostHog — Structural Events Only
 
@@ -1264,7 +1271,39 @@ User can opt out entirely in Settings (`users_meta.analytics_opted_out`).
 
 ### 9.6 Data Export
 
-`/export` endpoint dumps all transactions, cards, subscriptions as a single JSON file. Accessible from chat ("Export my data"). No automatic cloud backup in v1 — export is manual.
+`GET /export` (FastAPI route in `app/routes/export.py`) dumps the
+caller's user-content tables as a single JSON file, RLS-scoped under
+the user's JWT — no service role. The "Export my data" button on both
+`/privacy` (mobile) and `Settings → Privacy` (desktop) triggers a
+browser-side `fetch` + Blob + synthetic `<a download>` click; no
+Supabase Storage and no signed-URL token are involved. The download
+filename is `tameru-export-YYYY-MM-DD.json`.
+
+**v1 inclusion list** — every table containing user-typed content or
+user preferences:
+
+  - `transactions`, `cards`, `subscriptions` (ledger)
+  - `user_memory` (chat-distilled facts)
+  - `chat_messages` (full conversation history)
+  - `merchant_category` (user's category overrides)
+  - `users_meta` (preferences + home currency)
+
+**v1 exclusion list** — internal observability tables, deferred to a
+future "full audit export":
+
+  - `chat_turn_trace` (per-turn agent-loop audit)
+  - `ai_call_log`, `ai_call_log_daily` (AI cost/audit trail)
+  - `email_log` (Resend send/bounce log)
+
+The exclusion list is greppable in the route module docstring; an
+inclusion change is a deliberate scope expansion that should update
+both this section and the docstring in the same PR.
+
+No automatic cloud backup in v1 — export is manual. There is no
+`export_data()` chat tool either; chat answers questions in prose and
+points the user to Settings rather than running the export through the
+agent loop (cost, ergonomics, no UX gain). No public Privacy Policy
+document in v1; that's a §17 scaling-phase deliverable.
 
 ---
 

@@ -161,3 +161,29 @@ pytest tests/test_rls_contract.py tests/test_no_service_role_leak.py
 `conftest.py` auto-populates `SUPABASE_URL`, the anon/service-role keys, and
 `SUPABASE_JWT_SECRET` from `supabase status -o json` when those env vars are
 unset, so the common flow above "just works" without exporting them by hand.
+
+## Privacy
+
+Tameru's live privacy disclosures live **in the app** at
+**Settings → Privacy** (desktop) and **/privacy** (mobile). The two surfaces
+render the same shared component (`frontend/src/components/PrivacyDisclosure.tsx`)
+so they always stay in lockstep.
+
+The disclosure covers what's sent to which AI provider, what PostHog tracks
+(structural events only — never transaction data, never chat text), and the
+opt-out controls.
+
+You can also **export everything we have on you** as a single JSON file via
+the "Export my data" button on either surface. The export covers transactions,
+cards, subscriptions, chat history, memory facts, merchant overrides, and
+preferences. Internal observability records (per-turn audit, AI call log,
+email log) are intentionally excluded; see
+[app/routes/export.py](app/routes/export.py) for the v1 inclusion list.
+
+Account deletion is currently handled by emailing **hello@mail.tameru.xyz**
+(an in-app button is post-v1 per `DESIGN.md` §17.11). The "Delete my account"
+row on either privacy surface opens a pre-filled mail draft.
+
+Anthropic Zero Data Retention is **requested** for the Tameru org; until
+it's granted, Anthropic's default 30-day trust & safety retention applies.
+See [docs/zdr_request.md](docs/zdr_request.md) for the request log.

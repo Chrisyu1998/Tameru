@@ -18,6 +18,11 @@ import {
   updatePreferences,
 } from "@/lib/preferencesApi";
 import { AnalyticsOptOutToggle } from "@/components/AnalyticsOptOutToggle";
+import { DeleteAccountRow } from "@/components/DeleteAccountRow";
+import { ExportDataButton } from "@/components/ExportDataButton";
+import { PrivacyDisclosure } from "@/components/PrivacyDisclosure";
+import { downloadUserDataExport } from "@/lib/exportApi";
+import { track } from "@/lib/analytics";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -269,6 +274,26 @@ function ImportPanel() {
 }
 
 function ExportPanel() {
+  // Day 27 — wires the JSON download to the shared /export route via
+  // `downloadUserDataExport`. The Privacy panel also exposes the same
+  // affordance via `ExportDataButton`; both surfaces converge on the
+  // same backend. CSV export is out of v1 scope (DESIGN.md §9.6 — json
+  // dump only).
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+
+  const handleExport = async () => {
+    if (status === "loading") return;
+    setStatus("loading");
+    try {
+      await downloadUserDataExport();
+      track("feature_used", { feature: "data_export" });
+      setStatus("idle");
+    } catch {
+      track("error_shown", { code: "internal_error" });
+      setStatus("error");
+    }
+  };
+
   return (
     <div>
       <PanelHeading
@@ -277,25 +302,34 @@ function ExportPanel() {
       />
       <div className="rounded-2xl border border-hairline bg-surface px-4 py-4">
         <p className="text-[0.9rem] text-ink">
-          download a complete copy of your ledger — transactions, cards, and
-          subscriptions.
+          download a json file containing your transactions, cards,
+          subscriptions, chat history, memory facts, merchant overrides,
+          and preferences.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             type="button"
-            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-hairline bg-elevated px-4 text-sm text-ink hover:bg-sunken"
+            onClick={handleExport}
+            disabled={status === "loading"}
+            aria-busy={status === "loading"}
+            className={cn(
+              "inline-flex h-10 items-center gap-2 rounded-2xl border border-hairline bg-elevated px-4 text-sm text-ink hover:bg-sunken",
+              status === "loading" && "opacity-50 cursor-not-allowed",
+            )}
+            data-testid="settings-export-json"
           >
             <Download className="h-4 w-4" />
-            export csv
-          </button>
-          <button
-            type="button"
-            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-hairline bg-elevated px-4 text-sm text-ink hover:bg-sunken"
-          >
-            <Download className="h-4 w-4" />
-            export json
+            {status === "loading" ? "preparing…" : "export json"}
           </button>
         </div>
+        {status === "error" && (
+          <p
+            role="alert"
+            className="mt-3 text-[0.78rem] text-over"
+          >
+            couldn't prepare your export. try again in a moment.
+          </p>
+        )}
       </div>
     </div>
   );
@@ -394,24 +428,26 @@ function NotificationsPanel() {
 }
 
 function PrivacyPanel() {
-  // Day 26 — PostHog opt-out toggle. The shared `AnalyticsOptOutToggle`
-  // component owns the optimistic-write + monotonic-sequence + SDK
-  // lockstep pattern so this surface and the mobile-reachable
-  // `/privacy` page stay in sync. Disclosure prose lives on the
-  // `/privacy` page (Day 27).
+  // Day 27 — same component stack as `/privacy` (the mobile-reachable
+  // route). Extracting the shared components keeps the desktop and
+  // mobile surfaces in lockstep so a copy or wiring change only has to
+  // land in one place. Optimistic-write + monotonic-sequence + SDK
+  // lockstep for the opt-out toggle live in AnalyticsOptOutToggle
+  // itself (Day 26).
   return (
     <div>
       <PanelHeading
         title="privacy"
-        subtitle="what tameru measures, and what it doesn't."
+        subtitle="what tameru does with your data, and what it doesn't."
       />
       <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <AnalyticsOptOutToggle />
+        <ExportDataButton />
+        <DeleteAccountRow />
       </div>
-      <p className="mt-3 px-1 text-[0.78rem] text-ink-tertiary">
-        events already collected stay until manual deletion. detailed
-        privacy disclosures live on the privacy page.
-      </p>
+      <div className="mt-6">
+        <PrivacyDisclosure />
+      </div>
     </div>
   );
 }

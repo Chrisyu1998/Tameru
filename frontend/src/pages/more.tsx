@@ -6,7 +6,6 @@ import {
   Download,
   Lock,
   LogOut,
-  Mail,
   Plug,
   Upload,
 } from "lucide-react";
@@ -22,6 +21,8 @@ import {
   readPreferences,
   updatePreferences,
 } from "@/lib/preferencesApi";
+import { downloadUserDataExport } from "@/lib/exportApi";
+import { track } from "@/lib/analytics";
 
 type SheetKey = "import" | "notifications" | "export" | "signout" | null;
 
@@ -366,8 +367,34 @@ function ExportSheet({
   open: boolean;
   onClose: () => void;
 }) {
-  // Tiny estimation — based on a typical mock ledger size.
-  const estKb = 42;
+  // Day 27 — the original mock wired both buttons to onClose without
+  // any download; tapping "download json" closed the sheet without
+  // doing anything (caught by manual PWA testing). Wires the primary
+  // action to the real /export route via the shared download helper
+  // and drops the "email it to me" stub — emailing the export isn't
+  // a v1 deliverable.
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+
+  // Reset error state every time the sheet opens — without this, an
+  // earlier failure would still be visible the next time the user
+  // tries.
+  useEffect(() => {
+    if (open) setStatus("idle");
+  }, [open]);
+
+  const handleDownload = async () => {
+    if (status === "loading") return;
+    setStatus("loading");
+    try {
+      await downloadUserDataExport();
+      track("feature_used", { feature: "data_export" });
+      setStatus("idle");
+      onClose();
+    } catch {
+      track("error_shown", { code: "internal_error" });
+      setStatus("error");
+    }
+  };
 
   return (
     <BottomSheet open={open} onClose={onClose} ariaLabel="export data">
@@ -375,31 +402,32 @@ function ExportSheet({
         export data
       </h2>
       <p className="mt-2 text-[0.9rem] leading-relaxed text-ink-secondary">
-        a single <span className="text-ink">json</span> file with every
-        transaction, card, and subscription. readable by any tool, owned by
-        you — no lock-in.
+        a single <span className="text-ink">json</span> file with your
+        transactions, cards, subscriptions, chat history, memory facts,
+        merchant overrides, and preferences. readable by any tool, owned
+        by you — no lock-in.
       </p>
-
-      <div className="mt-4 flex items-center justify-between rounded-xl border border-hairline bg-sunken/50 px-3 py-2.5 text-[0.82rem]">
-        <span className="text-ink-tertiary">estimated size</span>
-        <span className="tabular text-ink">~{estKb} kb</span>
-      </div>
 
       <div className="mt-5 flex flex-col gap-2">
         <button
           type="button"
-          onClick={onClose}
-          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
+          onClick={handleDownload}
+          disabled={status === "loading"}
+          aria-busy={status === "loading"}
+          className={cn(
+            "inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep",
+            status === "loading" && "opacity-60 cursor-not-allowed",
+          )}
+          data-testid="more-export-json"
         >
-          <Download className="h-4 w-4" /> download json
+          <Download className="h-4 w-4" />
+          {status === "loading" ? "preparing…" : "download json"}
         </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-hairline bg-surface text-sm text-ink hover:bg-elevated"
-        >
-          <Mail className="h-4 w-4" /> email it to me
-        </button>
+        {status === "error" && (
+          <p role="alert" className="px-1 text-[0.8rem] text-over">
+            couldn't prepare your export. try again in a moment.
+          </p>
+        )}
       </div>
     </BottomSheet>
   );
