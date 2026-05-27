@@ -9,6 +9,7 @@ import {
   Upload,
 } from "lucide-react";
 import { SketchIcon } from "@/components/SketchIcon";
+import { BottomSheet } from "@/components/BottomSheet";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
 import { signOut } from "@/lib/auth";
