@@ -177,6 +177,7 @@ export default function ChatPage() {
 
   /* ─── Dev: daily-cap toggle (hidden behind the title) ───────── */
 
+  const isDev = import.meta.env.DEV;
   const toggleCap = () => chatStore.setCapEngaged(!capEngaged);
 
 
@@ -194,14 +195,20 @@ export default function ChatPage() {
         >
           <ChevronLeft className="h-5 w-5" />
         </button>
-        <button
-          type="button"
-          onClick={toggleCap}
-          title="dev: toggle daily cap"
-          className="font-serif text-[1.05rem] text-ink lowercase-title"
-        >
-          tameru
-        </button>
+        {isDev ? (
+          <button
+            type="button"
+            onClick={toggleCap}
+            title="dev: toggle daily cap"
+            className="font-serif text-[1.05rem] text-ink lowercase-title"
+          >
+            tameru
+          </button>
+        ) : (
+          <span className="font-serif text-[1.05rem] text-ink lowercase-title">
+            tameru
+          </span>
+        )}
         <button
           type="button"
           onClick={newChat}
@@ -230,7 +237,9 @@ export default function ChatPage() {
           {messages.length === 0 && (
             <EmptyChat
               onPrompt={(p) => handleSend(p)}
-              onSimulateOutage={() => setServiceDown(true)}
+              onSimulateOutage={
+                isDev ? () => setServiceDown(true) : null
+              }
             />
           )}
 
@@ -456,7 +465,8 @@ function EmptyChat({
   onSimulateOutage,
 }: {
   onPrompt: (text: string) => void;
-  onSimulateOutage: () => void;
+  /** Null in production — gates the outage-banner dev affordance. */
+  onSimulateOutage: (() => void) | null;
 }) {
   const examples = [
     "coffee $5.50",
@@ -485,14 +495,15 @@ function EmptyChat({
           </button>
         ))}
       </div>
-      {/* Dev affordance, intentionally quiet. */}
-      <button
-        type="button"
-        onClick={onSimulateOutage}
-        className="mt-8 text-[0.65rem] text-ink-quaternary hover:text-ink-tertiary"
-      >
-        dev · simulate ai outage banner
-      </button>
+      {onSimulateOutage && (
+        <button
+          type="button"
+          onClick={onSimulateOutage}
+          className="mt-8 text-[0.65rem] text-ink-quaternary hover:text-ink-tertiary"
+        >
+          dev · simulate ai outage banner
+        </button>
+      )}
     </div>
   );
 }

@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import {
   Bell,
   ChevronRight,
-  Download,
   Lock,
   Plug,
   Shield,
@@ -21,8 +20,6 @@ import { AnalyticsOptOutToggle } from "@/components/AnalyticsOptOutToggle";
 import { DeleteAccountRow } from "@/components/DeleteAccountRow";
 import { ExportDataButton } from "@/components/ExportDataButton";
 import { PrivacyDisclosure } from "@/components/PrivacyDisclosure";
-import { downloadUserDataExport } from "@/lib/exportApi";
-import { track } from "@/lib/analytics";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -48,7 +45,6 @@ type SectionId =
   | "account"
   | "connections"
   | "import"
-  | "export"
   | "notifications"
   | "privacy";
 
@@ -69,7 +65,6 @@ const sections: Section[] = [
     href: "/connections",
   },
   { id: "import", label: "import", icon: <Upload className="h-4 w-4" /> },
-  { id: "export", label: "export", icon: <Download className="h-4 w-4" /> },
   {
     id: "notifications",
     label: "notifications",
@@ -169,7 +164,6 @@ export default function SettingsPage() {
 function SectionContent({ id }: { id: SectionId }) {
   if (id === "account") return <AccountPanel />;
   if (id === "import") return <ImportPanel />;
-  if (id === "export") return <ExportPanel />;
   if (id === "notifications") return <NotificationsPanel />;
   if (id === "privacy") return <PrivacyPanel />;
   // connections is a Link, never rendered as a panel
@@ -273,68 +267,6 @@ function ImportPanel() {
   );
 }
 
-function ExportPanel() {
-  // Day 27 — wires the JSON download to the shared /export route via
-  // `downloadUserDataExport`. The Privacy panel also exposes the same
-  // affordance via `ExportDataButton`; both surfaces converge on the
-  // same backend. CSV export is out of v1 scope (DESIGN.md §9.6 — json
-  // dump only).
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-
-  const handleExport = async () => {
-    if (status === "loading") return;
-    setStatus("loading");
-    try {
-      await downloadUserDataExport();
-      track("feature_used", { feature: "data_export" });
-      setStatus("idle");
-    } catch {
-      track("error_shown", { code: "internal_error" });
-      setStatus("error");
-    }
-  };
-
-  return (
-    <div>
-      <PanelHeading
-        title="export"
-        subtitle="your data, when you want it."
-      />
-      <div className="rounded-2xl border border-hairline bg-surface px-4 py-4">
-        <p className="text-[0.9rem] text-ink">
-          download a json file containing your transactions, cards,
-          subscriptions, chat history, memory facts, merchant overrides,
-          and preferences.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={status === "loading"}
-            aria-busy={status === "loading"}
-            className={cn(
-              "inline-flex h-10 items-center gap-2 rounded-2xl border border-hairline bg-elevated px-4 text-sm text-ink hover:bg-sunken",
-              status === "loading" && "opacity-50 cursor-not-allowed",
-            )}
-            data-testid="settings-export-json"
-          >
-            <Download className="h-4 w-4" />
-            {status === "loading" ? "preparing…" : "export json"}
-          </button>
-        </div>
-        {status === "error" && (
-          <p
-            role="alert"
-            className="mt-3 text-[0.78rem] text-over"
-          >
-            couldn't prepare your export. try again in a moment.
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function NotificationsPanel() {
   // Server-backed (Day 25, DESIGN.md §6.4). Optimistic UI: flip locally,
   // then PATCH and reconcile against the server's returned canonical
@@ -343,8 +275,6 @@ function NotificationsPanel() {
   // in case it changed since this tab was last open.
   const [weekly, setWeekly] = useState(true);
   const [savingWeekly, setSavingWeekly] = useState(false);
-  const [overspend, setOverspend] = useState(true);
-  const [quiet, setQuiet] = useState(false);
 
   // Monotonic request sequence. Each PATCH increments it; only the
   // response whose sequence matches the latest in-flight value is
@@ -402,25 +332,13 @@ function NotificationsPanel() {
         title="notifications"
         subtitle="tameru speaks softly. you choose how often."
       />
-      <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
+      <div className="rounded-2xl border border-hairline bg-surface px-4">
         <ToggleRow
           label="weekly digest email"
           desc="a quiet recap every monday morning. unsubscribe link in every send."
           checked={weekly}
           onChange={handleWeeklyChange}
           disabled={savingWeekly}
-        />
-        <ToggleRow
-          label="overspend nudge"
-          desc="ping when a category goes well past its usual."
-          checked={overspend}
-          onChange={setOverspend}
-        />
-        <ToggleRow
-          label="quiet mode"
-          desc="hold all notifications until you next open the app."
-          checked={quiet}
-          onChange={setQuiet}
         />
       </div>
     </div>

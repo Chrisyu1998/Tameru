@@ -35,10 +35,12 @@ export function Sidebar() {
     navigate("/onboarding");
   };
 
-  // Dev-only affordance for clearing the local ledger view. The restore
-  // branch was a no-op once the ledger went backend-driven (lib/ledger.ts);
-  // hide the button entirely when there's nothing to clear so we don't
-  // promise an action that does nothing.
+  // Dev-only affordance for clearing the local ledger view. Hidden from
+  // production builds entirely — `ledger.clear()` wipes the in-memory
+  // list, but a subsequent /transactions refresh restores everything, so
+  // the button promises an action it doesn't deliver. Also gated on
+  // "actually has something to clear" so devs don't see an inert button.
+  const isDev = import.meta.env.DEV;
   const hasTransactions = transactions.length > 0;
 
   return (
@@ -65,25 +67,27 @@ export function Sidebar() {
 
         <div className="flex-1" />
 
-        {hasTransactions && (
+        {isDev && hasTransactions && (
           <button
             type="button"
             onClick={() => ledger.clear()}
             className="mx-1 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
           >
             <Eraser className="h-4 w-4" />
-            <span className="lowercase">clear ledger</span>
+            <span className="lowercase">clear ledger (dev)</span>
           </button>
         )}
 
-        <button
-          type="button"
-          onClick={restartOnboarding}
-          className="mx-1 mb-2 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
-        >
-          <RotateCcw className="h-4 w-4" />
-          <span className="lowercase">restart onboarding</span>
-        </button>
+        {isDev && (
+          <button
+            type="button"
+            onClick={restartOnboarding}
+            className="mx-1 mb-2 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
+          >
+            <RotateCcw className="h-4 w-4" />
+            <span className="lowercase">restart onboarding (dev)</span>
+          </button>
+        )}
 
         <div className="mb-6 mt-2 flex items-center gap-3 px-3 py-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-moss-wash text-moss-deep font-serif">

@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, Send } from "lucide-react";
+import { VoiceOverlay } from "@/components/chat/VoiceOverlay";
 import { chatStore, useChatStore } from "@/lib/chatStore";
+import { isVoiceSupported, useVoice } from "@/lib/voice";
 import { cn } from "@/lib/utils";
+
+const SILENCE_WINDOW_MS = 1500;
 
 const PLACEHOLDERS = [
   "coffee $5.50",
@@ -23,7 +27,28 @@ export function DesktopComposer() {
   const [value, setValue] = useState("");
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
   const [focused, setFocused] = useState(false);
+  const [voiceMode, setVoiceMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Voice transcript flows into chatStore.sendFromComposer, which opens
+  // the drawer for the response — same UX as typing + pressing Send.
+  const voice = useVoice({
+    silenceWindowMs: SILENCE_WINDOW_MS,
+    onCommit: (text) => {
+      setVoiceMode(false);
+      chatStore.sendFromComposer(text);
+    },
+  });
+
+  const startVoice = () => {
+    setVoiceMode(true);
+    voice.start();
+  };
+  const stopVoice = () => {
+    voice.stop();
+    setVoiceMode(false);
+  };
+  const micSupported = isVoiceSupported();
 
   // Rotate placeholder, freeze on focus.
   useEffect(() => {
@@ -77,54 +102,79 @@ export function DesktopComposer() {
       )}
     >
       <div className="pointer-events-auto">
-        {!drawerOpen && (
-          <p className="mb-1.5 text-center text-[0.7rem] text-ink-tertiary tracking-wide">
-            ✨ ask tameru
-          </p>
-        )}
+        {voiceMode ? (
+          // Replace the input pill with the listening UI. Width tracks
+          // the same containerCls — the overlay is just another bottom
+          // panel from a layout perspective. Same hook + same overlay
+          // as the mobile chat page so language switching and error
+          // copy stay consistent.
+          <div className="overflow-hidden rounded-2xl border border-hairline bg-surface/95 backdrop-blur-md">
+            <VoiceOverlay
+              transcript={voice.transcript}
+              silenceMsLeft={voice.silenceMsLeft}
+              silenceWindowMs={SILENCE_WINDOW_MS}
+              lang={voice.lang}
+              onChangeLang={voice.setLang}
+              error={voice.error}
+              onRetry={voice.start}
+              onSubmitNow={voice.submitNow}
+              onStop={stopVoice}
+            />
+          </div>
+        ) : (
+          <>
+            {!drawerOpen && (
+              <p className="mb-1.5 text-center text-[0.7rem] text-ink-tertiary tracking-wide">
+                ✨ ask tameru
+              </p>
+            )}
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit();
-          }}
-          className={cn(
-            "flex items-center gap-2 rounded-2xl border border-hairline bg-surface/95 px-3 py-2 backdrop-blur-md transition-shadow",
-            focused ? "shadow-[0_4px_18px_-14px_rgba(0,0,0,0.12)]" : ""
-          )}
-        >
-          <input
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            placeholder={PLACEHOLDERS[placeholderIdx]}
-            className="flex-1 bg-transparent px-2 py-1.5 text-[0.92rem] text-ink placeholder:text-ink-tertiary focus:outline-none"
-            aria-label="ask tameru"
-          />
-          <button
-            type="button"
-            aria-label="voice"
-            tabIndex={-1}
-            className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
-          >
-            <Mic className="h-4 w-4" />
-          </button>
-          {value.trim() ? (
-            <button
-              type="submit"
-              aria-label="send"
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-moss text-surface hover:bg-moss-deep"
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submit();
+              }}
+              className={cn(
+                "flex items-center gap-2 rounded-2xl border border-hairline bg-surface/95 px-3 py-2 backdrop-blur-md transition-shadow",
+                focused ? "shadow-[0_4px_18px_-14px_rgba(0,0,0,0.12)]" : ""
+              )}
             >
-              <Send className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <kbd className="hidden md:inline-flex h-7 select-none items-center gap-1 rounded-md border border-hairline bg-canvas px-2 text-[0.65rem] text-ink-tertiary">
-              ⌘K
-            </kbd>
-          )}
-        </form>
+              <input
+                ref={inputRef}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                placeholder={PLACEHOLDERS[placeholderIdx]}
+                className="flex-1 bg-transparent px-2 py-1.5 text-[0.92rem] text-ink placeholder:text-ink-tertiary focus:outline-none"
+                aria-label="ask tameru"
+              />
+              {micSupported && (
+                <button
+                  type="button"
+                  onClick={startVoice}
+                  aria-label="record voice"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
+                >
+                  <Mic className="h-4 w-4" />
+                </button>
+              )}
+              {value.trim() ? (
+                <button
+                  type="submit"
+                  aria-label="send"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-moss text-surface hover:bg-moss-deep"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                </button>
+              ) : (
+                <kbd className="hidden md:inline-flex h-7 select-none items-center gap-1 rounded-md border border-hairline bg-canvas px-2 text-[0.65rem] text-ink-tertiary">
+                  ⌘K
+                </kbd>
+              )}
+            </form>
+          </>
+        )}
       </div>
     </div>
   );

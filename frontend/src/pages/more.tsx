@@ -3,14 +3,12 @@ import { Link } from "react-router-dom";
 import {
   Bell,
   ChevronRight,
-  Download,
   Lock,
   LogOut,
   Plug,
   Upload,
 } from "lucide-react";
 import { SketchIcon } from "@/components/SketchIcon";
-import { BottomSheet } from "@/components/BottomSheet";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
 import { signOut } from "@/lib/auth";
@@ -21,10 +19,8 @@ import {
   readPreferences,
   updatePreferences,
 } from "@/lib/preferencesApi";
-import { downloadUserDataExport } from "@/lib/exportApi";
-import { track } from "@/lib/analytics";
 
-type SheetKey = "import" | "notifications" | "export" | "signout" | null;
+type SheetKey = "import" | "notifications" | "signout" | null;
 
 export default function MorePage() {
   // Live "is anything connected via OAuth" probe for the row chip.
@@ -119,11 +115,6 @@ export default function MorePage() {
           icon={<Lock className="h-4 w-4" />}
         />
         <RowButton
-          label="export data"
-          icon={<Download className="h-4 w-4" />}
-          onClick={() => setOpenSheet("export")}
-        />
-        <RowButton
           label="sign out"
           icon={<LogOut className="h-4 w-4 text-over" />}
           tone="over"
@@ -137,10 +128,6 @@ export default function MorePage() {
       />
       <NotificationsSheet
         open={openSheet === "notifications"}
-        onClose={() => setOpenSheet(null)}
-      />
-      <ExportSheet
-        open={openSheet === "export"}
         onClose={() => setOpenSheet(null)}
       />
       <SignOutDialog
@@ -229,11 +216,10 @@ function NotificationsSheet({
   // PATCH on toggle, ignore stale responses via a request-sequence ref.
   // No "save" button — each toggle persists immediately (per-write
   // PATCH), so a separate save step would lie about when the value is
-  // persisted. `nudges` stays purely local for now — Day 25's only
-  // server-backed column is `weekly_digest_enabled`.
+  // persisted. Only `weekly_digest_enabled` exists today; additional
+  // notification preferences will land here when their columns ship.
   const [digest, setDigest] = useState(true);
   const [savingDigest, setSavingDigest] = useState(false);
-  const [nudges, setNudges] = useState(true);
 
   // Monotonic counter so a stale PATCH response can't overwrite a
   // newer user toggle. See settings.tsx for the long-form rationale.
@@ -296,12 +282,6 @@ function NotificationsSheet({
           onChange={handleDigestChange}
           disabled={savingDigest}
         />
-        <ToggleRow
-          label="entry nudges"
-          desc="a gentle ping if you've not logged anything for a few days."
-          checked={nudges}
-          onChange={setNudges}
-        />
       </div>
 
       <button
@@ -355,81 +335,6 @@ function ToggleRow({
         />
       </button>
     </div>
-  );
-}
-
-/* ─── Export sheet ────────────────────────────────────────────── */
-
-function ExportSheet({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  // Day 27 — the original mock wired both buttons to onClose without
-  // any download; tapping "download json" closed the sheet without
-  // doing anything (caught by manual PWA testing). Wires the primary
-  // action to the real /export route via the shared download helper
-  // and drops the "email it to me" stub — emailing the export isn't
-  // a v1 deliverable.
-  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
-
-  // Reset error state every time the sheet opens — without this, an
-  // earlier failure would still be visible the next time the user
-  // tries.
-  useEffect(() => {
-    if (open) setStatus("idle");
-  }, [open]);
-
-  const handleDownload = async () => {
-    if (status === "loading") return;
-    setStatus("loading");
-    try {
-      await downloadUserDataExport();
-      track("feature_used", { feature: "data_export" });
-      setStatus("idle");
-      onClose();
-    } catch {
-      track("error_shown", { code: "internal_error" });
-      setStatus("error");
-    }
-  };
-
-  return (
-    <BottomSheet open={open} onClose={onClose} ariaLabel="export data">
-      <h2 className="font-serif text-2xl text-ink lowercase-title">
-        export data
-      </h2>
-      <p className="mt-2 text-[0.9rem] leading-relaxed text-ink-secondary">
-        a single <span className="text-ink">json</span> file with your
-        transactions, cards, subscriptions, chat history, memory facts,
-        merchant overrides, and preferences. readable by any tool, owned
-        by you — no lock-in.
-      </p>
-
-      <div className="mt-5 flex flex-col gap-2">
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={status === "loading"}
-          aria-busy={status === "loading"}
-          className={cn(
-            "inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep",
-            status === "loading" && "opacity-60 cursor-not-allowed",
-          )}
-          data-testid="more-export-json"
-        >
-          <Download className="h-4 w-4" />
-          {status === "loading" ? "preparing…" : "download json"}
-        </button>
-        {status === "error" && (
-          <p role="alert" className="px-1 text-[0.8rem] text-over">
-            couldn't prepare your export. try again in a moment.
-          </p>
-        )}
-      </div>
-    </BottomSheet>
   );
 }
 
