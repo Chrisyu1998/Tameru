@@ -5,7 +5,13 @@
 //   public/apple-touch-icon.png iOS Add-to-Home-Screen (180x180)
 //   public/favicon.svg          browser tab favicon
 //
-// Placeholder design: moss-accent square with a cream lowercase "t" glyph.
+// Design: cream background with a moss-filled coin (circle) centered.
+// The "coin" metaphor matches the spending-intelligence framing and
+// drops the original placeholder lowercase-"t" letterform. The coin
+// radius is 0.40 * size — the maskable-icon safe zone, so the full
+// coin stays visible even when the OS applies aggressive circle /
+// rounded-square masking on Android or iOS home-screen.
+//
 // Swap `ACCENT` and `CREAM` to rebrand; rerun `npm run icons`.
 
 import { createHash } from 'node:crypto';
@@ -22,25 +28,20 @@ mkdirSync(PUBLIC_DIR, { recursive: true });
 const ACCENT = [0x6c, 0x8a, 0x6b]; // --tameru-accent-base
 const CREAM = [0xfb, 0xf6, 0xec];  // --tameru-surface
 
-// Render a lowercase "t" as two rectangles centered in the square.
-// Safe-zone friendly (maskable icons need ≥ 40% center area preserved).
+// Render a centered, filled coin: moss circle on cream background.
+// Radius = 0.40 * size keeps the full coin inside the maskable safe
+// zone (the OS may mask anything outside the central 80% region into
+// a circle or rounded square; staying within 0.40r ensures the coin
+// never gets clipped). Half-pixel center (cx-0.5, cy-0.5) keeps the
+// circle visually centered for even-pixel sizes.
 function pixelAt(x, y, size) {
-  const stemX = size * 0.44;
-  const stemW = size * 0.12;
-  const stemYTop = size * 0.22;
-  const stemYBottom = size * 0.78;
-
-  const crossYTop = size * 0.36;
-  const crossYBottom = size * 0.44;
-  const crossXLeft = size * 0.32;
-  const crossXRight = size * 0.68;
-
-  const inStem =
-    x >= stemX && x < stemX + stemW && y >= stemYTop && y < stemYBottom;
-  const inCross =
-    x >= crossXLeft && x < crossXRight && y >= crossYTop && y < crossYBottom;
-
-  return inStem || inCross ? CREAM : ACCENT;
+  const cx = size / 2 - 0.5;
+  const cy = size / 2 - 0.5;
+  const radius = size * 0.40;
+  const dx = x - cx;
+  const dy = y - cy;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  return dist <= radius ? ACCENT : CREAM;
 }
 
 function pngChunk(type, data) {
@@ -97,10 +98,12 @@ function writePng(name, size) {
 }
 
 function writeFaviconSvg() {
+  // Cream background + moss-filled coin centered. Radius 25.6 = 0.40
+  // of the 64-unit viewBox, mirroring the PNG generator's safe-zone
+  // sizing so PWA installs (PNG) and browser tabs (SVG) match.
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" fill="#6c8a6b"/>
-  <rect x="28.16" y="14.08" width="7.68" height="35.84" fill="#fbf6ec"/>
-  <rect x="20.48" y="23.04" width="23.04" height="5.12" fill="#fbf6ec"/>
+  <rect width="64" height="64" fill="#fbf6ec"/>
+  <circle cx="32" cy="32" r="25.6" fill="#6c8a6b"/>
 </svg>
 `;
   writeFileSync(resolve(PUBLIC_DIR, 'favicon.svg'), svg);
