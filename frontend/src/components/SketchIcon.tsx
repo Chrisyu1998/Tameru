@@ -29,7 +29,14 @@ export type SketchIconKind =
   | "bag"
   | "bolt"
   | "heart"
-  | "dot";
+  | "dot"
+  | "coffee-mug"
+  | "fuel-pump"
+  | "pill"
+  | "cart"
+  | "play"
+  | "badge"
+  | "popcorn";
 
 interface SketchIconProps {
   kind: SketchIconKind;
@@ -473,6 +480,179 @@ function buildIcon(
         amp * 0.7,
       );
       return { paths: [h] };
+    }
+    case "coffee-mug": {
+      const body = wobblyPath(
+        [
+          [8, 9],
+          [16, 9],
+          [15, 19],
+          [9, 19],
+        ],
+        seed,
+        amp,
+        true,
+      );
+      const handle = wobblyPath(
+        [
+          [16, 11],
+          [19, 12],
+          [19, 15],
+          [16, 16],
+        ],
+        seed + 30,
+        amp * 0.7,
+      );
+      const steam1 = wobblyLine(10.5, 7, 10.5, 4, seed + 60, amp * 1.6);
+      const steam2 = wobblyLine(13.5, 7, 13.5, 4, seed + 80, amp * 1.6);
+      return { paths: [body, handle, steam1, steam2] };
+    }
+    case "fuel-pump": {
+      const main = wobblyPath(
+        [
+          [5, 6],
+          [13, 6],
+          [13, 20],
+          [5, 20],
+        ],
+        seed,
+        amp,
+        true,
+      );
+      const display = wobblyPath(
+        [
+          [7, 9],
+          [11, 9],
+          [11, 12],
+          [7, 12],
+        ],
+        seed + 20,
+        amp * 0.5,
+        true,
+      );
+      const hose = wobblyPath(
+        [
+          [13, 9],
+          [16, 9],
+          [16, 14],
+          [18.5, 14],
+        ],
+        seed + 40,
+        amp,
+      );
+      const nozzle = wobblyLine(18.5, 12, 18.5, 16, seed + 60, amp * 0.6);
+      return { paths: [main, display, hose, nozzle] };
+    }
+    case "pill": {
+      const top = wobblyLine(8, 9, 16, 9, seed, amp * 0.4);
+      const bot = wobblyLine(8, 15, 16, 15, seed + 10, amp * 0.4);
+      const leftCap = wobblyPath(
+        [
+          [8, 9],
+          [5, 10.2],
+          [5, 13.8],
+          [8, 15],
+        ],
+        seed + 20,
+        amp,
+      );
+      const rightCap = wobblyPath(
+        [
+          [16, 9],
+          [19, 10.2],
+          [19, 13.8],
+          [16, 15],
+        ],
+        seed + 30,
+        amp,
+      );
+      const divider = wobblyLine(12, 9, 12, 15, seed + 40, amp * 0.5);
+      return { paths: [top, bot, leftCap, rightCap, divider] };
+    }
+    case "cart": {
+      const basket = wobblyPath(
+        [
+          [5, 8],
+          [19, 8],
+          [17, 16],
+          [7, 16],
+        ],
+        seed,
+        amp,
+        true,
+      );
+      const handle = wobblyLine(5, 8, 3, 5, seed + 20, amp);
+      const wheel1 = wobblyCircle(9, 19, 1.3, seed + 40, amp * 0.6);
+      const wheel2 = wobblyCircle(15, 19, 1.3, seed + 60, amp * 0.6);
+      return { paths: [basket, handle, wheel1, wheel2] };
+    }
+    case "play": {
+      const ring = wobblyCircle(12, 12, 8, seed, amp);
+      const tri = wobblyPath(
+        [
+          [10, 8],
+          [16, 12],
+          [10, 16],
+        ],
+        seed + 30,
+        amp * 0.7,
+        true,
+      );
+      return { paths: [ring, tri] };
+    }
+    case "badge": {
+      const ring = wobblyCircle(12, 9, 4.5, seed, amp);
+      const ribbon1 = wobblyPath(
+        [
+          [9.5, 12.5],
+          [8, 20],
+          [12, 17],
+        ],
+        seed + 30,
+        amp,
+      );
+      const ribbon2 = wobblyPath(
+        [
+          [14.5, 12.5],
+          [16, 20],
+          [12, 17],
+        ],
+        seed + 50,
+        amp,
+      );
+      return {
+        paths: [ring, ribbon1, ribbon2],
+        dots: [{ cx: 12, cy: 9, r: 1.2 }],
+      };
+    }
+    case "popcorn": {
+      const bucket = wobblyPath(
+        [
+          [6.5, 10],
+          [17.5, 10],
+          [16, 21],
+          [8, 21],
+        ],
+        seed,
+        amp,
+        true,
+      );
+      const stripe1 = wobblyLine(10, 11, 9.5, 20, seed + 20, amp * 0.4);
+      const stripe2 = wobblyLine(14, 11, 14.5, 20, seed + 25, amp * 0.4);
+      const kernels = wobblyPath(
+        [
+          [6.5, 10],
+          [8, 6.5],
+          [10, 9],
+          [12, 5],
+          [14, 9],
+          [16, 6.5],
+          [17.5, 10],
+        ],
+        seed + 40,
+        amp * 1.2,
+      );
+      return { paths: [bucket, stripe1, stripe2, kernels] };
     }
     case "dot": {
       return { paths: [], dots: [{ cx: 12, cy: 12, r: 3 }] };

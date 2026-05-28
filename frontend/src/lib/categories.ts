@@ -49,22 +49,22 @@ export const CATEGORY_TINT: Record<Category, string> = {
 
 /**
  * Hand-drawn sketch glyph per category. Used on /breakdown row tiles
- * to add personality to a list-heavy page. Some glyphs repeat where
- * the icon set doesn't have a perfect match — duplication beats
- * inventing a glyph for v1.
+ * to add personality to a list-heavy page. Each category gets a glyph
+ * that visually matches its meaning — `heart` for Health is the only
+ * cross-category reuse (it's the universal symbol).
  */
 export const CATEGORY_SKETCH: Record<Category, SketchIconKind> = {
   Groceries: "bag",
   Dining: "fork",
-  "Coffee Shops": "receipt",
-  Gas: "bolt",
+  "Coffee Shops": "coffee-mug",
+  Gas: "fuel-pump",
   Transit: "car",
   Travel: "plane",
-  Streaming: "ticket",
-  Memberships: "repeat",
-  Entertainment: "sparkle",
-  Shopping: "bag",
-  Drugstores: "heart",
+  Streaming: "play",
+  Memberships: "badge",
+  Entertainment: "popcorn",
+  Shopping: "cart",
+  Drugstores: "pill",
   Home: "home",
   Utilities: "bolt",
   Health: "heart",
