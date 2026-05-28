@@ -73,6 +73,7 @@ These are load-bearing decisions from the design review. Each one was chosen ove
 | Chat agent | `claude-haiku-4-5` | Messages API + `tool_use`. Gemini 3.1 Flash-Lite was evaluated and rejected for v1 chat — see DESIGN.md §11.4. Re-evaluation is a planned post-launch A/B via the multi-hop eval suite. Do not switch unilaterally. |
 | Weekly digest narrative | Anthropic (env-resolved) | Resolved from `ANTHROPIC_DIGEST_MODEL` at call time; v1 default `claude-sonnet-4-6`. Kept distinct from `ANTHROPIC_MODEL` (chat agent) so a chat-side downgrade to Haiku doesn't drag the digest down with it. Called weekly; prose quality matters. |
 | Memory distillation | `claude-haiku-4-5` | Background after each chat session |
+| Eval final-answer judge | Anthropic (env-resolved) | Resolved from `ANTHROPIC_JUDGE_MODEL` at call time; v1 default `claude-sonnet-4-6`. Non-gating LLM-as-judge dashboard over the §7.10 multi-hop final-answer prose only (helpfulness / tone — numerical correctness stays on the deterministic check). Deliberately a stronger model than the Haiku chat student it grades. Eval infrastructure — not written to `ai_call_log`; never flips the CI gate (deterministic scores own the gate). `EVAL_JUDGE=0` disables. |
 
 Model strings are read from environment variables, not hardcoded — change a model by changing the env, not the code.
 

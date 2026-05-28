@@ -36,6 +36,18 @@ Threshold split (DESIGN.md §7.10):
       per-row pass                        90%      85%
   multi_hop tool sequence                 90%      85%
   multi_hop final answer                  95%      —
+  multi_hop judge helpfulness             80%      —   (LLM-as-judge dashboard)
+  multi_hop judge tone                    80%      —   (LLM-as-judge dashboard)
+
+The judge rows are a NON-GATING dashboard (gate=None — warn-only): a stronger
+model (Sonnet, env `ANTHROPIC_JUDGE_MODEL`) scores the multi-hop final-answer
+prose on helpfulness / tone — the fuzzy quality the deterministic checks can't
+read. Numerical correctness is NOT a judge dimension: multi_hop.final_answer
+above already meters whether the right value appears, so the judge would only
+overlap an assertion. Judge drift must never flip CI, so the gates
+stay on the deterministic scores (memory.md 2026-05-20, the deterministic-eval
+decision whose "Alternatives considered" named this hybrid). Set `EVAL_JUDGE=0`
+to skip the judge entirely (local fast runs / no Anthropic key).
 
 CLAUDE.md invariants honored:
   * No service-role bypass — all reads/writes use the eval user's JWT.
@@ -85,6 +97,12 @@ THRESHOLDS: dict[str, tuple[float, float | None]] = {
     "chat_extraction.propose_subscription.row_pass": (0.90, 0.85),
     "multi_hop.tool_sequence":                       (0.90, 0.85),
     "multi_hop.final_answer":                        (0.95, None),
+    # LLM-as-judge dashboard — non-gating (gate=None). Warns below target
+    # but never breaches; the deterministic scores above own the gate.
+    # Only the unassertable dimensions: numerical correctness is metered by
+    # multi_hop.final_answer above, so the judge does not re-score it.
+    "multi_hop.judge.helpfulness":                   (0.80, None),
+    "multi_hop.judge.tone":                          (0.80, None),
 }
 
 ALL_SUITES = ("categorization", "chat_extraction", "multi_hop")
@@ -378,6 +396,14 @@ def _run_multi_hop(
     per_row: list[dict[str, Any]] = []
     metas: list[dict[str, Any]] = []
 
+    # LLM-as-judge dashboard accumulators. `judged_rows` is the denominator
+    # (rows the judge actually scored — a judge API/parse failure skips the
+    # row rather than scoring it 0), so a partial judge outage shrinks the
+    # sample instead of poisoning the mean.
+    judge_enabled = _judge_enabled()
+    judge_sums = {"helpfulness": 0, "tone": 0}
+    judged_rows = 0
+
     for row in rows:
         prompt = row["prompt"]
         expected_seq = row.get("expected_tool_sequence", [])
@@ -429,6 +455,26 @@ def _run_multi_hop(
         )
         answer_ok += int(ok_answer)
 
+        # Non-gating judge pass (helpfulness + tone only — numerical
+        # correctness is the deterministic final_answer check's job). Sees the
+        # question, the prose answer, and every tool result the turn produced,
+        # so helpfulness can be judged on whether the answer used the data.
+        judgment: dict[str, Any] | None = None
+        if judge_enabled:
+            retrieved_data = [
+                {"tool": tc.name, "result": dict(tc.result)}
+                for tc in turn.tool_calls
+            ]
+            judgment = _judge_multi_hop_row(
+                question=prompt,
+                assistant_answer=turn.assistant_text,
+                retrieved_data=retrieved_data,
+            )
+            if judgment is not None:
+                judged_rows += 1
+                for dim in judge_sums:
+                    judge_sums[dim] += judgment[dim]
+
         # Breakdown "passed" = tool-sequence correctness (the gated
         # dimension for multi-hop).
         metas.append(_row_meta(row, ok_seq))
@@ -443,15 +489,27 @@ def _run_multi_hop(
             "assistant_text": turn.assistant_text,
             "sequence_pass": ok_seq,
             "answer_pass": ok_answer,
+            "judge": judgment,
         })
 
     n = max(len(rows), 1)
+    suite_scores = {
+        "tool_sequence": seq_ok / n,
+        "final_answer":  answer_ok / n,
+    }
+    # Only emit judge score keys when at least one row was judged. An
+    # omitted key falls through _evaluate_thresholds (scores.get -> None),
+    # so a disabled/failed judge produces a blank dashboard line, never a
+    # spurious 0.000 warning.
+    if judged_rows:
+        for dim, raw_total in judge_sums.items():
+            # Mean of the 1–5 scores, normalized to 0–1 via (mean-1)/4.
+            mean_1_5 = raw_total / judged_rows
+            suite_scores[f"judge.{dim}"] = (mean_1_5 - 1.0) / 4.0
     return {
         "n_rows": len(rows),
-        "scores": {
-            "tool_sequence": seq_ok / n,
-            "final_answer":  answer_ok / n,
-        },
+        "scores": suite_scores,
+        "judged_rows": judged_rows,
         "breakdown": _aggregate_breakdown(metas),
         "rows": per_row,
     }
@@ -765,6 +823,128 @@ def _extract_usd_values(text: str) -> list[float]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# LLM-as-judge (multi-hop final-answer dashboard, non-gating).
+# ---------------------------------------------------------------------------
+
+
+def _judge_enabled() -> bool:
+    """Return whether the judge pass should run.
+
+    On by default; `EVAL_JUDGE=0` (or false/no/off) disables it for local
+    fast runs and environments with no Anthropic key. CI leaves it unset,
+    so the always-in-eval-gate dashboard stays on.
+    """
+    return os.environ.get("EVAL_JUDGE", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _judge_model() -> str:
+    """Resolve the judge model — env-overridable, Sonnet by default.
+
+    Deliberately a stronger model than the Haiku chat student it grades
+    (avoids the weak-judge / self-preference trap). Kept distinct from
+    ANTHROPIC_MODEL so a chat-side model A/B doesn't move the grader.
+    """
+    return os.environ.get("ANTHROPIC_JUDGE_MODEL") or "claude-sonnet-4-6"
+
+
+def _judge_multi_hop_row(
+    *,
+    question: str,
+    assistant_answer: str,
+    retrieved_data: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Score one multi-hop answer on helpfulness + tone.
+
+    Makes one forced-tool Messages call (temperature 0) and returns the
+    normalized judgment — each dimension as the raw 1–5 int plus a 0–1
+    `*_score`, with the judge's one-line rationales. Returns None on any API
+    or parse failure: the caller treats None as a skipped row (shrinks the
+    sample) rather than a zero, so a judge outage can't poison the
+    dashboard. Numerical correctness is intentionally not scored here — the
+    deterministic multi_hop.final_answer check owns it. This call is eval
+    infrastructure — it is NOT written to ai_call_log (not a user-facing
+    AI call).
+    """
+    from app.agent.loop import _anthropic_client
+    from app.prompts.judge import (
+        JUDGE_SYSTEM_PROMPT,
+        JUDGE_TOOL,
+        build_judge_user_content,
+    )
+
+    try:
+        response = _anthropic_client().messages.create(
+            model=_judge_model(),
+            max_tokens=512,
+            temperature=0,
+            system=JUDGE_SYSTEM_PROMPT,
+            tools=[JUDGE_TOOL],
+            tool_choice={"type": "tool", "name": JUDGE_TOOL["name"]},
+            messages=[
+                {
+                    "role": "user",
+                    "content": build_judge_user_content(
+                        question=question,
+                        assistant_answer=assistant_answer,
+                        retrieved_data=retrieved_data,
+                    ),
+                }
+            ],
+        )
+    except Exception:  # noqa: BLE001
+        # Non-gating dashboard — a judge failure must never fail the suite.
+        return None
+    raw = _extract_tool_input(response, JUDGE_TOOL["name"])
+    return _normalize_judgment(raw) if raw is not None else None
+
+
+def _normalize_judgment(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Clamp the 1–5 scores and attach a 0–1 normalization each.
+
+    Returns None if any dimension is missing or non-numeric — a malformed
+    judgment is a skipped row, not a guessed one. `(x-1)/4` maps 1→0.0 and
+    5→1.0 so the dashboard scores share the 0–1 scale of the deterministic
+    suites.
+    """
+    out: dict[str, Any] = {}
+    for dim in ("helpfulness", "tone"):
+        try:
+            score = int(raw[dim])
+        except (KeyError, TypeError, ValueError):
+            return None
+        score = max(1, min(5, score))
+        out[dim] = score
+        out[f"{dim}_score"] = (score - 1) / 4.0
+        rationale = raw.get(f"{dim}_rationale")
+        if rationale is not None:
+            out[f"{dim}_rationale"] = str(rationale)
+    return out
+
+
+def _extract_tool_input(response: Any, tool_name: str) -> dict[str, Any] | None:
+    """Pull the input dict of the first `tool_name` tool_use block.
+
+    Tolerates both the real Anthropic SDK block (attribute access:
+    block.type / block.name / block.input) and dict-shaped test doubles, so
+    the judge unit test can mirror test_agent_loop's mocking without a full
+    SDK object. Returns None if no matching block is present.
+    """
+    for block in getattr(response, "content", None) or []:
+        btype = getattr(block, "type", None)
+        bname = getattr(block, "name", None)
+        binput = getattr(block, "input", None)
+        if btype is None and isinstance(block, dict):
+            btype = block.get("type")
+            bname = block.get("name")
+            binput = block.get("input")
+        if btype == "tool_use" and bname == tool_name and isinstance(binput, dict):
+            return binput
+    return None
+
+
 def _normalize_merchant_for_match(value: str) -> str:
     """Lowercase + collapse whitespace + strip apostrophes for fuzzy compare.
 
@@ -958,6 +1138,11 @@ def _collect_prompt_versions() -> dict[str, str]:
         versions["chat"] = chat_v
     except Exception:
         versions["chat"] = "unavailable"
+    try:
+        from app.prompts.judge import JUDGE_PROMPT_VERSION as judge_v
+        versions["judge"] = judge_v
+    except Exception:
+        versions["judge"] = "unavailable"
     return versions
 
 

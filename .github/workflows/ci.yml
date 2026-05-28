@@ -146,6 +146,11 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_EVAL }}
           GEMINI_MODEL_DEFAULT: gemini-2.5-flash
           EVAL_USER_PASSWORD: ${{ secrets.EVAL_USER_PASSWORD }}
+          # LLM-as-judge dashboard (multi_hop, non-gating). A stronger
+          # grader than the Haiku student; ~20 short Sonnet calls per
+          # eval-relevant PR, billed on the eval Anthropic key. Set
+          # EVAL_JUDGE=0 here to disable without code change.
+          ANTHROPIC_JUDGE_MODEL: claude-sonnet-4-6
         run: python eval.py --eval=all
 
       - name: Upload per-run eval JSON
