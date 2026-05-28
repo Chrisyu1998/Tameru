@@ -30,12 +30,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from urllib.parse import urlparse
+
 import jwt
 from fastapi import HTTPException
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 
 from app.agent.tools import get_cards as _agent_get_cards
@@ -117,6 +120,47 @@ def mcp_auth_settings() -> AuthSettings:
     )
 
 
+def mcp_transport_security() -> TransportSecuritySettings:
+    """Build the DNS-rebinding allowlist from `MCP_RESOURCE_SERVER_URL`.
+
+    The MCP SDK auto-enables DNS-rebinding protection with a
+    localhost-only allowlist whenever FastMCP's default ``host="127.0.0.1"``
+    is left in place (see mcp/server/fastmcp/server.py). Without an
+    explicit override, every production request arrives with
+    ``Host: tameru-production.up.railway.app`` and is rejected at the
+    transport layer with HTTP 421 ("Invalid Host header") BEFORE auth
+    runs — Claude.ai sees a generic "Authorization with the MCP server
+    failed."
+
+    Passing a `transport_security` value here bypasses the auto-enable
+    block. We keep the protection on (cheap defense in depth, even
+    behind OAuth) and derive the production host from the
+    `MCP_RESOURCE_SERVER_URL` env var so prod and dev share one config
+    surface. Local dev still works via the localhost entries.
+    """
+    resource_url = (
+        os.environ.get("MCP_RESOURCE_SERVER_URL") or "http://localhost:8000/mcp"
+    )
+    netloc = urlparse(resource_url).netloc or "localhost:8000"
+    allowed_hosts = [
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+        netloc,
+    ]
+    allowed_origins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+        f"https://{netloc}",
+    ]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
 mcp_server = FastMCP(
     "Tameru",
     instructions=_MCP_INSTRUCTIONS,
@@ -128,6 +172,7 @@ mcp_server = FastMCP(
     stateless_http=True,
     json_response=True,
     streamable_http_path="/",
+    transport_security=mcp_transport_security(),
 )
 
 
