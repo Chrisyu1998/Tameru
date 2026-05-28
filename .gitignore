@@ -23,6 +23,14 @@ coverage/
 # Playwright CLI scratch artifacts (browser snapshots, console/network logs)
 .playwright-cli/
 
+# Playwright test artifacts (traces, screenshots, video on failure)
+frontend/test-results/
+frontend/playwright-report/
+
+# Lighthouse local-run + CI artifacts
+.lighthouseci/
+lighthouse-artifacts/
+
 # Supabase
 supabase/.branches/
 supabase/.temp/

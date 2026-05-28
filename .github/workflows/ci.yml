@@ -227,3 +227,195 @@ jobs:
       - name: Deploy to Vercel (Vercel builds server-side)
         working-directory: .
         run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+
+  e2e-deployed:
+    name: E2E (Playwright against deployed prod)
+    needs: [deploy-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    # Day 28 launch gate — exercises the five §13.5 golden-path flows
+    # against the live PWA + Railway + prod Supabase. Hard-gated on
+    # `scripts/smoke_prod.py` as a sanity pre-check so a broken deploy
+    # fails fast before Playwright spins up.
+    env:
+      # Deployed prod URL — also reused by Playwright as baseURL.
+      E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+      # Reused by both scripts/smoke_prod.py and scripts/e2e_user.py.
+      SMOKE_API_URL: ${{ secrets.SMOKE_API_URL }}
+      SMOKE_SUPABASE_URL: ${{ secrets.SMOKE_SUPABASE_URL }}
+      SMOKE_SUPABASE_ANON_KEY: ${{ secrets.SMOKE_SUPABASE_ANON_KEY }}
+      # Persistent smoke user — created once in the Supabase dashboard
+      # per the smoke_prod.py docstring.
+      SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+      SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+      # Service-role key — only used by scripts/e2e_user.py (sanctioned
+      # caller under scripts/, excluded from the leak-guard). Mirrors
+      # the SMOKE_* namespacing of the other secrets the script reads
+      # so the prod value can't collide with the local-stack
+      # `supabase-demo` service-role key the Supabase CLI plants in
+      # developer .env files.
+      SMOKE_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Re-exposed under VITE_* so the Playwright helper can hit the
+      # Supabase REST auth endpoint with the same anon key the deployed
+      # PWA uses.
+      VITE_SUPABASE_URL: ${{ secrets.SMOKE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.SMOKE_SUPABASE_ANON_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend deps (for smoke_prod.py + e2e_user.py)
+        run: pip install -e ".[dev]"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps + Playwright browsers
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # Railway has "Wait for CI" on (memory.md 2026-05-22), so the new
+      # image is rolling out when this job starts. Poll /healthz until
+      # we see a 200 from the app (not the x-railway-fallback "train
+      # has not arrived" page). 5-minute ceiling.
+      - name: Wait for Railway healthcheck
+        env:
+          HEALTHCHECK_URL: ${{ secrets.SMOKE_API_URL }}/healthz
+        run: |
+          for attempt in $(seq 1 30); do
+            response=$(curl -s -o /tmp/healthz.body -w "%{http_code}|%{header_json}" "$HEALTHCHECK_URL" || true)
+            status=$(echo "$response" | cut -d'|' -f1)
+            headers=$(curl -sI "$HEALTHCHECK_URL" || true)
+            if [ "$status" = "200" ] && ! echo "$headers" | grep -qi "x-railway-fallback: true"; then
+              echo "✓ Railway live after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "· attempt ${attempt}: status=${status}; retrying in 10s"
+            sleep 10
+          done
+          echo "✗ Railway healthcheck never returned 200 within 5 min" >&2
+          exit 1
+
+      - name: Smoke (scripts/smoke_prod.py)
+        run: python scripts/smoke_prod.py
+
+      # Mint the per-run E2E user. Captures the three KEY=VALUE lines
+      # the script prints to stdout into $GITHUB_ENV so subsequent
+      # steps see them.
+      - name: Mint E2E user
+        id: mint
+        run: |
+          # Redirect creds to a tempfile — DO NOT pipe through `tee` or
+          # `cat` them. The values are live prod credentials for the
+          # ~5 minutes between this step and the teardown step at the
+          # end of the job; anything echoed here lands in the run log
+          # and any actor with read access to the run can grab them
+          # before teardown fires. The `::add-mask::` directive scrubs
+          # each value from *all subsequent* log output (set-env,
+          # `set -x` traces, accidental `echo $E2E_TEST_PASSWORD`).
+          # `mask` must happen BEFORE the value first appears in the
+          # log, which is why we read the file line-by-line and emit
+          # the mask directive immediately on each capture.
+          set +x
+          python scripts/e2e_user.py create > /tmp/e2e_user.env
+          while IFS='=' read -r key value; do
+            case "$key" in
+              E2E_TEST_EMAIL|E2E_TEST_PASSWORD|E2E_USER_ID)
+                echo "::add-mask::$value"
+                ;;
+            esac
+          done < /tmp/e2e_user.env
+          # Promote each KEY=VALUE line into $GITHUB_ENV (consumed by
+          # the Playwright step via process.env) and stash the user_id
+          # as a step output (consumed by the teardown step's `if:`).
+          # The values are masked, so the echoes that GitHub Actions
+          # generates when writing to $GITHUB_ENV / $GITHUB_OUTPUT
+          # come out as `***` in the log.
+          set -a
+          source /tmp/e2e_user.env
+          set +a
+          {
+            echo "E2E_TEST_EMAIL=$E2E_TEST_EMAIL"
+            echo "E2E_TEST_PASSWORD=$E2E_TEST_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "user_id=$E2E_USER_ID" >> "$GITHUB_OUTPUT"
+          # Defense in depth — wipe the tempfile so a misconfigured
+          # actions/upload-artifact step on /tmp can't ship it.
+          rm -f /tmp/e2e_user.env
+
+      - name: Run Playwright (deployed)
+        working-directory: frontend
+        run: npm run e2e:deployed
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          if-no-files-found: ignore
+
+      # Always-run teardown — a Playwright failure must not leak the
+      # E2E user. The script is best-effort (404 on already-deleted is
+      # not an error) so a re-run of this step is safe.
+      - name: Delete E2E user
+        if: always() && steps.mint.outputs.user_id != ''
+        run: python scripts/e2e_user.py delete --user-id="${{ steps.mint.outputs.user_id }}"
+
+  lighthouse:
+    name: Lighthouse (PWA gate ≥ 90; performance recorded)
+    needs: [deploy-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    # PWA score is the gate per DESIGN.md §10.1. Performance is recorded
+    # as a target (Day 28 review — Lighthouse perf on CI runners varies
+    # ±5 on the same code, so gating it produces flake without value).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Wait for Railway healthcheck
+        env:
+          HEALTHCHECK_URL: ${{ secrets.SMOKE_API_URL }}/healthz
+        run: |
+          for attempt in $(seq 1 30); do
+            headers=$(curl -sI "$HEALTHCHECK_URL" || true)
+            status=$(echo "$headers" | head -n1 | awk '{print $2}')
+            if [ "$status" = "200" ] && ! echo "$headers" | grep -qi "x-railway-fallback: true"; then
+              echo "✓ Railway live after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "· attempt ${attempt}: status=${status}; retrying in 10s"
+            sleep 10
+          done
+          echo "✗ Railway healthcheck never returned 200 within 5 min" >&2
+          exit 1
+
+      - name: Run Lighthouse against deployed PWA
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          urls: ${{ secrets.E2E_BASE_URL }}
+          uploadArtifacts: true
+          temporaryPublicStorage: false
+          # PWA ≥ 90 is the only hard assertion (DESIGN.md §10.1). The
+          # Day 28 review noted that performance ≥ 80 is too flaky for
+          # a hard gate, so we record but don't enforce it; the score
+          # surfaces in the run log + uploaded artifact.
+          configPath: ./.github/lighthouse/config.json

@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "e2e:headed": "playwright test --headed"
+    "e2e:headed": "playwright test --headed",
+    "e2e:deployed": "playwright test --config=playwright.deployed.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

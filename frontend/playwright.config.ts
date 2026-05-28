@@ -20,6 +20,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Day 28's deployed E2E suite lives in `e2e/deployed/` and uses its
+  // own config (`playwright.deployed.config.ts`) — points at the prod
+  // PWA, no webServer, needs a different env. Exclude it here so
+  // `npm run e2e` (the local mocked suite) doesn't try to run them.
+  testIgnore: "**/deployed/**",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
