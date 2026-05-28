@@ -290,15 +290,20 @@ jobs:
       # image is rolling out when this job starts. Poll /healthz until
       # we see a 200 from the app (not the x-railway-fallback "train
       # has not arrived" page). 5-minute ceiling.
+      #
+      # `curl -w "%{http_code}"` writes ONLY the status code (no
+      # newlines, no multi-line JSON), so `$status` stays simple and
+      # the `= "200"` check works. `-D /tmp/h` dumps headers to a
+      # file so we can grep for the x-railway-fallback marker in the
+      # SAME GET request — separate `curl -sI` would issue a HEAD
+      # which `/healthz` rejects (405).
       - name: Wait for Railway healthcheck
         env:
           HEALTHCHECK_URL: ${{ secrets.SMOKE_API_URL }}/healthz
         run: |
           for attempt in $(seq 1 30); do
-            response=$(curl -s -o /tmp/healthz.body -w "%{http_code}|%{header_json}" "$HEALTHCHECK_URL" || true)
-            status=$(echo "$response" | cut -d'|' -f1)
-            headers=$(curl -sI "$HEALTHCHECK_URL" || true)
-            if [ "$status" = "200" ] && ! echo "$headers" | grep -qi "x-railway-fallback: true"; then
+            status=$(curl -s -o /dev/null -D /tmp/healthz.headers -w "%{http_code}" "$HEALTHCHECK_URL" || echo "000")
+            if [ "$status" = "200" ] && ! grep -qi "x-railway-fallback: true" /tmp/healthz.headers 2>/dev/null; then
               echo "✓ Railway live after ${attempt} attempt(s)"
               exit 0
             fi
@@ -391,14 +396,17 @@ jobs:
         with:
           node-version: "20"
 
+      # Same healthcheck shape as the e2e-deployed job — see that step's
+      # comment for the curl-options rationale. /healthz is GET-only
+      # (`@app.get("/healthz")`); a HEAD request returns 405, so we use
+      # GET and capture status + headers in one shot.
       - name: Wait for Railway healthcheck
         env:
           HEALTHCHECK_URL: ${{ secrets.SMOKE_API_URL }}/healthz
         run: |
           for attempt in $(seq 1 30); do
-            headers=$(curl -sI "$HEALTHCHECK_URL" || true)
-            status=$(echo "$headers" | head -n1 | awk '{print $2}')
-            if [ "$status" = "200" ] && ! echo "$headers" | grep -qi "x-railway-fallback: true"; then
+            status=$(curl -s -o /dev/null -D /tmp/healthz.headers -w "%{http_code}" "$HEALTHCHECK_URL" || echo "000")
+            if [ "$status" = "200" ] && ! grep -qi "x-railway-fallback: true" /tmp/healthz.headers 2>/dev/null; then
               echo "✓ Railway live after ${attempt} attempt(s)"
               exit 0
             fi
