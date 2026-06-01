@@ -71,6 +71,13 @@ Version log:
     explicit range — relying on the trailing `months` window silently
     answered about the current month. Bumping the version busts the
     prompt cache once.
+  * chat_v11 (Day 29) — internationalization (DESIGN.md §6.6). The Style
+    section now instructs the agent to reply in the language the user
+    wrote in (English / Japanese / Traditional Chinese — matching the
+    voice-input set, §7.7) while keeping tool arguments and category
+    values in canonical English, and to echo home-currency amounts
+    verbatim without FX conversion. Haiku is natively multilingual, so
+    no model change. Static-block edit, so it busts the prompt cache once.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -92,7 +99,7 @@ from typing import Any
 from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v10"
+PROMPT_VERSION = "chat_v11"
 
 
 SYSTEM_PROMPT = """\
@@ -219,6 +226,14 @@ underlying data exceeded the result cap. Tell the user the number reflects a \
 partial scan and suggest narrower filters (a tighter date range or category).
 
 ## Style
+
+Reply in the same language the user wrote in. If they write in Japanese, \
+answer in Japanese; in Traditional Chinese, answer in Traditional Chinese; \
+otherwise answer in English. This applies only to your prose **to the user** — \
+tool arguments, category values (e.g. "Dining", "Groceries"), and card refs \
+stay in their canonical English form regardless of the conversation language. \
+Amounts you mention in prose carry the user's home-currency symbol exactly as \
+the tools return them; do not convert currencies.
 
 For questions that don't need a tool, answer in plain prose. Be brief — one \
 or two sentences is usually right. No markdown headers. No bullet lists \

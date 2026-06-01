@@ -8,23 +8,20 @@ import {
   type SubscriptionRow,
 } from "@/lib/subscriptions";
 import { setChatSeed } from "@/lib/chatSeed";
-import { formatShortDate } from "@/lib/format";
+import { formatCurrencyAmount, formatShortDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { AIHintFooter } from "@/pages/cards";
 
 /**
- * Format a wire-side decimal-string amount as USD. The backend stores
- * monetary values as Postgres `numeric` (string round-trip); the UI's
- * `formatMoney` helper takes cents, so we convert here.
+ * Format a wire-side decimal-string amount in the user's home currency. The
+ * backend stores monetary values as Postgres `numeric` (string round-trip) in
+ * major units, so we parse and hand the major-unit value straight to the
+ * shared currency formatter (DESIGN.md §6.6).
  */
 function formatAmount(amount: string): string {
   const value = Number(amount);
   if (!Number.isFinite(value)) return amount;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-  }).format(value);
+  return formatCurrencyAmount(value);
 }
 
 export default function SubscriptionsPage() {

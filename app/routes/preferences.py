@@ -16,10 +16,11 @@ the user can change it.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
+from app.util.timezone import is_valid_timezone
 
 router = APIRouter(prefix="/me", tags=["preferences"])
 
@@ -38,8 +39,22 @@ class PreferencesPatch(BaseModel):
     """
     weekly_digest_enabled: bool | None = Field(default=None)
     analytics_opted_out: bool | None = Field(default=None)
+    # IANA zone (DESIGN.md §6.6). Mutable, unlike home_currency. Validated
+    # against zoneinfo; an invalid value is rejected at the API boundary
+    # (422) rather than written and silently breaking the digest cron.
+    timezone: str | None = Field(default=None)
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("timezone")
+    @classmethod
+    def _v_timezone(cls, value: str | None) -> str | None:
+        """Reject a non-null timezone that isn't a real IANA zone (→ 422)."""
+        if value is None:
+            return None
+        if not is_valid_timezone(value):
+            raise ValueError("timezone is not a valid IANA zone")
+        return value
 
 
 class PreferencesResponse(BaseModel):
@@ -51,6 +66,7 @@ class PreferencesResponse(BaseModel):
     """
     weekly_digest_enabled: bool
     analytics_opted_out: bool
+    timezone: str | None = None
 
 
 @router.patch("/preferences")
@@ -77,7 +93,7 @@ def patch_preferences(
     # optimistic value and use the server's. Cheap at one row.
     resp = (
         client.table("users_meta")
-        .select("weekly_digest_enabled, analytics_opted_out")
+        .select("weekly_digest_enabled, analytics_opted_out, timezone")
         .eq("user_id", str(user.user_id))
         .execute()
     )
@@ -85,4 +101,5 @@ def patch_preferences(
     return PreferencesResponse(
         weekly_digest_enabled=bool(row.get("weekly_digest_enabled", True)),
         analytics_opted_out=bool(row.get("analytics_opted_out", False)),
+        timezone=row.get("timezone"),
     )

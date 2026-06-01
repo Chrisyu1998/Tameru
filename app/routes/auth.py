@@ -32,10 +32,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from postgrest.exceptions import APIError as PostgrestAPIError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import AuthedUser, get_current_user_jwt
 from app.db import supabase_for_user
+from app.util.timezone import is_valid_timezone
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -54,15 +55,33 @@ _DEVICE_ID_MAX_LEN = 128
 
 
 class BootstrapRequest(BaseModel):
-    """Represent BootstrapRequest."""
+    """Represent BootstrapRequest.
+
+    `timezone` is the browser's detected IANA zone
+    (`Intl.DateTimeFormat().resolvedOptions().timeZone`), optional and
+    decoupled from `home_currency` (DESIGN.md §6.6). When omitted or
+    invalid it stays NULL and the digest falls back to its default zone.
+    """
     device_id: str = Field(min_length=1, max_length=_DEVICE_ID_MAX_LEN)
     home_currency: str
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _v_timezone(cls, value: str | None) -> str | None:
+        """Reject a non-null timezone that isn't a real IANA zone (→ 422)."""
+        if value is None:
+            return None
+        if not is_valid_timezone(value):
+            raise ValueError("timezone is not a valid IANA zone")
+        return value
 
 
 class BootstrapResponse(BaseModel):
     """Represent BootstrapResponse."""
     home_currency: str
     active_device_id: str
+    timezone: str | None = None
 
 
 class ClaimDeviceRequest(BaseModel):
@@ -105,18 +124,17 @@ def bootstrap(
     answer in every case where the row exists.
     """
     client = supabase_for_user(user.jwt)
+    insert_row = {
+        "user_id": str(user.user_id),
+        "active_device_id": body.device_id,
+        "home_currency": body.home_currency,
+    }
+    # Only write timezone when the client supplied a valid one; NULL lets
+    # the digest fall back to its default zone (DESIGN.md §6.4).
+    if body.timezone is not None:
+        insert_row["timezone"] = body.timezone
     try:
-        ins = (
-            client.table("users_meta")
-            .insert(
-                {
-                    "user_id": str(user.user_id),
-                    "active_device_id": body.device_id,
-                    "home_currency": body.home_currency,
-                }
-            )
-            .execute()
-        )
+        ins = client.table("users_meta").insert(insert_row).execute()
     except PostgrestAPIError as exc:
         if exc.code == _PG_UNIQUE_VIOLATION:
             raise _domain_error(
@@ -136,6 +154,7 @@ def bootstrap(
     return BootstrapResponse(
         home_currency=row["home_currency"],
         active_device_id=row["active_device_id"],
+        timezone=row.get("timezone"),
     )
 
 

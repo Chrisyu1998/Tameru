@@ -109,6 +109,43 @@ def test_patch_empty_body_returns_state_no_write(client, user_a):
     assert body["analytics_opted_out"] is False
 
 
+def test_patch_sets_valid_timezone(client, user_a):
+    """A valid IANA timezone is persisted and round-trips in the response
+    (Day 29, DESIGN.md §6.6). Timezone is mutable, unlike home_currency."""
+    db = supabase_for_user(user_a.jwt)
+    resp = client.patch(
+        "/me/preferences",
+        headers=_headers(user_a),
+        json={"timezone": "Asia/Taipei"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["timezone"] == "Asia/Taipei"
+
+    after = (
+        db.table("users_meta")
+        .select("timezone")
+        .eq("user_id", user_a.id)
+        .execute()
+        .data[0]
+    )
+    assert after["timezone"] == "Asia/Taipei"
+
+    # Cleanup: clear for downstream tests.
+    db.table("users_meta").update({"timezone": None}).eq(
+        "user_id", user_a.id
+    ).execute()
+
+
+def test_patch_rejects_invalid_timezone(client, user_a):
+    """A non-IANA timezone is rejected (422) before any write."""
+    resp = client.patch(
+        "/me/preferences",
+        headers=_headers(user_a),
+        json={"timezone": "Not/AZone"},
+    )
+    assert resp.status_code == 422
+
+
 def test_patch_unknown_field_rejected(client, user_a):
     """Unknown fields fail validation (extra='forbid' on the model)."""
     resp = client.patch(

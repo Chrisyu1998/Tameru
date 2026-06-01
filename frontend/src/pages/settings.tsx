@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
+import { detectTimezone } from "@/lib/auth";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import {
   readPreferences,
@@ -40,6 +41,24 @@ function currencyDisplay(code: string | null | undefined): string {
     return code;
   }
 }
+
+// A curated set of IANA zones covering the v1 user base (US + Japan +
+// Taiwan) plus a few majors. The user's detected zone and current stored
+// zone are merged in at render time, so any valid zone the browser reports
+// is always selectable even if it isn't in this list (DESIGN.md §6.6).
+const COMMON_TIMEZONES = [
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Paris",
+  "Asia/Taipei",
+  "Asia/Hong_Kong",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+];
 
 type SectionId =
   | "account"
@@ -267,6 +286,85 @@ function ImportPanel() {
   );
 }
 
+function TimezoneRow() {
+  // Mutable per-user IANA zone (DESIGN.md §6.6) — drives when the weekly
+  // digest arrives (Monday 9am local) and its week-boundary math. Same
+  // optimistic-write + monotonic-sequence pattern as the digest toggle so
+  // rapid changes can't let a stale PATCH response win.
+  const [tz, setTz] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const latestRequest = useRef(0);
+
+  useEffect(() => {
+    const myRequest = ++latestRequest.current;
+    readPreferences()
+      .then((prefs) => {
+        if (myRequest !== latestRequest.current) return;
+        // No stored zone yet → show the browser's detected zone as the
+        // current value (it's what the digest would fall back to anyway).
+        setTz(prefs.timezone ?? detectTimezone());
+      })
+      .catch(() => {
+        setTz(detectTimezone());
+      });
+  }, []);
+
+  // Merge the curated list with the detected + currently-selected zones so
+  // every valid zone the browser reports is selectable (sorted, deduped).
+  const options = (() => {
+    const set = new Set(COMMON_TIMEZONES);
+    const detected = detectTimezone();
+    if (detected) set.add(detected);
+    if (tz) set.add(tz);
+    return Array.from(set).sort();
+  })();
+
+  const handleChange = (next: string) => {
+    if (saving || next === tz) return;
+    const prev = tz;
+    setTz(next);
+    setSaving(true);
+    const myRequest = ++latestRequest.current;
+    updatePreferences({ timezone: next })
+      .then((prefs) => {
+        if (myRequest !== latestRequest.current) return;
+        setTz(prefs.timezone ?? next);
+      })
+      .catch(() => {
+        if (myRequest !== latestRequest.current) return;
+        setTz(prev);
+      })
+      .finally(() => {
+        if (myRequest !== latestRequest.current) return;
+        setSaving(false);
+      });
+  };
+
+  return (
+    <div className="flex flex-col gap-1 px-1 py-3">
+      <span className="text-[0.95rem] text-ink">timezone</span>
+      <span className="text-[0.78rem] text-ink-tertiary">
+        when your digest arrives, and how dates line up. defaults to this
+        device's timezone.
+      </span>
+      <select
+        value={tz ?? ""}
+        onChange={(e) => handleChange(e.target.value)}
+        disabled={saving || tz === null}
+        className="mt-2 h-10 w-full rounded-2xl border border-hairline bg-elevated px-3 text-sm text-ink focus:outline-none disabled:opacity-60"
+        data-testid="timezone-select"
+      >
+        {tz === null && <option value="">loading…</option>}
+        {options.map((z) => (
+          <option key={z} value={z}>
+            {z.replace(/_/g, " ")}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function NotificationsPanel() {
   // Server-backed (Day 25, DESIGN.md §6.4). Optimistic UI: flip locally,
   // then PATCH and reconcile against the server's returned canonical
@@ -332,14 +430,15 @@ function NotificationsPanel() {
         title="notifications"
         subtitle="tameru speaks softly. you choose how often."
       />
-      <div className="rounded-2xl border border-hairline bg-surface px-4">
+      <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <ToggleRow
           label="weekly digest email"
-          desc="a quiet recap every monday morning. unsubscribe link in every send."
+          desc="a quiet recap at monday 9am your time. unsubscribe link in every send."
           checked={weekly}
           onChange={handleWeeklyChange}
           disabled={savingWeekly}
         />
+        <TimezoneRow />
       </div>
     </div>
   );

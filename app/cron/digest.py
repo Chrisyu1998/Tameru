@@ -1,9 +1,29 @@
-"""Weekly digest cron entry point (DESIGN.md §6.4).
+"""Weekly digest cron entry point (DESIGN.md §6.4, §6.6).
 
-Runs as a Railway scheduled service on `0 14 * * 1` (Monday 14:00 UTC
-= 09:00 ET). Iterates eligible users, composes + renders + sends the
-digest, writes `email_log` (idempotent via the partial unique index),
-and logs the Sonnet call to `ai_call_log` under `task_type='digest'`.
+Runs as a Railway scheduled service on `0 * * * *` (hourly, on the hour).
+Each run sends only to eligible users for whom it is *currently* Monday in
+the [09:00, 12:00) local hours of their own `users_meta.timezone` (DESIGN.md
+§6.6 — per-user local delivery, decoupled from currency). The three-hour
+window is a retry budget: a failed 09:00 send releases its reservation slot
+so the 10:00 fire re-attempts, and the UTC-week unique index makes every
+fire after the first success a no-op (so no duplicates). An outage lasting
+past noon local means the user misses this week — the documented bounded
+false-negative. Users with no zone set fall back to America/New_York, so
+pre-Day-29 behavior (Monday morning ET) is preserved. Running hourly +
+gating on local time is also DST-correct for free: ET 09:00 is 13:00 or
+14:00 UTC depending on the season, and the gate handles both without a
+schedule change.
+
+OPERATOR NOTE: the Railway cron schedule for the `digest-cron` service must
+be `0 * * * *` (was `0 14 * * 1`). Most hourly runs send to zero users and
+exit 0 cleanly; the cost is ~168 sub-second container spin-ups per week,
+negligible at v1 scale.
+
+Iterates eligible users, composes + renders + sends the digest, writes
+`email_log` (idempotent via the partial unique index — still keyed on the
+UTC week, which remains a correct once-per-week guard because each user is
+attempted only at their single local-09:00 hour), and logs the Sonnet call
+to `ai_call_log` under `task_type='digest'`.
 
 Service-role posture (CLAUDE.md invariant 1, third sanctioned caller):
 this module is the only place that imports `supabase_admin` for the
@@ -12,9 +32,9 @@ and never imports admin itself, so the leak guard still passes the
 service-layer file directly.
 
 CLI:
-  python -m app.cron.digest                  # production batch
-  python -m app.cron.digest --user <uuid>    # restrict to one recipient
-  python -m app.cron.digest --dry-run        # compose + render, no send/log
+  python -m app.cron.digest                  # production batch (gated to Mon 09:00 local)
+  python -m app.cron.digest --user <uuid>    # one recipient, bypasses the send-window gate
+  python -m app.cron.digest --dry-run        # compose + render, no send/log, any time
 """
 
 from __future__ import annotations
@@ -26,10 +46,12 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from app.db import supabase_admin
 from app.integrations.resend import send_digest_email
 from app.services.digest import (
+    DEFAULT_DIGEST_TZ_NAME,
     SONNET_PROMPT_VERSION,
     SonnetCallLog,
     compose_digest,
@@ -42,6 +64,18 @@ from app.util.unsubscribe import make_unsubscribe_token
 logger = logging.getLogger(__name__)
 
 _DIGEST_KIND = "digest"
+# Per-user local send window (DESIGN.md §6.6): Monday (weekday 0), the hours
+# [09:00, 12:00) — i.e. 09:00, 10:00, 11:00. The cron fires at minute 0 each
+# hour, so the user gets up to three attempts across Monday morning. The
+# reserve-then-release pattern makes the first *successful* send claim the
+# week's slot (so 10:00/11:00 then no-op via the UTC-week unique index),
+# while a *failed* 09:00 send releases its slot so the 10:00 fire retries.
+# Capped at noon so a Monday-morning outage retries but the digest never
+# arrives as a "good morning" recap in the afternoon/evening; a >3h outage
+# means the user misses this week (the documented bounded false-negative).
+_SEND_LOCAL_WEEKDAY = 0
+_SEND_LOCAL_HOUR_START = 9
+_SEND_LOCAL_HOUR_END = 12  # exclusive
 
 
 @dataclass
@@ -50,6 +84,7 @@ class SendReport:
     eligible: int = 0
     sent: int = 0
     skipped_already_sent: int = 0
+    skipped_off_schedule: int = 0
     failed: int = 0
 
 
@@ -57,15 +92,17 @@ def send_weekly_digests(
     *,
     only_user_id: UUID | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> SendReport:
     """Iterate eligible users and send the digest to each.
 
     RESERVATION PATTERN (the actual duplicate-send guard):
 
       1. RESERVE a success=true row in email_log BEFORE calling Resend.
-         The partial unique index `email_log_weekly_dedup` makes this
+         The partial unique index `email_log_dedup_week_uniq` makes this
          insert fail (ON CONFLICT DO NOTHING returns empty) if any
-         success=true row already exists for this (user, kind, week).
+         success=true row already exists for this (user, kind,
+         local-Monday-week — see `_local_week_monday`).
       2. If the reservation conflicts, skip — another worker or a
          previous run already claimed this user's slot for this week.
       3. Compose + send.
@@ -91,15 +128,31 @@ def send_weekly_digests(
     `dry_run=True` composes + renders and prints to stdout. It does
     NOT reserve, send, or log — useful for manual UAT without touching
     the email_log or burning a Sonnet call against a real user.
+
+    SEND-WINDOW GATE (DESIGN.md §6.6): the scheduled batch sends to a user
+    only when it is currently Monday 09:00 in that user's timezone. The
+    gate is bypassed for `dry_run` (prints any time) and for a single-user
+    manual run (`only_user_id` set) or explicit `force=True`, so UAT works
+    on any weekday/hour.
     """
     admin = supabase_admin()
     report = SendReport()
+    now_utc = datetime.now(timezone.utc)
+    # A targeted or forced invocation is a manual action — skip the clock
+    # gate so the operator isn't constrained to Monday morning.
+    apply_gate = not force and only_user_id is None
 
     rows = _read_eligible(admin, only_user_id=only_user_id)
     for row in rows:
         report.eligible += 1
         user_id = UUID(row["id"])
         email = row["email"]
+
+        if apply_gate and not dry_run and not _is_within_send_window(
+            row.get("timezone"), now_utc
+        ):
+            report.skipped_off_schedule += 1
+            continue
 
         if dry_run:
             try:
@@ -123,8 +176,13 @@ def send_weekly_digests(
 
         # Step 1: reserve the weekly slot BEFORE sending. ON CONFLICT
         # DO NOTHING against the partial unique index returns an empty
-        # set when the slot is already taken.
-        reserved_id = _reserve_slot(admin, user_id=user_id)
+        # set when the slot is already taken. The dedup key is the user's
+        # LOCAL Monday date (DESIGN.md §6.6) — invariant across the three
+        # retry fires and across a mid-week tz change, and (unlike the UTC
+        # week) correct for zones east of UTC+9 where Monday 09:00 local
+        # falls on Sunday UTC.
+        dedup_week = _local_week_monday(row.get("timezone"), now_utc)
+        reserved_id = _reserve_slot(admin, user_id=user_id, dedup_week=dedup_week)
         if reserved_id is None:
             report.skipped_already_sent += 1
             logger.info(
@@ -246,6 +304,7 @@ def send_weekly_digests(
             "eligible": report.eligible,
             "sent": report.sent,
             "skipped_already_sent": report.skipped_already_sent,
+            "skipped_off_schedule": report.skipped_off_schedule,
             "failed": report.failed,
         },
     )
@@ -284,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
             "eligible": report.eligible,
             "sent": report.sent,
             "skipped_already_sent": report.skipped_already_sent,
+            "skipped_off_schedule": report.skipped_off_schedule,
             "failed": report.failed,
         },
     )
@@ -296,7 +356,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _read_eligible(admin, *, only_user_id: UUID | None) -> list[dict]:
-    """Return one row per eligible user: id, email.
+    """Return one row per eligible user: id, email, timezone.
+
+    `timezone` is the user's IANA zone or None (the caller's send-window
+    gate falls back to the default zone when None).
 
     Eligibility:
       - confirmed email,
@@ -312,12 +375,18 @@ def _read_eligible(admin, *, only_user_id: UUID | None) -> list[dict]:
     is two RPCs and a small loop; promote to a SECURITY DEFINER RPC if
     the user base grows.
     """
-    # Step 1: users_meta with the flag enabled.
-    meta_query = admin.table("users_meta").select("user_id").eq("weekly_digest_enabled", True)
+    # Step 1: users_meta with the flag enabled (carry timezone through for
+    # the caller's per-user send-window gate).
+    meta_query = (
+        admin.table("users_meta")
+        .select("user_id, timezone")
+        .eq("weekly_digest_enabled", True)
+    )
     if only_user_id is not None:
         meta_query = meta_query.eq("user_id", str(only_user_id))
     meta_resp = meta_query.execute()
-    candidate_ids = [r["user_id"] for r in (meta_resp.data or [])]
+    tz_by_id = {r["user_id"]: r.get("timezone") for r in (meta_resp.data or [])}
+    candidate_ids = list(tz_by_id.keys())
     if not candidate_ids:
         return []
 
@@ -343,8 +412,49 @@ def _read_eligible(admin, *, only_user_id: UUID | None) -> list[dict]:
             continue
         if not _has_recent_activity(admin, UUID(uid)):
             continue
-        eligible.append({"id": uid, "email": user["email"]})
+        eligible.append(
+            {"id": uid, "email": user["email"], "timezone": tz_by_id.get(uid)}
+        )
     return eligible
+
+
+def _is_within_send_window(tz_name: str | None, now_utc: datetime) -> bool:
+    """True iff it is currently Monday in the [09:00, 12:00) hours of `tz_name`.
+
+    The three-hour window (09:00 / 10:00 / 11:00 fires) is the retry budget:
+    a failed 09:00 send releases its reservation slot and the 10:00 fire
+    re-attempts; once a send succeeds, the UTC-week unique index makes the
+    remaining fires no-op. `tz_name` None or unresolvable → the default
+    digest zone, so users with no zone set keep getting the digest Monday
+    morning ET (the historical time). DESIGN.md §6.6.
+    """
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
+    except Exception:
+        tz = ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
+    local = now_utc.astimezone(tz)
+    return (
+        local.weekday() == _SEND_LOCAL_WEEKDAY
+        and _SEND_LOCAL_HOUR_START <= local.hour < _SEND_LOCAL_HOUR_END
+    )
+
+
+def _local_week_monday(tz_name: str | None, now_utc: datetime) -> str:
+    """The Monday (ISO date string) of `now_utc`'s week in `tz_name`.
+
+    This is the digest's idempotency key (DESIGN.md §6.6). It is invariant
+    across the three Monday-morning retry fires and across a mid-week
+    timezone change — and, unlike the UTC week of the send instant, it is
+    correct for zones east of UTC+9 where Monday 09:00 local is Sunday UTC
+    (e.g. Australia/Sydney: all three fires resolve to the same local
+    Monday). `tz_name` None or unresolvable → the default digest zone.
+    """
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
+    except Exception:
+        tz = ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
+    local = now_utc.astimezone(tz)
+    return (local - timedelta(days=local.weekday())).date().isoformat()
 
 
 def _list_auth_users(admin) -> list[dict]:
@@ -411,15 +521,16 @@ def _has_recent_activity(admin, user_id: UUID) -> bool:
     return bool(resp.data)
 
 
-def _reserve_slot(admin, *, user_id: UUID) -> str | None:
+def _reserve_slot(admin, *, user_id: UUID, dedup_week: str) -> str | None:
     """Reserve the weekly slot for (user_id, digest) BEFORE calling Resend.
 
     Inserts an email_log row with success=true and no provider_message_id
     yet, via the idempotent RPC. The partial unique index on
-    `(user_id, kind, date_trunc('week', sent_at, 'UTC')) WHERE success`
+    `(user_id, kind, dedup_week) WHERE success AND dedup_week IS NOT NULL`
     makes this INSERT conflict-and-skip when a successful row already
-    exists for the week. Returns the new row's id on success, or None
-    when the conflict path fired (the caller skips that user).
+    exists for the week. `dedup_week` is the recipient's LOCAL Monday date
+    (ISO string) — see `_local_week_monday`. Returns the new row's id on
+    success, or None when the conflict path fired (the caller skips).
 
     A reserved row that never gets finalized (compose throws, Resend
     times out, worker crashes mid-send) sits as success=true with
@@ -436,6 +547,7 @@ def _reserve_slot(admin, *, user_id: UUID) -> str | None:
             "p_success": True,
             "p_provider_message_id": None,
             "p_error_code": None,
+            "p_dedup_week": dedup_week,
         },
     ).execute()
     if not resp.data:

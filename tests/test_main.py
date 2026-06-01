@@ -44,6 +44,9 @@ def test_me_returns_claims(client, user_a):
         "home_currency": "USD",
         "analytics_opted_out": False,
         "weekly_digest_enabled": True,
+        # Day 29: per-user timezone rides on /me. The fixture bootstraps
+        # with no zone, so it's null here (DESIGN.md §6.6).
+        "timezone": None,
     }
 
 

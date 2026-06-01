@@ -44,7 +44,24 @@ export type MeResponse = {
   // (analytics opted in / digest opted in) for pre-bootstrap users.
   analytics_opted_out: boolean;
   weekly_digest_enabled: boolean;
+  // Day 29 (DESIGN.md §6.6): per-user IANA timezone, or null when unset.
+  // Decoupled from home_currency — drives the weekly digest's local send
+  // time and week-boundary math. Editable in Settings.
+  timezone: string | null;
 };
+
+/**
+ * The browser's IANA timezone (e.g. "Asia/Tokyo"), or null if the runtime
+ * can't report one. Sent at bootstrap so the digest defaults to the user's
+ * actual zone rather than a currency-derived guess (DESIGN.md §6.6).
+ */
+export function detectTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
 
 export type CheckDeviceResponse = {
   is_active: boolean;
@@ -70,10 +87,15 @@ export async function fetchMe(): Promise<MeResponse> {
 export async function bootstrap(
   deviceId: string,
   homeCurrency: AllowedCurrency,
-): Promise<{ home_currency: AllowedCurrency; active_device_id: string }> {
+): Promise<{ home_currency: AllowedCurrency; active_device_id: string; timezone: string | null }> {
   return apiJson('/auth/bootstrap', {
     method: 'POST',
-    body: { device_id: deviceId, home_currency: homeCurrency },
+    body: {
+      device_id: deviceId,
+      home_currency: homeCurrency,
+      // Best-effort: the backend validates and stores NULL if absent/invalid.
+      timezone: detectTimezone(),
+    },
   });
 }
 

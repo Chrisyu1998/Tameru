@@ -3,6 +3,7 @@ import { Calendar } from "lucide-react";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { patchCard } from "@/lib/cardsApi";
+import { currencySymbol } from "@/lib/format";
 import { ledger } from "@/lib/ledger";
 import { type Card } from "@/lib/fixtures";
 
@@ -162,7 +163,7 @@ export function EditCardAfSheet({
       <div className="mt-5 flex flex-col gap-4">
         <FieldGroup label="amount">
           <div className="flex items-center gap-1">
-            <span className="font-serif text-ink-tertiary">$</span>
+            <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
               value={amount}
               onChange={(e) => setAmount(e.target.value)}

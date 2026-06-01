@@ -3,6 +3,7 @@ import { ChevronDown, CreditCard } from "lucide-react";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { MultipliersEditor } from "@/components/MultipliersEditor";
+import { currencySymbol } from "@/lib/format";
 import { ledger } from "@/lib/ledger";
 import { type Card, type CardMultiplier, type CardProgram } from "@/lib/fixtures";
 import { cn } from "@/lib/utils";
@@ -155,7 +156,7 @@ export function EditCardSheet({
 
         <FieldGroup label="annual fee">
           <div className="flex items-center gap-1">
-            <span className="font-serif text-ink-tertiary">$</span>
+            <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
               value={annualFee}
               onChange={(e) => setAnnualFee(e.target.value)}

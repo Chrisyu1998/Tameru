@@ -30,8 +30,13 @@ from zoneinfo import ZoneInfo
 from anthropic import Anthropic
 from supabase import Client
 
-# DESIGN.md §6.4 — v1 hardcodes ET; per-user timezone is Phase 2.
-_DIGEST_TZ = ZoneInfo("America/New_York")
+# DESIGN.md §6.4 / §6.6 — the digest runs in each user's own timezone
+# (`users_meta.timezone`). This is the fallback when a user has no zone set
+# (NULL column) or a legacy/invalid value: the historical ET behavior, so
+# pre-Day-29 users are unaffected. The cron imports the *name* for its
+# per-user send-window gate.
+DEFAULT_DIGEST_TZ_NAME = "America/New_York"
+_DEFAULT_DIGEST_TZ = ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
 _BASELINE_WEEKS = 8
 
 # Sonnet model is resolved from env per CLAUDE.md "Model usage by task"
@@ -103,8 +108,8 @@ class DigestPayload:
     against a same-day soft-delete).
     """
     user_id: UUID
-    week_start: datetime          # Monday 00:00 ET of the week being summarized
-    week_end: datetime            # Sunday 23:59:59 ET of the same week
+    week_start: datetime          # Monday 00:00 in the user's tz, week summarized
+    week_end: datetime            # Sunday 23:59:59 in the user's tz, same week
     week_total: Decimal
     baseline_avg: Decimal         # 8-week trailing avg, excludes the just-ended week
     top_category: CategoryRollup | None
@@ -143,10 +148,10 @@ def compose_digest(
     exception, logs it via the JSON logger, writes an `email_log` row
     with success=False, and moves to the next user.
     """
-    week_start, week_end = _previous_week_bounds_et()
+    home_currency, tz = _read_user_settings(client, user_id)
+    week_start, week_end = _previous_week_bounds(tz)
     baseline_start = week_start - timedelta(weeks=_BASELINE_WEEKS)
 
-    home_currency = _read_home_currency(client, user_id)
     transactions = _read_active_transactions(client, user_id, baseline_start, week_end)
 
     week_total, baseline_avg, top_category = _aggregate(
@@ -287,31 +292,58 @@ def render_email(
 # ---------------------------------------------------------------------------
 
 
-def _previous_week_bounds_et() -> tuple[datetime, datetime]:
-    """Return Mon 00:00 ET → Sun 23:59:59.999999 ET of the previous week.
+def _previous_week_bounds(tz: ZoneInfo) -> tuple[datetime, datetime]:
+    """Return Mon 00:00 → Sun 23:59:59.999999 of the previous week, in `tz`.
 
-    Computed against `now()` in ET, walked back to the Monday on or
-    before today, then minus one week.
+    Computed against `now()` in the user's timezone, walked back to the
+    Monday on or before today, then minus one week. Doing the boundary math
+    in the user's own zone means a transaction near Sunday/Monday midnight
+    is bucketed into the week the user experienced it, not a UTC- or
+    ET-shifted one (DESIGN.md §6.6).
     """
-    now_et = datetime.now(_DIGEST_TZ)
-    today_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
-    monday_this_week = today_et - timedelta(days=today_et.weekday())
+    now_local = datetime.now(tz)
+    today_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    monday_this_week = today_local - timedelta(days=today_local.weekday())
     week_start = monday_this_week - timedelta(days=7)
     week_end = monday_this_week - timedelta(microseconds=1)
     return week_start, week_end
 
 
-def _read_home_currency(client: Client, user_id: UUID) -> str:
-    """Read `users_meta.home_currency` for `user_id`. Default USD if missing."""
+def _read_user_settings(client: Client, user_id: UUID) -> tuple[str, ZoneInfo]:
+    """Read `(home_currency, timezone)` for `user_id`.
+
+    Response shape: `(currency, ZoneInfo)`. Defaults to `("USD",
+    DEFAULT_DIGEST_TZ)` when no row exists; an absent or unresolvable
+    `timezone` (NULL column, or a legacy value not in this Python's tz
+    database) falls back to the default zone so the digest never crashes
+    on a bad zone.
+    """
     resp = (
         client.table("users_meta")
-        .select("home_currency")
+        .select("home_currency, timezone")
         .eq("user_id", str(user_id))
         .execute()
     )
-    if resp.data:
-        return resp.data[0].get("home_currency") or "USD"
-    return "USD"
+    if not resp.data:
+        return "USD", _DEFAULT_DIGEST_TZ
+    row = resp.data[0]
+    home_currency = row.get("home_currency") or "USD"
+    return home_currency, _resolve_tz(row.get("timezone"))
+
+
+def _resolve_tz(name: str | None) -> ZoneInfo:
+    """Resolve an IANA zone name to a `ZoneInfo`, falling back to the default.
+
+    Defensive: stored zones are validated at write time (app/util/timezone),
+    but NULL and any legacy/invalid value must still produce a usable zone
+    rather than raise inside the cron loop.
+    """
+    if not name:
+        return _DEFAULT_DIGEST_TZ
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return _DEFAULT_DIGEST_TZ
 
 
 def _read_active_transactions(

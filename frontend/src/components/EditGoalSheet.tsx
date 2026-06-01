@@ -3,6 +3,7 @@ import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { Pill } from "@/components/Pill";
 import { ApiError } from "@/lib/api";
+import { currencySymbol } from "@/lib/format";
 import { ledger } from "@/lib/ledger";
 import {
   GOAL_OVERALL_LABEL,
@@ -117,7 +118,7 @@ export function EditGoalSheet({
 
         <FieldGroup label="amount">
           <div className="flex items-center gap-1">
-            <span className="font-serif text-ink-tertiary">$</span>
+            <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
               value={amount}
               onChange={(e) => setAmount(e.target.value)}

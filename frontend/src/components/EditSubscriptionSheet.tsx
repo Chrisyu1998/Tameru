@@ -14,7 +14,7 @@ import {
   type SubscriptionRow,
 } from "@/lib/subscriptions";
 import { type Card } from "@/lib/fixtures";
-import { formatShortDate } from "@/lib/format";
+import { currencySymbol, formatShortDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface EditSubscriptionSheetProps {
@@ -174,7 +174,7 @@ export function EditSubscriptionSheet({
 
         <FieldGroup label="amount">
           <div className="flex items-center gap-1">
-            <span className="font-serif text-ink-tertiary">$</span>
+            <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
               value={amount}
               onChange={(e) => setAmount(e.target.value)}

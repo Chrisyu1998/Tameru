@@ -10,6 +10,7 @@ import { EditCardSheet } from "@/components/EditCardSheet";
 import { EditCardAfSheet } from "@/components/EditCardAfSheet";
 import { ledger, useLedger } from "@/lib/ledger";
 import { setChatSeed } from "@/lib/chatSeed";
+import { formatFullDate } from "@/lib/format";
 import { ISSUER_LABELS } from "@/lib/cardsApi";
 import { listSubscriptions, type SubscriptionRow } from "@/lib/subscriptionsApi";
 import { cn } from "@/lib/utils";
@@ -283,17 +284,9 @@ function formatAfAmount(amount: string): string {
   return parsed % 1 === 0 ? parsed.toFixed(0) : parsed.toFixed(2);
 }
 
-function formatAfDate(iso: string): string {
-  // "2027-03-15" → "Mar 15, 2027". Wide enough on mobile; the chip is
-  // a single line.
-  const d = new Date(`${iso}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
+// "2027-03-15" → "Mar 15, 2027" (localized). Wide enough on mobile; the chip
+// is a single line. Shared helper keeps the locale logic in one place.
+const formatAfDate = formatFullDate;
 
 function EmptyCards({ onAsk }: { onAsk: () => void }) {
   return (

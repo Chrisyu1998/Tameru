@@ -43,7 +43,13 @@ def test_bootstrap_creates_users_meta_row(client, user_unbootstrapped):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body == {"home_currency": "EUR", "active_device_id": device_id}
+    # Day 29: timezone rides on the bootstrap response; null when the client
+    # didn't send one (DESIGN.md §6.6).
+    assert body == {
+        "home_currency": "EUR",
+        "active_device_id": device_id,
+        "timezone": None,
+    }
 
     # And the row really landed under the user's RLS scope.
     db = supabase_for_user(user_unbootstrapped.jwt)
@@ -55,6 +61,49 @@ def test_bootstrap_creates_users_meta_row(client, user_unbootstrapped):
         .data
     )
     assert row == [{"home_currency": "EUR", "active_device_id": device_id}]
+
+
+def test_bootstrap_stores_valid_timezone(client, user_unbootstrapped):
+    """A valid IANA timezone sent at bootstrap is persisted and echoed back
+    (DESIGN.md §6.6 — decoupled from home_currency)."""
+    device_id = f"dev-{uuid.uuid4().hex[:8]}"
+    resp = client.post(
+        "/auth/bootstrap",
+        headers=_bearer(user_unbootstrapped),
+        json={
+            "device_id": device_id,
+            "home_currency": "JPY",
+            "timezone": "Asia/Tokyo",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["timezone"] == "Asia/Tokyo"
+
+    db = supabase_for_user(user_unbootstrapped.jwt)
+    row = (
+        db.table("users_meta")
+        .select("timezone")
+        .eq("user_id", user_unbootstrapped.id)
+        .execute()
+        .data
+    )
+    assert row == [{"timezone": "Asia/Tokyo"}]
+
+
+def test_bootstrap_rejects_invalid_timezone(client, user_unbootstrapped):
+    """A non-IANA timezone is rejected at the API boundary (422) rather than
+    written and silently breaking the digest cron."""
+    device_id = f"dev-{uuid.uuid4().hex[:8]}"
+    resp = client.post(
+        "/auth/bootstrap",
+        headers=_bearer(user_unbootstrapped),
+        json={
+            "device_id": device_id,
+            "home_currency": "USD",
+            "timezone": "Mars/Phobos",
+        },
+    )
+    assert resp.status_code == 422, resp.text
 
 
 def test_bootstrap_second_call_returns_409(client, user_unbootstrapped):
