@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 type Direction = "above" | "below" | "usual" | "neutral";
@@ -72,6 +73,7 @@ export function DeltaTile({
   className,
   onClick,
 }: DeltaTileProps) {
+  const { t } = useTranslation();
   const direction = directionOverride ?? inferDirection(delta);
   const isSolid = tone === "neutral";
   const tileSurface = isSolid ? neutralByDirection : tintByDirection;
@@ -84,12 +86,12 @@ export function DeltaTile({
   const resolvedBand =
     band ??
     (direction === "above"
-      ? "above usual"
+      ? t("home.bandAbove")
       : direction === "below"
-      ? "below usual"
+      ? t("home.bandBelow")
       : direction === "neutral"
-      ? "neutral"
-      : "as usual");
+      ? t("home.bandNeutral")
+      : t("home.bandUsual"));
 
   const Tag = onClick ? "button" : "div";
 

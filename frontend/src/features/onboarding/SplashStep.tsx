@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { SketchIcon } from "@/components/SketchIcon";
 
@@ -12,6 +13,7 @@ interface SplashStepProps {
  * The "get started" CTA lives on PhilosophyStep so the pitch gates signup.
  */
 export function SplashStep({ onContinue, onTour }: SplashStepProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-screen flex-col items-center justify-between px-6 pb-12 pt-24 animate-fade-up">
       <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
@@ -32,21 +34,21 @@ export function SplashStep({ onContinue, onTour }: SplashStepProps) {
         <div className="flex flex-col items-center gap-2">
           <h1 className="font-serif text-5xl text-ink lowercase-title">tameru</h1>
           <p className="font-serif italic text-ink-secondary text-base">
-            the mindful ledger
+            {t("onboarding.splash.tagline")}
           </p>
         </div>
       </div>
 
       <div className="flex w-full max-w-sm flex-col items-center gap-4">
         <Button fullWidth onClick={onContinue}>
-          continue
+          {t("onboarding.splash.continue")}
         </Button>
         <button
           type="button"
           onClick={onTour}
           className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
         >
-          take the tour
+          {t("onboarding.splash.takeTour")}
         </button>
       </div>
     </div>

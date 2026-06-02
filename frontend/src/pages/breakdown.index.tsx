@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, ChevronDown } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Donut } from "@/components/Donut";
 import {
   currentMonthTransactions,
@@ -22,6 +23,7 @@ import { AutoLoggedBadge } from "@/components/AutoLoggedBadge";
 import { SketchIcon } from "@/components/SketchIcon";
 
 export default function BreakdownPage() {
+  const { t } = useTranslation();
   const { transactions, cards, goals } = useLedger();
   const catLabel = useCategoryLabel();
   useEffect(() => {
@@ -61,12 +63,12 @@ export default function BreakdownPage() {
       <header className="flex items-center justify-between">
         <Link
           to="/"
-          aria-label="back"
+          aria-label={t("breakdown.backAriaLabel")}
           className="flex h-10 w-10 items-center justify-center -ml-2 rounded-full text-ink-secondary transition-colors hover:bg-sunken/60 hover:text-ink"
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
-        <h1 className="font-serif text-lg text-ink lowercase-title">breakdown</h1>
+        <h1 className="font-serif text-lg text-ink lowercase-title">{t("breakdown.title")}</h1>
         <div className="w-10" />
       </header>
 
@@ -81,7 +83,7 @@ export default function BreakdownPage() {
               {formatMoney(monthTotal)}
             </span>
             <span className="mt-1 text-xs text-ink-tertiary tabular">
-              {monthTx.length} transactions
+              {t("breakdown.transactionCount", { count: monthTx.length })}
             </span>
           </Donut>
         </div>
@@ -90,7 +92,7 @@ export default function BreakdownPage() {
       {monthGoals.length > 0 && (
         <section className="mt-8">
           <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-            this month vs your budgets
+            {t("breakdown.vsYourBudgets")}
           </p>
           <ul className="mt-3 flex flex-col gap-2">
             {monthGoals.map((g) => (
@@ -175,7 +177,7 @@ export default function BreakdownPage() {
                       to={`/breakdown/${category.toLowerCase()}`}
                       className="mt-3 inline-flex items-center gap-1 text-xs text-moss hover:text-moss-deep"
                     >
-                      see all {txs.length} →
+                      {t("breakdown.seeAll", { count: txs.length })}
                     </Link>
                   </div>
                 )}

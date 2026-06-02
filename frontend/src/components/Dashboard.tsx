@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowUpRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { DeltaTile } from "@/components/DeltaTile";
 import type {
   CategoryTileWire,
@@ -29,6 +30,7 @@ interface DashboardProps {
  * real component with fixture data rather than maintain a parallel mock.
  */
 export function Dashboard({ data, inert = false }: DashboardProps) {
+  const { t } = useTranslation();
   const monthCents = Math.round(Number(data.this_month) * 100);
   const deltaPct = data.delta_pct ?? 0;
   const tiles = data.categories.slice(0, 4);
@@ -36,11 +38,11 @@ export function Dashboard({ data, inert = false }: DashboardProps) {
   return (
     <>
       <header className="flex items-center justify-between">
-        <h1 className="font-serif text-3xl text-ink lowercase-title">home</h1>
+        <h1 className="font-serif text-3xl text-ink lowercase-title">{t("home.title")}</h1>
         {inert ? (
           <span className="inline-flex items-center gap-1 text-sm text-moss">
             <ArrowUpRight className="h-3.5 w-3.5" />
-            <span>Breakdown</span>
+            <span>{t("home.breakdownLink")}</span>
           </span>
         ) : (
           <Link
@@ -48,7 +50,7 @@ export function Dashboard({ data, inert = false }: DashboardProps) {
             className="inline-flex items-center gap-1 text-sm text-moss hover:text-moss-deep transition-colors"
           >
             <ArrowUpRight className="h-3.5 w-3.5" />
-            <span>Breakdown</span>
+            <span>{t("home.breakdownLink")}</span>
           </Link>
         )}
       </header>
@@ -64,7 +66,7 @@ export function Dashboard({ data, inert = false }: DashboardProps) {
         {data.baseline_ready && data.delta_pct !== null && (
           <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-warn-wash px-3 py-1 text-xs text-warn">
             <span className="tabular font-medium">
-              {formatPercent(deltaPct)} vs your avg
+              {t("home.vsAvg", { percent: formatPercent(deltaPct) })}
             </span>
           </div>
         )}
@@ -91,6 +93,7 @@ function DashboardTile({ tile }: { tile: CategoryTileWire }) {
   // `tile.name` is the canonical English enum; localize the *display* label
   // (DESIGN.md §6.6 Tier 2). DeltaTile lowercases via CSS, so a localized
   // CJK label is unaffected and English stays lowercased as before.
+  const { t } = useTranslation();
   const catLabel = useCategoryLabel();
   if (!tile.baseline_ready || tile.delta_abs === null) {
     return (
@@ -100,7 +103,7 @@ function DashboardTile({ tile }: { tile: CategoryTileWire }) {
         direction="neutral"
         category={catLabel(tile.name).toLowerCase()}
         delta={null}
-        band="still learning"
+        band={t("home.stillLearning")}
       />
     );
   }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Loader2, Search } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { MultipliersEditor } from "@/components/MultipliersEditor";
 import { StepDots } from "./StepDots";
@@ -49,6 +50,7 @@ interface AddCardStepProps {
 }
 
 export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [submittedName, setSubmittedName] = useState<string | null>(null);
   const [lookup, setLookup] = useState<CardLookupResult | null>(null);
@@ -101,7 +103,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         setError(
           e instanceof Error
             ? e.message
-            : "lookup failed — fill in the details manually.",
+            : t("onboarding.addCard.lookupFailed"),
         );
         setLookup({
           program: null,
@@ -180,14 +182,15 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
       if (isActiveCardExistsError(e)) {
         const detail = e.body.detail;
         setError(
-          `you already have ${detail.existing_card_name} ending ${
-            detail.existing_card_last_four ?? lastFour
-          } — edit that one from the cards page.`,
+          t("onboarding.addCard.errorDuplicate", {
+            name: detail.existing_card_name,
+            lastFour: detail.existing_card_last_four ?? lastFour,
+          }),
         );
       } else if (e instanceof Error) {
         setError(e.message);
       } else {
-        setError("couldn't add the card. try again.");
+        setError(t("onboarding.addCard.errorGeneric"));
       }
       setConfirming(false);
     }
@@ -195,13 +198,13 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-16 animate-fade-up">
-      <StepDots current={1} total={2} label="step 1 of 2" />
+      <StepDots current={1} total={2} label={t("onboarding.addCard.stepLabel")} />
 
       <h1 className="mt-6 font-serif text-3xl text-ink lowercase-title">
-        add your first card
+        {t("onboarding.addCard.title")}
       </h1>
       <p className="mt-2 text-sm text-ink-secondary">
-        type the card name — we'll figure out the rest.
+        {t("onboarding.addCard.subtitle")}
       </p>
 
       <div className="mt-8 flex items-center gap-3 rounded-2xl border border-hairline bg-elevated px-4 py-3">
@@ -210,7 +213,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="card name"
+          placeholder={t("onboarding.addCard.namePlaceholder")}
           className="flex-1 bg-transparent text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:outline-none"
         />
       </div>
@@ -233,12 +236,11 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-3xl border border-hairline bg-elevated py-10 text-sm text-ink-tertiary">
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span>looking up multipliers…</span>
+              <span>{t("onboarding.addCard.lookingUp")}</span>
             </div>
           ) : !nameMatchesLookup ? (
             <div className="rounded-3xl border border-dashed border-amber-soft bg-amber/5 px-4 py-3 text-xs text-amber-deep">
-              card name changed — tap “look it up” to refresh the multipliers
-              for {name.trim() || "this card"}.
+              {t("onboarding.addCard.nameChanged", { cardName: name.trim() || t("onboarding.addCard.thisCard") })}
             </div>
           ) : effectiveLookup ? (
             <PreviewTile
@@ -278,7 +280,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
             disabled={!canStartLookup}
             onClick={startLookup}
           >
-            look it up
+            {t("onboarding.addCard.lookItUp")}
           </Button>
         ) : (
           <Button
@@ -287,7 +289,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
             disabled={!canConfirm}
             onClick={handleConfirm}
           >
-            {confirming ? "adding…" : "add card"}
+            {confirming ? t("onboarding.addCard.adding") : t("onboarding.addCard.addCard")}
           </Button>
         )}
         <button
@@ -295,7 +297,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
           onClick={onSkip}
           className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
         >
-          skip for now
+          {t("onboarding.addCard.skipForNow")}
         </button>
       </div>
     </div>
@@ -325,6 +327,7 @@ interface PreviewTileProps {
 }
 
 function PreviewTile(props: PreviewTileProps) {
+  const { t } = useTranslation();
   // Codex P2: when the lookup couldn't determine network/issuer we show
   // the user a "select…" placeholder + amber border instead of silently
   // defaulting. Confirm stays disabled (in the parent's `canConfirm`)
@@ -334,6 +337,12 @@ function PreviewTile(props: PreviewTileProps) {
   const issuerUnresolved = props.issuer === null;
   const networkUnresolved = props.network === null;
   const unresolvedAny = issuerUnresolved || networkUnresolved;
+
+  const unresolvedMsg = issuerUnresolved && networkUnresolved
+    ? t("onboarding.addCard.preview.unresolvedBoth")
+    : issuerUnresolved
+      ? t("onboarding.addCard.preview.unresolvedIssuer")
+      : t("onboarding.addCard.preview.unresolvedNetwork");
 
   return (
     <div className="rounded-3xl border border-hairline bg-elevated px-4 py-4">
@@ -349,25 +358,17 @@ function PreviewTile(props: PreviewTileProps) {
       </div>
 
       {unresolvedAny && (
-        <p className="mt-2 text-xs text-amber-deep">
-          lookup couldn't determine
-          {issuerUnresolved && networkUnresolved
-            ? " issuer or network"
-            : issuerUnresolved
-              ? " the issuing bank"
-              : " the card network"}{" "}
-          — pick below to continue.
-        </p>
+        <p className="mt-2 text-xs text-amber-deep">{unresolvedMsg}</p>
       )}
       {props.needsManual && !unresolvedAny && (
         <p className="mt-2 text-xs text-amber-deep">
-          couldn't auto-fill — tweak the fields below.
+          {t("onboarding.addCard.preview.needsManual")}
         </p>
       )}
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <label className="flex flex-col text-xs text-ink-tertiary">
-          issuer
+          {t("onboarding.addCard.preview.issuer")}
           <select
             value={props.issuer ?? ""}
             onChange={(e) => props.onIssuer(e.target.value as CardIssuer)}
@@ -380,7 +381,7 @@ function PreviewTile(props: PreviewTileProps) {
           >
             {issuerUnresolved && (
               <option value="" disabled>
-                select…
+                {t("onboarding.addCard.preview.selectPlaceholder")}
               </option>
             )}
             {ISSUERS.map((i) => (
@@ -391,7 +392,7 @@ function PreviewTile(props: PreviewTileProps) {
           </select>
         </label>
         <label className="flex flex-col text-xs text-ink-tertiary">
-          network
+          {t("onboarding.addCard.preview.network")}
           <select
             value={props.network ?? ""}
             onChange={(e) => props.onNetwork(e.target.value as CardNetwork)}
@@ -404,7 +405,7 @@ function PreviewTile(props: PreviewTileProps) {
           >
             {networkUnresolved && (
               <option value="" disabled>
-                select…
+                {t("onboarding.addCard.preview.selectPlaceholder")}
               </option>
             )}
             {NETWORKS.map((n) => (
@@ -418,7 +419,7 @@ function PreviewTile(props: PreviewTileProps) {
 
       <div className="mt-3 grid grid-cols-2 gap-3">
         <label className="flex flex-col text-xs text-ink-tertiary">
-          last 4
+          {t("onboarding.addCard.preview.lastFour")}
           <input
             type="text"
             inputMode="numeric"
@@ -433,7 +434,7 @@ function PreviewTile(props: PreviewTileProps) {
           />
         </label>
         <label className="flex flex-col text-xs text-ink-tertiary">
-          annual fee
+          {t("onboarding.addCard.preview.annualFee")}
           <input
             inputMode="decimal"
             value={props.annualFee}
@@ -447,7 +448,7 @@ function PreviewTile(props: PreviewTileProps) {
       </div>
 
       <label className="mt-3 flex flex-col text-xs text-ink-tertiary">
-        program
+        {t("onboarding.addCard.preview.program")}
         <select
           value={props.program}
           onChange={(e) => props.onProgram(e.target.value as CardProgram)}
@@ -469,7 +470,7 @@ function PreviewTile(props: PreviewTileProps) {
 
       {props.sourceUrls.length > 0 && (
         <div className="mt-3 border-t border-hairline pt-2 text-[0.7rem] text-ink-quaternary">
-          sources:&nbsp;
+          {t("onboarding.addCard.preview.sources")}&nbsp;
           {props.sourceUrls.slice(0, 3).map((u, i) => (
             <span key={u}>
               {i > 0 ? ", " : ""}

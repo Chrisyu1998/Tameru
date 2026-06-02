@@ -1,29 +1,33 @@
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Eraser, RotateCcw } from "lucide-react";
 import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { SketchIcon } from "@/components/SketchIcon";
 import { cn } from "@/lib/utils";
 import { resetOnboarded } from "@/lib/onboarding";
 import { ledger, useLedger } from "@/lib/ledger";
 import { useAppStore } from "@/store";
 
-type Item = { to: string; label: string; icon: ReactNode };
+// `labelKey` is an i18n key resolved at render (the array is module-scope, so
+// it can't call the `t` hook directly).
+type Item = { to: string; labelKey: string; icon: ReactNode };
 
 const mainItems: Item[] = [
-  { to: "/", label: "home", icon: <SketchIcon kind="home" size={18} seed={11} /> },
-  { to: "/cards", label: "my cards", icon: <SketchIcon kind="card" size={18} seed={23} /> },
-  { to: "/subscriptions", label: "subscriptions", icon: <SketchIcon kind="repeat" size={18} seed={37} /> },
-  { to: "/goals", label: "goals", icon: <SketchIcon kind="seedling" size={18} seed={47} /> },
-  { to: "/memory", label: "ai memory", icon: <SketchIcon kind="sparkle" size={18} seed={53} /> },
+  { to: "/", labelKey: "nav.home", icon: <SketchIcon kind="home" size={18} seed={11} /> },
+  { to: "/cards", labelKey: "nav.cards", icon: <SketchIcon kind="card" size={18} seed={23} /> },
+  { to: "/subscriptions", labelKey: "nav.subscriptions", icon: <SketchIcon kind="repeat" size={18} seed={37} /> },
+  { to: "/goals", labelKey: "nav.goals", icon: <SketchIcon kind="seedling" size={18} seed={47} /> },
+  { to: "/memory", labelKey: "nav.memory", icon: <SketchIcon kind="sparkle" size={18} seed={53} /> },
 ];
 
 const footerItems: Item[] = [
-  { to: "/settings", label: "settings", icon: <SketchIcon kind="settings" size={18} seed={67} /> },
+  { to: "/settings", labelKey: "nav.settings", icon: <SketchIcon kind="settings" size={18} seed={67} /> },
 ];
 
 export function Sidebar() {
   const pathname = useLocation().pathname;
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { transactions } = useLedger();
   const email = useAppStore((s) => s.user?.email ?? "");
   const handle = email.split("@")[0] || "you";
@@ -48,6 +52,7 @@ export function Sidebar() {
       <div className="flex items-center gap-2 px-6 pt-7 pb-8">
         <SketchIcon kind="seedling" size={18} seed={7} className="text-moss" />
         <span className="font-serif text-2xl text-ink lowercase-title">tameru</span>
+        {/* "tameru" is the brand wordmark — intentionally not translated. */}
       </div>
 
       <nav className="flex flex-1 flex-col px-3">
@@ -74,7 +79,7 @@ export function Sidebar() {
             className="mx-1 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
           >
             <Eraser className="h-4 w-4" />
-            <span className="lowercase">clear ledger (dev)</span>
+            <span className="lowercase">{t("common.clearLedgerDev")}</span>
           </button>
         )}
 
@@ -85,7 +90,7 @@ export function Sidebar() {
             className="mx-1 mb-2 flex items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink-tertiary transition-colors hover:text-ink-secondary"
           >
             <RotateCcw className="h-4 w-4" />
-            <span className="lowercase">restart onboarding (dev)</span>
+            <span className="lowercase">{t("common.restartOnboardingDev")}</span>
           </button>
         )}
 
@@ -104,6 +109,7 @@ export function Sidebar() {
 }
 
 function SidebarLink({ item, active }: { item: Item; active: boolean }) {
+  const { t } = useTranslation();
   return (
     <li>
       <Link
@@ -119,7 +125,7 @@ function SidebarLink({ item, active }: { item: Item; active: boolean }) {
           <span className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-full bg-moss" />
         )}
         <span className={cn("inline-flex", active && "text-moss")}>{item.icon}</span>
-        <span className="lowercase">{item.label}</span>
+        <span className="lowercase">{t(item.labelKey)}</span>
       </Link>
     </li>
   );

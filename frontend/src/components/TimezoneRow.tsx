@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { detectTimezone } from "@/lib/auth";
 import { readPreferences, updatePreferences } from "@/lib/preferencesApi";
@@ -73,12 +74,13 @@ export function TimezoneRow() {
       });
   };
 
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col gap-1 px-1 py-3">
-      <span className="text-[0.95rem] text-ink">timezone</span>
+      <span className="text-[0.95rem] text-ink">{t("settings.timezone.label")}</span>
       <span className="text-[0.78rem] text-ink-tertiary">
-        when your digest arrives, and how dates line up. defaults to this
-        device's timezone.
+        {t("settings.timezone.desc")}
       </span>
       <select
         value={tz ?? ""}
@@ -87,7 +89,7 @@ export function TimezoneRow() {
         className="mt-2 h-10 w-full rounded-2xl border border-hairline bg-elevated px-3 text-sm text-ink focus:outline-none disabled:opacity-60"
         data-testid="timezone-select"
       >
-        {tz === null && <option value="">loading…</option>}
+        {tz === null && <option value="">{t("settings.timezone.loading")}</option>}
         {options.map((z) => (
           <option key={z} value={z}>
             {z.replace(/_/g, " ")}

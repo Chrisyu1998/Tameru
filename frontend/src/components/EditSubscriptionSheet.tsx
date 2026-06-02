@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, CreditCard, Pause, Play, Tag, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { Pill } from "@/components/Pill";
-import { CATEGORIES, type Category } from "@/lib/categories";
+import { CATEGORIES, useCategoryLabel, type Category } from "@/lib/categories";
 import {
   cancelSubscription,
   formatFrequency,
@@ -45,6 +46,8 @@ export function EditSubscriptionSheet({
   cards,
   onClose,
 }: EditSubscriptionSheetProps) {
+  const { t } = useTranslation();
+  const catLabel = useCategoryLabel();
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<Category>("Memberships");
@@ -136,34 +139,34 @@ export function EditSubscriptionSheet({
   const selectedCardLabel = cardId
     ? cardsById.get(cardId)
       ? `${cardsById.get(cardId)!.name} · ···· ${cardsById.get(cardId)!.last4 ?? ""}`
-      : "needs a new card"
-    : "bank ACH";
+      : t("editSubscription.card.needsNewCard")
+    : t("editSubscription.card.bankAch");
 
   return (
     <BottomSheet
       open={open}
       onClose={onClose}
-      ariaLabel="edit subscription"
+      ariaLabel={t("editSubscription.ariaLabel")}
       desktopVariant="side"
     >
       <header>
         <h2 className="font-serif text-xl text-ink lowercase-title">
-          edit subscription
+          {t("editSubscription.title")}
         </h2>
         {subscription.status === "paused" && (
           <Pill tone="neutral" className="mt-2">
-            paused
+            {t("subscriptions.status.paused")}
           </Pill>
         )}
         {subscription.status === "cancelled" && (
           <Pill tone="neutral" className="mt-2">
-            cancelled
+            {t("subscriptions.status.cancelled")}
           </Pill>
         )}
       </header>
 
       <div className="mt-5 flex flex-col gap-4">
-        <FieldGroup label="name">
+        <FieldGroup label={t("editSubscription.fields.name")}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -172,7 +175,7 @@ export function EditSubscriptionSheet({
           />
         </FieldGroup>
 
-        <FieldGroup label="amount">
+        <FieldGroup label={t("editSubscription.fields.amount")}>
           <div className="flex items-center gap-1">
             <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
@@ -186,15 +189,15 @@ export function EditSubscriptionSheet({
         </FieldGroup>
 
         <FieldButton
-          label="category"
+          label={t("editSubscription.fields.category")}
           icon={<Tag className="h-3.5 w-3.5" />}
-          value={category}
+          value={catLabel(category)}
           onClick={() => setPickerOpen("category")}
           disabled={subscription.status === "cancelled"}
         />
 
         <FieldButton
-          label={needsNewCard ? "card (closed — pick a new one)" : "card"}
+          label={needsNewCard ? t("editSubscription.fields.cardClosed") : t("editSubscription.fields.card")}
           icon={<CreditCard className="h-3.5 w-3.5" />}
           value={selectedCardLabel}
           onClick={() => setPickerOpen("card")}
@@ -203,28 +206,27 @@ export function EditSubscriptionSheet({
         />
 
         <ReadOnlyRow
-          label="frequency"
+          label={t("editSubscription.fields.frequency")}
           value={formatFrequency(subscription.frequency)}
         />
         <ReadOnlyRow
-          label={subscription.status === "active" ? "next billing" : "last billing"}
+          label={subscription.status === "active" ? t("editSubscription.fields.nextBilling") : t("editSubscription.fields.lastBilling")}
           value={formatShortDate(subscription.next_billing_date)}
         />
         <ReadOnlyRow
-          label="started"
+          label={t("editSubscription.fields.started")}
           value={formatShortDate(subscription.start_date)}
         />
 
         <p className="text-[0.72rem] text-ink-tertiary">
-          billing cadence and start date are fixed — cancel and re-add to
-          change them.
+          {t("editSubscription.cadenceHint")}
         </p>
       </div>
 
       <div className="mt-7 flex flex-col gap-3">
         {subscription.status !== "cancelled" && (
           <Button fullWidth disabled={!dirty || !valid} onClick={save}>
-            save changes
+            {t("editSubscription.saveChanges")}
           </Button>
         )}
 
@@ -236,7 +238,7 @@ export function EditSubscriptionSheet({
                 onClick={resumeAsAch}
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-hairline bg-surface text-[0.95rem] text-ink hover:bg-elevated"
               >
-                <Play className="h-4 w-4" /> resume as bank ACH
+                <Play className="h-4 w-4" /> {t("editSubscription.actions.resumeAsAch")}
               </button>
             ) : (
               <button
@@ -246,11 +248,11 @@ export function EditSubscriptionSheet({
               >
                 {subscription.status === "active" ? (
                   <>
-                    <Pause className="h-4 w-4" /> pause
+                    <Pause className="h-4 w-4" /> {t("editSubscription.actions.pause")}
                   </>
                 ) : (
                   <>
-                    <Play className="h-4 w-4" /> resume
+                    <Play className="h-4 w-4" /> {t("editSubscription.actions.resume")}
                   </>
                 )}
               </button>
@@ -260,7 +262,7 @@ export function EditSubscriptionSheet({
               onClick={cancel}
               className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-warn-wash/40 text-[0.95rem] text-over hover:bg-warn-wash/70"
             >
-              <X className="h-4 w-4" /> cancel subscription
+              <X className="h-4 w-4" /> {t("editSubscription.actions.cancel")}
             </button>
           </div>
         )}
@@ -269,19 +271,19 @@ export function EditSubscriptionSheet({
       <BottomSheet
         open={pickerOpen !== null}
         onClose={() => setPickerOpen(null)}
-        ariaLabel={pickerOpen === "card" ? "choose card" : "choose category"}
+        ariaLabel={pickerOpen === "card" ? t("editSubscription.cardPicker.ariaLabel") : t("editSubscription.categoryPicker.ariaLabel")}
       >
         {pickerOpen === "category" && (
           <>
             <h3 className="font-serif text-lg text-ink lowercase-title">
-              choose a category
+              {t("editSubscription.categoryPicker.title")}
             </h3>
             <ul className="mt-3 flex flex-col">
               {CATEGORIES.map((c) => (
                 <li key={c}>
                   <PickerRow
                     active={c === category}
-                    label={c}
+                    label={catLabel(c)}
                     onClick={() => {
                       setCategory(c);
                       setPickerOpen(null);
@@ -295,14 +297,14 @@ export function EditSubscriptionSheet({
         {pickerOpen === "card" && (
           <>
             <h3 className="font-serif text-lg text-ink lowercase-title">
-              choose a card
+              {t("editSubscription.cardPicker.title")}
             </h3>
             <ul className="mt-3 flex flex-col">
               <li>
                 <PickerRow
                   active={cardId === null}
-                  label="bank ACH"
-                  sub="no card (rent, utilities, mortgage)"
+                  label={t("editSubscription.card.bankAch")}
+                  sub={t("editSubscription.card.bankAchSub")}
                   onClick={() => {
                     setCardId(null);
                     setPickerOpen(null);

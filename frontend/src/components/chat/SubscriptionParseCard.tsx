@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Check, Pause, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { Card } from "@/lib/fixtures";
-import { CATEGORIES, type Category } from "@/lib/categories";
+import { CATEGORIES, useCategoryLabel, type Category } from "@/lib/categories";
 import type { SubscriptionParseDraft } from "@/lib/chat";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +64,8 @@ export function SubscriptionParseCard({
   pendingSync,
   onConfirm,
 }: SubscriptionParseCardProps) {
+  const { t } = useTranslation();
+  const catLabel = useCategoryLabel();
   const [local, setLocal] = useState<SubscriptionParseDraft>(draft);
 
   const amountValid = /^\d+(?:\.\d{1,2})?$/.test(local.amount.trim());
@@ -104,7 +107,7 @@ export function SubscriptionParseCard({
         {!committed && !frozen && !pendingSync && (
           <div className="mt-4 grid grid-cols-2 gap-3 border-t border-hairline pt-3">
             <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-              amount
+              {t("chat.subscriptionParseCard.amount")}
               <input
                 type="text"
                 inputMode="decimal"
@@ -120,7 +123,7 @@ export function SubscriptionParseCard({
               />
             </label>
             <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-              category
+              {t("chat.subscriptionParseCard.category")}
               <select
                 value={local.category}
                 onChange={(e) =>
@@ -133,13 +136,13 @@ export function SubscriptionParseCard({
               >
                 {CATEGORIES.map((c) => (
                   <option key={c} value={c}>
-                    {c}
+                    {catLabel(c)}
                   </option>
                 ))}
               </select>
             </label>
             <label className="col-span-2 flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-              card
+              {t("chat.subscriptionParseCard.card")}
               <select
                 value={local.cardId ?? ""}
                 onChange={(e) =>
@@ -150,7 +153,7 @@ export function SubscriptionParseCard({
                 }
                 className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink focus:outline-none"
               >
-                <option value="">no card · bank ACH</option>
+                <option value="">{t("chat.subscriptionParseCard.noCardACH")}</option>
                 {cards.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} {c.last4 ? `···· ${c.last4}` : ""}
@@ -165,18 +168,18 @@ export function SubscriptionParseCard({
             so the user always sees what's fixed and why. */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-hairline pt-3 text-[0.78rem] text-ink-tertiary">
           <span>
-            starts <span className="text-ink-secondary">{local.startDate}</span>
+            {t("chat.subscriptionParseCard.starts")}{" "}
+            <span className="text-ink-secondary">{local.startDate}</span>
           </span>
           <span>
-            first auto-log{" "}
+            {t("chat.subscriptionParseCard.firstAutoLog")}{" "}
             <span className="text-ink-secondary">{local.nextBillingDate}</span>
           </span>
         </div>
 
         {!committed && !frozen && !pendingSync && (
           <p className="mt-2 text-[0.7rem] text-ink-quaternary">
-            today's charge isn't backfilled — log it manually if you want
-            it in the ledger. cancel and re-add to change cadence.
+            {t("chat.subscriptionParseCard.backfillNotice")}
           </p>
         )}
 
@@ -186,12 +189,12 @@ export function SubscriptionParseCard({
             {committedState === "paused" ? (
               <>
                 <Pause className="h-3.5 w-3.5" />
-                <span>paused.</span>
+                <span>{t("chat.subscriptionParseCard.paused")}</span>
               </>
             ) : (
               <>
                 <Check className="h-3.5 w-3.5" />
-                <span>tracking.</span>
+                <span>{t("chat.subscriptionParseCard.tracking")}</span>
               </>
             )}
           </div>
@@ -199,17 +202,17 @@ export function SubscriptionParseCard({
         {isCancelled && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
             <X className="h-3.5 w-3.5" />
-            <span>cancelled.</span>
+            <span>{t("chat.subscriptionParseCard.cancelled")}</span>
           </div>
         )}
         {isNotSaved && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
-            <span>not saved.</span>
+            <span>{t("chat.subscriptionParseCard.notSaved")}</span>
           </div>
         )}
         {isOfflinePending && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
-            <span>queued — syncs when online.</span>
+            <span>{t("chat.subscriptionParseCard.queued")}</span>
           </div>
         )}
         {!committed && !frozen && !pendingSync && (
@@ -220,11 +223,11 @@ export function SubscriptionParseCard({
               disabled={!canConfirm}
               className="mt-4 h-11 w-full rounded-2xl bg-moss text-[0.95rem] font-medium text-surface transition-colors hover:bg-moss-deep disabled:cursor-not-allowed disabled:opacity-50"
             >
-              looks right
+              {t("chat.subscriptionParseCard.looksRight")}
             </button>
             {!amountValid && (
               <p className="mt-2 text-center text-[0.72rem] text-ink-tertiary">
-                amount has to be a positive number.
+                {t("chat.subscriptionParseCard.amountError")}
               </p>
             )}
           </>
@@ -234,7 +237,7 @@ export function SubscriptionParseCard({
             the user CAN'T edit it inline. Disabled select. */}
         {!committed && !frozen && !pendingSync && (
           <div className="mt-3 flex items-center gap-1.5 text-[0.7rem] text-ink-quaternary">
-            <span>cadence:</span>
+            <span>{t("chat.subscriptionParseCard.cadence")}</span>
             <select
               disabled
               value={local.frequency}

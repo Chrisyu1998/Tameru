@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 
 interface PhilosophyStepProps {
@@ -12,44 +13,32 @@ interface PhilosophyStepProps {
  * static tour.
  */
 export function PhilosophyStep({ onContinue, onTour }: PhilosophyStepProps) {
+  const { t } = useTranslation();
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-20 animate-fade-up">
       <h1 className="font-serif text-3xl text-ink lowercase-title">
-        why manual?
+        {t("onboarding.philosophy.title")}
       </h1>
 
       <div className="mt-8 flex flex-col gap-5 text-[0.95rem] leading-relaxed text-ink-secondary">
-        <p>
-          Most spending apps sync your bank automatically. Tameru
-          doesn&rsquo;t &mdash; on purpose.
-        </p>
-        <p>
-          The act of logging a purchase, even for 10 seconds, is what
-          builds awareness. Mint synced everything automatically. People
-          still overspent, because automatic means invisible.
-        </p>
-        <p>
-          Tameru asks you to log what you spend. The AI handles the rest
-          &mdash; categorization, patterns, questions, nudges. You bring
-          the data. Tameru brings the intelligence.
-        </p>
-        <p className="text-ink">
-          If that sounds like the right trade, let&rsquo;s get started.
-        </p>
+        <p>{t("onboarding.philosophy.p1")}</p>
+        <p>{t("onboarding.philosophy.p2")}</p>
+        <p>{t("onboarding.philosophy.p3")}</p>
+        <p className="text-ink">{t("onboarding.philosophy.p4")}</p>
       </div>
 
       <div className="flex-1" />
 
       <div className="mt-10 flex flex-col items-center gap-4">
         <Button fullWidth onClick={onContinue}>
-          get started
+          {t("onboarding.philosophy.getStarted")}
         </Button>
         <button
           type="button"
           onClick={onTour}
           className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
         >
-          take the tour
+          {t("onboarding.philosophy.takeTour")}
         </button>
       </div>
     </div>

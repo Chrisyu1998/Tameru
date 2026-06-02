@@ -4,11 +4,12 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom
 
 import { DeviceDisplacedModal } from './components/DeviceDisplacedModal';
 import { UpdateToast } from './components/UpdateToast';
-import { initAuth, startDeviceCheckPoll } from './lib/auth';
+import { initAuth, startDeviceCheckPoll, resolveUiLanguage } from './lib/auth';
 import { initAnalytics } from './lib/analytics';
 import { initDigestLandingTracking } from './lib/digestLanding';
 import { setupAutoDrain } from './lib/offline_queue';
 import { useAppStore } from './store';
+import i18n from './lib/i18n';
 import Layout, { NotFoundPage } from './pages/_layout';
 import HomePage from './pages/home';
 import ChatPage from './pages/chat';
@@ -58,11 +59,18 @@ function App() {
   // Day 29 Tier 2: reflect the UI language onto <html lang> so CSS can pick
   // region-appropriate CJK glyphs (Han characters differ between JP and TC
   // fonts — see index.css `:lang()` font-stack overrides) and so the browser's
-  // own text rendering + a11y tree are correct. Defaults to "en" until an
-  // explicit choice resolves from /me.
+  // own text rendering + a11y tree are correct, AND drive i18next's chrome
+  // translation (2b) from the same resolved value — the store is the single
+  // source of language truth. Defaults to "en" until an explicit choice
+  // resolves from /me.
   useEffect(() => {
-    document.documentElement.lang =
-      uiLanguage === "ja" || uiLanguage === "zh-TW" ? uiLanguage : "en";
+    // An explicit choice wins; null/undefined (legacy/no-choice, or mid-boot)
+    // falls back to the browser language — NOT "en" — so a ja/zh-TW browser
+    // keeps localized chrome until/unless the user picks otherwise. Matches
+    // i18n.ts's init and displayLocale()'s null/undefined contract.
+    const lang = resolveUiLanguage(uiLanguage);
+    document.documentElement.lang = lang;
+    void i18n.changeLanguage(lang);
   }, [uiLanguage]);
 
   useEffect(() => {

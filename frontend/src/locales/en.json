@@ -1,0 +1,826 @@
+{
+  "nav": {
+    "home": "home",
+    "cards": "my cards",
+    "subscriptions": "subscriptions",
+    "goals": "goals",
+    "memory": "ai memory",
+    "settings": "settings",
+    "more": "more",
+    "chat": "chat"
+  },
+  "common": {
+    "clearLedgerDev": "clear ledger (dev)",
+    "restartOnboardingDev": "restart onboarding (dev)",
+    "pendingSync_one": "{{count}} pending sync",
+    "pendingSync_other": "{{count}} pending syncs",
+    "undoToast": {
+      "removing": "removing",
+      "undo": "undo"
+    },
+    "close": "close",
+    "closeSheet": "close sheet",
+    "displaced": {
+      "title": "you signed in on another device.",
+      "body": "this session has ended.",
+      "signInAgain": "sign in again"
+    },
+    "updateToast": {
+      "message": "a new version is available.",
+      "later": "later",
+      "refresh": "refresh"
+    },
+    "delete": "Delete",
+    "confirmDelete": "confirm delete",
+    "autoLoggedAriaLabel": "auto-logged by tameru",
+    "autoLoggedTooltip": "auto-logged by tameru — detected as a recurring charge."
+  },
+  "onboarding": {
+    "back": "back",
+    "splash": {
+      "tagline": "the mindful ledger",
+      "continue": "continue",
+      "takeTour": "take the tour"
+    },
+    "philosophy": {
+      "title": "why manual?",
+      "p1": "Most spending apps sync your bank automatically. Tameru doesn't — on purpose.",
+      "p2": "The act of logging a purchase, even for 10 seconds, is what builds awareness. Mint synced everything automatically. People still overspent, because automatic means invisible.",
+      "p3": "Tameru asks you to log what you spend. The AI handles the rest — categorization, patterns, questions, nudges. You bring the data. Tameru brings the intelligence.",
+      "p4": "If that sounds like the right trade, let's get started.",
+      "getStarted": "get started",
+      "takeTour": "take the tour"
+    },
+    "signin": {
+      "title": "sign in",
+      "subtitle": "we'll keep your ledger between us.",
+      "checkEmail": "check your email",
+      "sentLinkTo": "we sent a sign-in link to",
+      "openOnDevice": "open it on this device.",
+      "useDifferentEmail": "use a different email",
+      "google": "continue with Google",
+      "or": "or",
+      "email": "continue with email",
+      "emailPlaceholder": "you@example.com",
+      "sending": "sending…",
+      "sendLink": "send sign-in link",
+      "errorGoogle": "could not start sign-in.",
+      "errorLink": "could not send the link.",
+      "legalPrefix": "by continuing you agree to our",
+      "legalTerms": "terms",
+      "legalAnd": "and",
+      "legalPrivacy": "privacy notice",
+      "legalNeverSell": "we never sell your data."
+    },
+    "currency": {
+      "irreversible": "irreversible",
+      "title": "your home currency",
+      "subtitle": "the lens through which everything is counted.",
+      "warningTitle": "once set, your home currency stays",
+      "warningBullet1": "every transaction, in any currency, is converted into this one for your totals.",
+      "warningBullet2": "changing it later would invalidate every historical figure — so we don't allow it.",
+      "setting": "setting…",
+      "confirm": "I understand — set {{currency}}",
+      "sheetTitle": "choose your home currency",
+      "sheetAriaLabel": "choose home currency",
+      "error": "could not set your currency."
+    },
+    "addCard": {
+      "stepLabel": "step 1 of 2",
+      "title": "add your first card",
+      "subtitle": "type the card name — we'll figure out the rest.",
+      "namePlaceholder": "card name",
+      "lookingUp": "looking up multipliers…",
+      "nameChanged": "card name changed — tap \"look it up\" to refresh the multipliers for {{cardName}}.",
+      "thisCard": "this card",
+      "lookItUp": "look it up",
+      "adding": "adding…",
+      "addCard": "add card",
+      "skipForNow": "skip for now",
+      "lookupFailed": "lookup failed — fill in the details manually.",
+      "errorDuplicate": "you already have {{name}} ending {{lastFour}} — edit that one from the cards page.",
+      "errorGeneric": "couldn't add the card. try again.",
+      "preview": {
+        "unresolvedBoth": "lookup couldn't determine issuer or network — pick below to continue.",
+        "unresolvedIssuer": "lookup couldn't determine the issuing bank — pick below to continue.",
+        "unresolvedNetwork": "lookup couldn't determine the card network — pick below to continue.",
+        "needsManual": "couldn't auto-fill — tweak the fields below.",
+        "issuer": "issuer",
+        "network": "network",
+        "selectPlaceholder": "select…",
+        "lastFour": "last 4",
+        "annualFee": "annual fee",
+        "program": "program",
+        "sources": "sources:"
+      }
+    },
+    "csvImport": {
+      "stepLabel": "step 2 of 2",
+      "title": "bring in some history",
+      "subtitle": "drop a CSV from your bank to seed your ledger.",
+      "dropHere": "drop your CSV here",
+      "orTapBrowse": "or tap to browse",
+      "tapToChooseAnother": "tap to choose another",
+      "worksWith": "works with exports from",
+      "continueWithImport": "continue with import",
+      "skipForNow": "skip for now"
+    },
+    "csvProcessing": {
+      "status1": "parsing rows…",
+      "status2": "matching merchants…",
+      "status3": "categorizing…",
+      "status4": "almost there…",
+      "ofTotal": "of {{total}}"
+    },
+    "cardReview": {
+      "pillLabel": "AI draft · review before save",
+      "highConfidence": "high confidence",
+      "mediumConfidence": "medium confidence",
+      "lowConfidence": "low confidence",
+      "confirmEdit": "confirm edit",
+      "cancelEdit": "cancel edit",
+      "editRow": "edit {{category}}",
+      "sources": "sources",
+      "saveCard": "save card",
+      "tryAgain": "try again",
+      "discard": "discard"
+    }
+  },
+  "chat": {
+    "back": "back",
+    "newChat": "new chat",
+    "placeholder": "type or tap the mic",
+    "thinking": "thinking…",
+    "offline": "offline — messages will send when you reconnect.",
+    "retry": "retry",
+    "dismiss": "dismiss",
+    "send": "send",
+    "recordVoice": "record voice",
+    "emptyState": {
+      "heading": "tell me what you spent",
+      "body": "type or speak it. i'll structure the rest. you can also ask me to edit or compare.",
+      "devSimulateOutage": "dev · simulate ai outage banner"
+    },
+    "examples": {
+      "coffee": "coffee $5.50",
+      "lunch": "lunch with M $24",
+      "editDinner": "edit that lupa dinner",
+      "compare": "dining vs groceries"
+    },
+    "serviceBanner": {
+      "aiMoment": "our ai is having a moment. try again in a few minutes.",
+      "dismiss": "dismiss"
+    },
+    "dailyCap": {
+      "title": "daily ai quota used",
+      "body": "i'll be back at midnight UTC. you can still browse your dashboard and edit existing transactions in the meantime."
+    },
+    "offlineNotice": "offline — messages will send when you reconnect.",
+    "parseCard": {
+      "merchant": "merchant",
+      "amount": "amount",
+      "date": "date",
+      "card": "card",
+      "category": "category",
+      "other": "Other",
+      "looksRight": "looks right",
+      "letMeFixIt": "let me fix it",
+      "orJustTell": "or just tell me what to change.",
+      "logged": "logged.",
+      "deleted": "deleted.",
+      "notSaved": "not saved.",
+      "queued": "queued — syncs when online.",
+      "doubleCheckField": "double-check this field"
+    },
+    "cardParseCard": {
+      "last4": "last 4",
+      "annualFee": "annual fee",
+      "nextRenewal": "next renewal (optional)",
+      "autoLog": "we'll auto-log it when it hits.",
+      "clearRenewalDate": "clear renewal date",
+      "issuer": "issuer",
+      "network": "network",
+      "selectPlaceholder": "select…",
+      "lookupWarning": "lookup couldn't determine",
+      "lookupWarningIssuerAndNetwork": " issuer or network",
+      "lookupWarningIssuer": " the issuing bank",
+      "lookupWarningNetwork": " the card network",
+      "lookupWarningTail": " — pick below to continue.",
+      "sources": "sources:",
+      "looksRight": "looks right",
+      "enterLast4": "enter the last 4 digits to continue.",
+      "added": "added.",
+      "deleted": "deleted.",
+      "notSaved": "not saved.",
+      "queued": "queued — syncs when online."
+    },
+    "subscriptionParseCard": {
+      "amount": "amount",
+      "category": "category",
+      "card": "card",
+      "noCardACH": "no card · bank ACH",
+      "starts": "starts",
+      "firstAutoLog": "first auto-log",
+      "backfillNotice": "today's charge isn't backfilled — log it manually if you want it in the ledger. cancel and re-add to change cadence.",
+      "amountError": "amount has to be a positive number.",
+      "cadence": "cadence:",
+      "looksRight": "looks right",
+      "tracking": "tracking.",
+      "paused": "paused.",
+      "cancelled": "cancelled.",
+      "notSaved": "not saved.",
+      "queued": "queued — syncs when online."
+    },
+    "candidateCards": {
+      "nothingMatched": "nothing matched.",
+      "more": "+{{count}} more"
+    },
+    "voice": {
+      "listening": "listening…",
+      "submitNow": "submit now",
+      "cancel": "cancel",
+      "cancelVoiceInput": "cancel voice input",
+      "langChipAria": "voice language: {{lang}}. tap to change.",
+      "errorNotAllowed": "voice access denied. enable mic for this site in your browser settings, then try again.",
+      "errorNoSpeech": "didn't catch that. try again.",
+      "errorNetwork": "voice needs internet — try again when you reconnect.",
+      "errorAudioCapture": "no mic detected. check your device.",
+      "errorUnknown": "voice failed. try again.",
+      "tryAgain": "try again",
+      "langEn": "en",
+      "langZh": "中",
+      "langJa": "日",
+      "langAriaEn": "english",
+      "langAriaZh": "chinese",
+      "langAriaJa": "japanese"
+    },
+    "toolAttribution": {
+      "via": "via"
+    },
+    "drawer": {
+      "label": "tameru chat",
+      "emptyHeading": "ask anything about your money",
+      "emptyBody": "log a spend, edit a transaction, or compare categories.",
+      "newChat": "new chat",
+      "collapse": "collapse",
+      "expand": "expand",
+      "close": "close",
+      "retry": "retry",
+      "dismiss": "dismiss"
+    },
+    "cmdkTooltip": {
+      "label": "opens tameru ai from anywhere",
+      "gotIt": "got it"
+    },
+    "desktopComposer": {
+      "hint": "✨ ask tameru",
+      "inputAria": "ask tameru",
+      "recordVoice": "record voice",
+      "send": "send"
+    },
+    "rowActions": {
+      "edit": "edit",
+      "delete": "delete"
+    },
+    "aiUnavailable": "ai is temporarily unavailable. your dashboard, cards, and edits all still work — only the chat assistant is down.",
+    "offline_banner": "you're offline — entries queue locally and send when you reconnect."
+  },
+  "tour": {
+    "back": "back",
+    "sampleData": "SAMPLE DATA",
+    "next": "next",
+    "skipTour": "skip the tour",
+    "importCsv": "import a csv",
+    "logFirstTransaction": "log my first transaction",
+    "lastScreenHint": "this is tameru with 3 months of data. log your first transaction or import a csv to get there.",
+    "screen1": {
+      "title": "your week, at a glance",
+      "callout": "spending is shown as deltas — never absolute totals."
+    },
+    "screen2": {
+      "title": "a small ritual",
+      "callout": "log it, confirm it, hear the quiet observation."
+    },
+    "screen3": {
+      "title": "ask in plain language",
+      "callout": "your ledger talks back, kindly and in context."
+    },
+    "screen4": {
+      "title": "the sunday digest",
+      "callout": "one calm summary per week. nothing more."
+    },
+    "entry": {
+      "doesThisLookRight": "does this look right?",
+      "merchant": "merchant",
+      "amount": "amount",
+      "category": "category",
+      "card": "card",
+      "date": "date",
+      "looksRight": "looks right",
+      "fixIt": "fix it",
+      "logged": "logged"
+    },
+    "digest": {
+      "inbox": "inbox",
+      "time": "8:02am"
+    }
+  },
+  "goals": {
+    "title": "goals",
+    "subtitle": "tap a goal to edit. swipe left to remove.",
+    "loading": "loading…",
+    "aiHint": "ask tameru to set a goal",
+    "tile": {
+      "pendingDelete": "deleting · tap to undo",
+      "thisPeriod": "this {{period}}"
+    },
+    "empty": {
+      "heading": "no budgets yet",
+      "body": "set a budget and tameru will track how close you are.",
+      "cta": "ask tameru ai to set one"
+    }
+  },
+  "memory": {
+    "title": "ai memory",
+    "subtitle": "what tameru remembers about you · you can edit or remove anything.",
+    "loading": "loading…",
+    "empty": "tameru hasn't remembered anything yet — facts get added as you chat.",
+    "hintFooter": "correct or add facts via tameru ai",
+    "capacity": {
+      "label": "capacity",
+      "count": "{{used}} / {{total}} facts",
+      "oldestReinforced": "oldest fact reinforced {{age}}",
+      "overEightyWarning": "memory is more than 80% full. older facts may be forgotten as new ones come in — tidy up anything you no longer need."
+    },
+    "fact": {
+      "removeAriaLabel": "remove fact",
+      "pendingDelete": "deleting · tap to undo",
+      "confirmRemove": "remove this fact",
+      "cancel": "cancel"
+    },
+    "provenance": {
+      "savedFromChat": "saved from chat",
+      "reinforced": "reinforced {{age}}"
+    },
+    "age": {
+      "today": "today",
+      "oneDay": "1 day ago",
+      "nDays": "{{count}} days ago",
+      "oneMonth": "1 month ago",
+      "nMonths": "{{count}} months ago"
+    }
+  },
+  "home": {
+    "title": "home",
+    "loading": "loading…",
+    "emptyTitle": "your ledger is empty",
+    "emptyBody": "tap the chat button below to log your first transaction.",
+    "hintPrompt": "type or speak your first transaction",
+    "hintDismiss": "dismiss",
+    "breakdownLink": "Breakdown",
+    "vsAvg": "{{percent}} vs your avg",
+    "stillLearning": "still learning",
+    "bandAbove": "above usual",
+    "bandBelow": "below usual",
+    "bandUsual": "as usual",
+    "bandNeutral": "neutral"
+  },
+  "breakdown": {
+    "title": "breakdown",
+    "backAriaLabel": "back",
+    "transactionCount": "{{count}} transactions",
+    "vsYourBudgets": "this month vs your budgets",
+    "seeAll": "see all {{count}} →",
+    "unknownCategory": "unknown category",
+    "unknownCategoryBody": "we don't have a category called \"{{slug}}\".",
+    "backToBreakdown": "← back to breakdown",
+    "filterMonth": "month",
+    "filterAll": "all",
+    "filterThisMonth": "this month",
+    "filterLastMonth": "last month",
+    "filterCard": "card",
+    "filterAllCards": "all cards",
+    "searchPlaceholder": "search merchants",
+    "clearSearch": "clear search",
+    "deletingTapToUndo": "deleting · tap to undo",
+    "emptyFilters": "nothing matches your filters."
+  },
+  "oauth": {
+    "title": "allow connection",
+    "subtitle": "another app is asking to read your tameru data.",
+    "loading": "checking the request…",
+    "allow": "allow",
+    "connecting": "connecting…",
+    "cancel": "cancel",
+    "cancelling": "cancelling…",
+    "requestingAccess": "requesting access",
+    "signedInAs": "signed in as",
+    "readOnly": "read-only.",
+    "readOnlyDetail": "{{clientName}} can see your transactions, subscriptions, and card multipliers — it cannot add, edit, or delete anything.",
+    "disconnectHint": "you can disconnect any time from",
+    "disconnectPath": "settings → connected apps",
+    "errorMissingId": "this page is opened by claude.ai when you connect tameru. open it from there.",
+    "errorLoadFailed": "couldn't load the authorization request.",
+    "errorUnexpected": "unexpected authorization response.",
+    "errorApproveFailed": "couldn't complete the approval.",
+    "errorDenyFailed": "couldn't cancel the request.",
+    "signIn": {
+      "title": "sign in to continue",
+      "subtitle": "an app is asking to read your tameru data. sign in to approve.",
+      "checkEmail": "check your email",
+      "sentLinkTo": "we sent a sign-in link to",
+      "sentLinkHint": "open it on this device — it brings you straight back here.",
+      "useDifferentEmail": "use a different email",
+      "withGoogle": "sign in with google",
+      "withEmail": "sign in with email",
+      "starting": "starting…",
+      "emailLabel": "email",
+      "emailPlaceholder": "you@example.com",
+      "sendLink": "send sign-in link",
+      "sending": "sending…",
+      "back": "back",
+      "errorGoogle": "could not start sign-in.",
+      "errorMagicLink": "could not send the link."
+    }
+  },
+  "importCsv": {
+    "title": "import csv",
+    "subtitle": "bring a bank or card csv into tameru.",
+    "detectingColumns": "reading your csv…",
+    "cancel": "cancel",
+    "back": "back",
+    "next": "next",
+    "import": "import",
+    "noRowsToPreview": "no rows to preview.",
+    "select": {
+      "fileLabel": "csv file",
+      "removeFile": "remove file",
+      "chooseCsv": "choose a csv",
+      "fileHint": "export from your bank — usually under statements or activity. up to 5 MB and 5,000 rows.",
+      "whichCard": "which card?",
+      "noCards": "add a card first — imports attach every transaction to one of your cards."
+    },
+    "confirm": {
+      "tameruThinks": "tameru thinks",
+      "date": "date",
+      "merchant": "merchant",
+      "amount": "amount",
+      "currency": "currency",
+      "rowsConfidence": "{{rows}} rows · confidence {{pct}}%",
+      "firstRows": "first rows",
+      "wrongMapThem": "these look wrong — let me map them",
+      "looksRight": "looks right"
+    },
+    "manual": {
+      "mapColumns": "map columns",
+      "dateColumn": "date column",
+      "merchantColumn": "merchant column",
+      "amountColumn": "amount column",
+      "currencyColumn": "currency column (optional)",
+      "chargesNegativeLabel": "this csv shows charges as negative numbers",
+      "chargesNegativeHint": "check this for chase activity / citi activity exports; leave unchecked for amex / most monthly statement exports.",
+      "none": "(none)"
+    },
+    "committing": {
+      "importing": "importing…",
+      "progress": "{{processed}} / {{total}} rows",
+      "startingUp": "starting up…",
+      "categorizingAs": "categorizing as"
+    },
+    "done": {
+      "allSet": "all set.",
+      "transactionsImported": "{{count}} transactions imported.",
+      "imported": "imported",
+      "duplicatesSkipped": "duplicates skipped",
+      "refundsSkipped": "refunds skipped",
+      "foreignSkipped": "foreign-currency skipped",
+      "couldntRead": "couldn't read",
+      "done": "done"
+    },
+    "error": {
+      "title": "import couldn't finish.",
+      "safeToRetry": "anything already imported is safe — re-uploading will skip duplicates.",
+      "tryAgain": "try again"
+    }
+  },
+  "layout": {
+    "notFound": {
+      "title": "not found",
+      "body": "this page hasn't been built yet — or it never was.",
+      "goHome": "go home"
+    }
+  },
+  "settings": {
+    "title": "settings",
+    "nav": {
+      "account": "account",
+      "connections": "claude connections",
+      "import": "import",
+      "notifications": "notifications",
+      "privacy": "privacy"
+    },
+    "account": {
+      "title": "account",
+      "subtitle": "who you are.",
+      "emailLabel": "email",
+      "currencyLabel": "home currency",
+      "immutable": "immutable",
+      "immutableNote": "these can't be changed yet — by design. your home currency anchors every comparison and your email anchors your data."
+    },
+    "import": {
+      "title": "import",
+      "subtitle": "bring transactions in from another tool.",
+      "body": "drop a csv exported from your bank, ynab, or copilot.",
+      "chooseCsv": "choose a csv",
+      "hint": "tameru detects the columns, categorizes in batches, and skips rows that already exist. up to 5 MB and 5,000 rows."
+    },
+    "notifications": {
+      "title": "notifications",
+      "subtitle": "tameru speaks softly. you choose how often.",
+      "weeklyDigestLabel": "weekly digest email",
+      "weeklyDigestDesc": "a quiet recap at monday 9am your time. unsubscribe link in every send."
+    },
+    "privacy": {
+      "title": "privacy",
+      "subtitle": "what tameru does with your data, and what it doesn't."
+    },
+    "timezone": {
+      "label": "timezone",
+      "desc": "when your digest arrives, and how dates line up. defaults to this device's timezone.",
+      "loading": "loading…"
+    },
+    "language": {
+      "label": "language",
+      "desc": "how tameru talks to you — the interface, chat replies, and your weekly digest. defaults to this device's language."
+    },
+    "theme": {
+      "switchToLight": "switch to light mode",
+      "switchToDark": "switch to dark mode"
+    }
+  },
+  "more": {
+    "identity": {
+      "youFallback": "you"
+    },
+    "primary": {
+      "cards": "my cards",
+      "subscriptions": "subscriptions",
+      "goals": "goals",
+      "aiMemory": "ai memory",
+      "claudeConnections": "claude connections",
+      "connected": "connected",
+      "notConnected": "not connected"
+    },
+    "secondary": {
+      "heading": "account & data",
+      "importData": "import data",
+      "notifications": "notifications",
+      "privacy": "privacy",
+      "signOut": "sign out"
+    },
+    "notifications": {
+      "ariaLabel": "notifications",
+      "title": "notifications",
+      "subtitle": "tameru speaks softly. you choose how often.",
+      "weeklyDigestLabel": "weekly digest",
+      "weeklyDigestDesc": "a quiet recap every monday morning. unsubscribe link in every send.",
+      "done": "done"
+    },
+    "signOut": {
+      "closeAriaLabel": "close dialog",
+      "title": "sign out?",
+      "body": "your data stays exactly where it is. you can sign back in anytime — nothing is deleted.",
+      "cancel": "cancel",
+      "confirm": "sign out"
+    }
+  },
+  "privacy": {
+    "title": "privacy",
+    "subtitle": "what tameru does with your data, and what it doesn't.",
+    "analytics": {
+      "label": "pause product analytics",
+      "desc": "stops feature-usage events immediately. transaction data is never sent to analytics."
+    },
+    "export": {
+      "label": "export my data",
+      "desc": "downloads a json file with your transactions, cards, subscriptions, memory facts, chat history, and preferences.",
+      "button": "export",
+      "preparing": "preparing…",
+      "errorRetry": "couldn't prepare your export. try again in a moment.",
+      "errorGeneric": "something went wrong. try again in a moment."
+    },
+    "deleteAccount": {
+      "label": "delete my account",
+      "desc": "email us and we'll wipe everything within 7 days. an in-app button ships in a later release.",
+      "button": "email us",
+      "emailSubject": "Delete my account",
+      "emailBodyLine1": "Hi Tameru,",
+      "emailBodyLine2": "Please delete my account and all associated data.",
+      "emailBodyLine3": "I understand this is permanent and includes my transactions, cards, subscriptions, chat history, and memory facts.",
+      "emailBodyLine4": "Thanks,"
+    },
+    "disclosure": {
+      "aiProvidersHeading": "ai providers",
+      "aiProvidersAnthropicParagraph": "when you chat with tameru — to add a transaction, to ask a question, or anything else — your message goes to anthropic. card multiplier lookups also go to anthropic and include only the public card name and last 4 digits, never your transaction data. anthropic's default retention is 30 days for trust & safety review; zero data retention has been requested for the tameru org and brings that to zero. anthropic does not use api data for training under any tier.",
+      "aiProvidersGeminiParagraph": "we also use google gemini on its paid tier to pick a category for each transaction — the merchant name and amount go to gemini, nothing else. gemini also parses csv imports and receipt photos when you use those. google's paid tier does not use api data for training; the free tier does, and we never use it.",
+      "analyticsHeading": "product analytics",
+      "analyticsParagraph1": "we use posthog (us cloud) to count structural events only: chat-session starts and ends, feature usage, onboarding steps, the weekly digest opens, and shown errors. we never send transaction amounts, merchant names, card details, or the text of what you ask in chat.",
+      "analyticsParagraph2": "the toggle above stops new events immediately. anything we already counted stays in posthog until you ask us to remove it."
+    }
+  },
+  "connections": {
+    "title": "connected apps",
+    "subtitle": {
+      "before": "apps you've allowed to read your spending — like",
+      "accessIs": "access is",
+      "readOnly": "read-only",
+      "after": ": connected apps can see your ledger but can't add, edit, or delete anything."
+    },
+    "setup": {
+      "heading": "add tameru in claude.ai",
+      "step1Before": "1. in claude.ai, open",
+      "step1SettingsConnectors": "settings → connectors",
+      "step1And": "and choose",
+      "step1AddConnector": "add custom connector",
+      "step2": "2. paste this server url:",
+      "copy": "copy",
+      "copied": "copied",
+      "hint": "claude.ai will open a tameru consent page — approve to finish. nothing to paste back here."
+    },
+    "list": {
+      "heading": "current connections",
+      "refresh": "refresh",
+      "refreshAriaLabel": "refresh",
+      "loading": "loading connections…",
+      "empty": "no apps connected yet.",
+      "connectedFallback": "connected",
+      "disconnect": "disconnect",
+      "errorDisconnect": "couldn't disconnect that app."
+    },
+    "disconnect": {
+      "ariaLabel": "disconnect app",
+      "title": "disconnect {{name}}?",
+      "warning": "the app loses access within a few minutes. an in-flight session may stay readable until its token expires.",
+      "confirmButton": "disconnect",
+      "disconnecting": "disconnecting…",
+      "cancel": "cancel"
+    }
+  },
+  "cards": {
+    "title": "my cards",
+    "subtitle": "tap a card to edit. swipe left to remove.",
+    "chatSeedAddCard": "Add a new card:",
+    "hintAddCard": "ask tameru to add a card",
+    "deletingTapToUndo": "deleting · tap to undo",
+    "afChip": {
+      "editAriaLabel": "edit annual fee tracking",
+      "next": "next {{date}}",
+      "trackAriaLabel": "track annual fee",
+      "trackLabel": "track ${{amount}} AF"
+    },
+    "empty": {
+      "heading": "no cards yet",
+      "body": "tameru learns better with a card or two on file.",
+      "cta": "ask tameru ai to add one"
+    }
+  },
+  "subscriptions": {
+    "title": "subscriptions",
+    "subtitle": "recurring charges, quietly tracked.",
+    "chatSeedAdd": "Add a new subscription:",
+    "hintAdd": "ask tameru to add a subscription",
+    "empty": "no subscriptions tracked yet — ask tameru to add one.",
+    "needsNewCard": {
+      "heading": "needs a new card",
+      "body_one": "you deleted a card that backed {{count}} subscription. tap a row below to pick a new card, or cancel it.",
+      "body_other": "you deleted a card that backed {{count}} subscriptions. tap a row below to pick a new card, or cancel it."
+    },
+    "status": {
+      "paused": "paused",
+      "cancelled": "cancelled"
+    },
+    "row": {
+      "pausedNote": "paused · no upcoming charges",
+      "nextBilling": "next {{date}} · {{frequency}}"
+    }
+  },
+  "editCard": {
+    "ariaLabel": "edit card",
+    "title": "edit card",
+    "fields": {
+      "name": "name",
+      "last4": "last 4 (identity — not editable)",
+      "last4Hint": "delete + re-add to change",
+      "program": "program",
+      "color": "color",
+      "colorAriaLabel": "card color",
+      "annualFee": "annual fee",
+      "amount": "amount"
+    },
+    "saveChanges": "save changes",
+    "saving": "saving…",
+    "deleteCard": "delete card",
+    "programPicker": {
+      "ariaLabel": "choose program",
+      "title": "choose a program"
+    },
+    "af": {
+      "ariaLabel": "edit annual fee tracking",
+      "titleEdit": "edit annual fee",
+      "titleTrack": "track annual fee",
+      "nextRenewal": "next renewal",
+      "autoLogHint": "tameru will auto-log the fee on this date next year.",
+      "errorAmountInvalid": "amount must be a non-negative number.",
+      "errorDateInvalid": "renewal date must be today or later.",
+      "stopTracking": "stop tracking this AF"
+    }
+  },
+  "editSubscription": {
+    "ariaLabel": "edit subscription",
+    "title": "edit subscription",
+    "fields": {
+      "name": "name",
+      "amount": "amount",
+      "category": "category",
+      "card": "card",
+      "cardClosed": "card (closed — pick a new one)",
+      "frequency": "frequency",
+      "nextBilling": "next billing",
+      "lastBilling": "last billing",
+      "started": "started"
+    },
+    "cadenceHint": "billing cadence and start date are fixed — cancel and re-add to change them.",
+    "saveChanges": "save changes",
+    "card": {
+      "needsNewCard": "needs a new card",
+      "bankAch": "bank ACH",
+      "bankAchSub": "no card (rent, utilities, mortgage)"
+    },
+    "actions": {
+      "pause": "pause",
+      "resume": "resume",
+      "resumeAsAch": "resume as bank ACH",
+      "cancel": "cancel subscription"
+    },
+    "cardPicker": {
+      "ariaLabel": "choose card",
+      "title": "choose a card"
+    },
+    "categoryPicker": {
+      "ariaLabel": "choose category",
+      "title": "choose a category"
+    }
+  },
+  "editTransaction": {
+    "ariaLabel": "edit transaction",
+    "title": "edit transaction",
+    "fields": {
+      "merchant": "merchant",
+      "amount": "amount",
+      "date": "date",
+      "card": "card",
+      "category": "category"
+    },
+    "card": {
+      "other": "Other",
+      "otherCash": "Other / Cash",
+      "otherCashSub": "cash or unassigned"
+    },
+    "saveChanges": "save changes",
+    "deleteTransaction": "delete transaction",
+    "cardPicker": {
+      "ariaLabel": "choose card",
+      "title": "choose a card"
+    },
+    "categoryPicker": {
+      "ariaLabel": "choose category",
+      "title": "choose a category"
+    }
+  },
+  "editGoal": {
+    "ariaLabel": "edit goal",
+    "title": "edit goal",
+    "fields": {
+      "category": "category (not editable)",
+      "categoryHint": "delete + re-add to move",
+      "amount": "amount",
+      "period": "period"
+    },
+    "saveChanges": "save changes",
+    "saving": "saving…",
+    "deleteGoal": "delete goal",
+    "errorConflict": "you already have a goal for this category and period. delete it first, or pick a different period.",
+    "errorGeneric": "couldn't save changes. try again?"
+  },
+  "multipliers": {
+    "label": "multipliers",
+    "needsManual": "add your card's bonus categories below",
+    "empty": "no bonus categories yet.",
+    "removeAriaLabel": "remove {{cat}}",
+    "customOption": "custom…",
+    "customPlaceholder": "e.g. \"U.S. supermarkets\"",
+    "cancel": "cancel",
+    "add": "add",
+    "addCategory": "add category"
+  }
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Mic, Send } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { VoiceOverlay } from "@/components/chat/VoiceOverlay";
 import { chatStore, useChatStore } from "@/lib/chatStore";
 import { isVoiceSupported, useVoice } from "@/lib/voice";
@@ -7,13 +8,13 @@ import { cn } from "@/lib/utils";
 
 const SILENCE_WINDOW_MS = 1500;
 
-const PLACEHOLDERS = [
-  "coffee $5.50",
-  "lunch with M $24",
-  "edit that lupa dinner",
-  "dining vs groceries this month",
-  "delete the duplicate uber",
-];
+/** Placeholder keys resolved with t() at render time so they rotate in the current language. */
+const PLACEHOLDER_KEYS = [
+  "chat.examples.coffee",
+  "chat.examples.lunch",
+  "chat.examples.editDinner",
+  "chat.examples.compare",
+] as const;
 
 const PLACEHOLDER_INTERVAL_MS = 3200;
 
@@ -23,6 +24,7 @@ const PLACEHOLDER_INTERVAL_MS = 3200;
  * not a CTA.
  */
 export function DesktopComposer() {
+  const { t } = useTranslation();
   const { drawerOpen, drawerExpanded } = useChatStore();
   const [value, setValue] = useState("");
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
@@ -54,7 +56,7 @@ export function DesktopComposer() {
   useEffect(() => {
     if (focused) return;
     const id = window.setInterval(() => {
-      setPlaceholderIdx((i) => (i + 1) % PLACEHOLDERS.length);
+      setPlaceholderIdx((i) => (i + 1) % PLACEHOLDER_KEYS.length);
     }, PLACEHOLDER_INTERVAL_MS);
     return () => window.clearInterval(id);
   }, [focused]);
@@ -125,7 +127,7 @@ export function DesktopComposer() {
           <>
             {!drawerOpen && (
               <p className="mb-1.5 text-center text-[0.7rem] text-ink-tertiary tracking-wide">
-                ✨ ask tameru
+                {t("chat.desktopComposer.hint")}
               </p>
             )}
 
@@ -145,15 +147,15 @@ export function DesktopComposer() {
                 onChange={(e) => setValue(e.target.value)}
                 onFocus={() => setFocused(true)}
                 onBlur={() => setFocused(false)}
-                placeholder={PLACEHOLDERS[placeholderIdx]}
+                placeholder={t(PLACEHOLDER_KEYS[placeholderIdx])}
                 className="flex-1 bg-transparent px-2 py-1.5 text-[0.92rem] text-ink placeholder:text-ink-tertiary focus:outline-none"
-                aria-label="ask tameru"
+                aria-label={t("chat.desktopComposer.inputAria")}
               />
               {micSupported && (
                 <button
                   type="button"
                   onClick={startVoice}
-                  aria-label="record voice"
+                  aria-label={t("chat.desktopComposer.recordVoice")}
                   className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
                 >
                   <Mic className="h-4 w-4" />
@@ -162,7 +164,7 @@ export function DesktopComposer() {
               {value.trim() ? (
                 <button
                   type="submit"
-                  aria-label="send"
+                  aria-label={t("chat.desktopComposer.send")}
                   className="flex h-8 w-8 items-center justify-center rounded-full bg-moss text-surface hover:bg-moss-deep"
                 >
                   <Send className="h-3.5 w-3.5" />

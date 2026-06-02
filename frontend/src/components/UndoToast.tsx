@@ -1,6 +1,7 @@
 /** A 5-second sonner-free undo toast queue, dedicated to ledger deletes. */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,7 @@ export function UndoToast({
   onTimeout,
   durationMs = 5000,
 }: UndoToastProps) {
+  const { t } = useTranslation();
   const [progress, setProgress] = useState(1);
 
   useEffect(() => {
@@ -61,7 +63,7 @@ export function UndoToast({
       <div className="flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex flex-col leading-tight min-w-0">
           <span className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-            removing
+            {t("common.undoToast.removing")}
           </span>
           <span className="truncate text-sm text-ink">{pending.label}</span>
         </div>
@@ -71,7 +73,7 @@ export function UndoToast({
           className="inline-flex items-center gap-1.5 rounded-full bg-moss px-3 py-1.5 text-xs font-medium text-surface hover:bg-moss-deep"
         >
           <Undo2 className="h-3 w-3" />
-          undo
+          {t("common.undoToast.undo")}
         </button>
       </div>
       <div className="h-0.5 bg-hairline">

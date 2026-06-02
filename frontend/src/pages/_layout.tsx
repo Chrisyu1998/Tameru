@@ -1,4 +1,5 @@
 import { Outlet, useLocation, Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { BottomNav } from "@/components/BottomNav";
 import { Sidebar } from "@/components/Sidebar";
@@ -52,18 +53,19 @@ export default function Layout() {
 }
 
 export function NotFoundPage() {
+  const { t } = useTranslation();
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
       <div className="max-w-sm text-center">
-        <h1 className="font-serif text-6xl text-ink lowercase-title">not found</h1>
+        <h1 className="font-serif text-6xl text-ink lowercase-title">{t("layout.notFound.title")}</h1>
         <p className="mt-3 text-sm text-ink-secondary">
-          this page hasn't been built yet — or it never was.
+          {t("layout.notFound.body")}
         </p>
         <Link
           to="/"
           className="mt-6 inline-flex h-11 items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
         >
-          go home
+          {t("layout.notFound.goHome")}
         </Link>
       </div>
     </div>

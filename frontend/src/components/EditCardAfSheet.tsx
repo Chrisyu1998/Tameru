@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Calendar } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { patchCard } from "@/lib/cardsApi";
@@ -58,6 +59,7 @@ export function EditCardAfSheet({
   onClose,
   onSaved,
 }: EditCardAfSheetProps) {
+  const { t } = useTranslation();
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
   const [saving, setSaving] = useState(false);
@@ -150,18 +152,18 @@ export function EditCardAfSheet({
     <BottomSheet
       open={open}
       onClose={onClose}
-      ariaLabel="edit annual fee tracking"
+      ariaLabel={t("editCard.af.ariaLabel")}
       desktopVariant="side"
     >
       <h2 className="font-serif text-xl text-ink lowercase-title">
-        {isTracking ? "edit annual fee" : "track annual fee"}
+        {isTracking ? t("editCard.af.titleEdit") : t("editCard.af.titleTrack")}
       </h2>
       <p className="mt-1 text-[0.78rem] text-ink-tertiary">
         {card.name} · ···· {card.last4}
       </p>
 
       <div className="mt-5 flex flex-col gap-4">
-        <FieldGroup label="amount">
+        <FieldGroup label={t("editCard.fields.amount")}>
           <div className="flex items-center gap-1">
             <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
@@ -174,7 +176,7 @@ export function EditCardAfSheet({
           </div>
         </FieldGroup>
 
-        <FieldGroup label="next renewal">
+        <FieldGroup label={t("editCard.af.nextRenewal")}>
           <div className="flex items-center gap-2">
             <Calendar className="h-3.5 w-3.5 text-ink-tertiary" />
             <input
@@ -186,18 +188,18 @@ export function EditCardAfSheet({
             />
           </div>
           <p className="mt-2 text-[0.7rem] text-ink-quaternary">
-            tameru will auto-log the fee on this date next year.
+            {t("editCard.af.autoLogHint")}
           </p>
         </FieldGroup>
 
         {!amountValid && (
           <p className="text-[0.78rem] text-over">
-            amount must be a non-negative number.
+            {t("editCard.af.errorAmountInvalid")}
           </p>
         )}
         {!dateValid && (
           <p className="text-[0.78rem] text-over">
-            renewal date must be today or later.
+            {t("editCard.af.errorDateInvalid")}
           </p>
         )}
         {error && <p className="text-[0.78rem] text-over">{error}</p>}
@@ -209,7 +211,7 @@ export function EditCardAfSheet({
           disabled={!dirty || !valid || saving}
           onClick={() => void save()}
         >
-          {saving ? "saving…" : "save changes"}
+          {saving ? t("editCard.saving") : t("editCard.saveChanges")}
         </Button>
         {isTracking && (
           <button
@@ -218,7 +220,7 @@ export function EditCardAfSheet({
             disabled={saving}
             className="self-center text-sm text-over hover:underline underline-offset-4 disabled:opacity-50"
           >
-            stop tracking this AF
+            {t("editCard.af.stopTracking")}
           </button>
         )}
       </div>

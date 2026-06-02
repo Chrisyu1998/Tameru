@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { RowActions } from "@/components/desktop/RowActions";
 
@@ -30,6 +31,7 @@ export function SwipeableRow({
   panelWidth = 96,
   threshold = 48,
 }: SwipeableRowProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [dragX, setDragX] = useState(0);
   const startX = useRef<number | null>(null);
@@ -100,14 +102,14 @@ export function SwipeableRow({
           onConfirmDelete();
           setOpen(false);
         }}
-        aria-label="confirm delete"
+        aria-label={t("common.confirmDelete")}
         className={cn(
           "absolute inset-y-0 right-0 flex items-center justify-center bg-over text-surface transition-opacity md:hidden",
           open ? "opacity-100" : "opacity-90"
         )}
         style={{ width: panelWidth }}
       >
-        <span className="text-sm font-medium tracking-wide">Delete</span>
+        <span className="text-sm font-medium tracking-wide">{t("common.delete")}</span>
       </button>
 
       <div

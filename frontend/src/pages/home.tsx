@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Dashboard } from "@/components/Dashboard";
 import {
   dismissFirstHint,
@@ -44,14 +45,16 @@ export default function HomePage() {
   // Hold the populated/empty branch until the first /dashboard/summary
   // round trip lands — otherwise we'd flash the empty state on every page
   // load before the response arrives.
+  const { t } = useTranslation();
+
   if (!summary) {
     return (
       <div className="mx-auto w-full max-w-md px-5 pt-10 pb-12">
         <header>
-          <h1 className="font-serif text-3xl text-ink lowercase-title">home</h1>
+          <h1 className="font-serif text-3xl text-ink lowercase-title">{t("home.title")}</h1>
         </header>
         {loading && (
-          <p className="mt-12 text-sm text-ink-tertiary">loading…</p>
+          <p className="mt-12 text-sm text-ink-tertiary">{t("home.loading")}</p>
         )}
       </div>
     );
@@ -86,10 +89,11 @@ function EmptyHome({
   showHint: boolean;
   onDismissHint: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <>
       <header>
-        <h1 className="font-serif text-3xl text-ink lowercase-title">home</h1>
+        <h1 className="font-serif text-3xl text-ink lowercase-title">{t("home.title")}</h1>
       </header>
 
       <div className="mt-20 flex flex-col items-center text-center">
@@ -97,10 +101,10 @@ function EmptyHome({
           <Wallet className="h-8 w-8" strokeWidth={1.5} />
         </div>
         <h2 className="mt-6 font-serif text-2xl text-ink lowercase-title">
-          your ledger is empty
+          {t("home.emptyTitle")}
         </h2>
         <p className="mt-2 max-w-[26ch] text-sm text-ink-secondary">
-          tap the chat button below to log your first transaction.
+          {t("home.emptyBody")}
         </p>
       </div>
 
@@ -145,10 +149,11 @@ function ChatButtonPulse() {
 }
 
 function FirstHintStrip({ onDismiss }: { onDismiss: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="pointer-events-auto fixed bottom-20 left-1/2 z-40 w-[min(92vw,22rem)] -translate-x-1/2 rounded-2xl border border-hairline bg-elevated px-4 py-3 md:hidden animate-fade-up">
       <p className="font-serif italic text-sm text-ink-secondary lowercase-title">
-        type or speak your first transaction
+        {t("home.hintPrompt")}
       </p>
       <div className="mt-2 flex flex-wrap gap-2">
         {PREFILL_CHIPS.map((chip) => (
@@ -169,7 +174,7 @@ function FirstHintStrip({ onDismiss }: { onDismiss: () => void }) {
           onClick={onDismiss}
           className="ml-auto text-[0.7rem] text-ink-tertiary hover:text-ink-secondary"
         >
-          dismiss
+          {t("home.hintDismiss")}
         </button>
       </div>
     </div>

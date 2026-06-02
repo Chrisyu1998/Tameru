@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface CsvProcessingStepProps {
   filename: string;
@@ -7,18 +8,20 @@ interface CsvProcessingStepProps {
   onComplete: () => void;
 }
 
-const STATUS_TEXTS = [
-  "parsing rows…",
-  "matching merchants…",
-  "categorizing…",
-  "almost there…",
-];
+/** i18n keys for the 4-beat status ticker. Resolved inside the component. */
+const STATUS_KEYS = [
+  "onboarding.csvProcessing.status1",
+  "onboarding.csvProcessing.status2",
+  "onboarding.csvProcessing.status3",
+  "onboarding.csvProcessing.status4",
+] as const;
 
 export function CsvProcessingStep({
   filename,
   totalRows = 143,
   onComplete,
 }: CsvProcessingStepProps) {
+  const { t } = useTranslation();
   const [count, setCount] = useState(0);
   const [statusIdx, setStatusIdx] = useState(0);
 
@@ -28,12 +31,12 @@ export function CsvProcessingStep({
     let raf = 0;
 
     const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
-      setCount(Math.floor(t * totalRows));
+      const elapsed = Math.min(1, (now - start) / duration);
+      setCount(Math.floor(elapsed * totalRows));
       setStatusIdx(
-        Math.min(STATUS_TEXTS.length - 1, Math.floor(t * STATUS_TEXTS.length))
+        Math.min(STATUS_KEYS.length - 1, Math.floor(elapsed * STATUS_KEYS.length))
       );
-      if (t < 1) {
+      if (elapsed < 1) {
         raf = requestAnimationFrame(tick);
       } else {
         setTimeout(onComplete, 400);
@@ -79,12 +82,14 @@ export function CsvProcessingStep({
         </svg>
         <div className="flex flex-col items-center gap-1">
           <span className="font-serif text-4xl text-ink tabular">{count}</span>
-          <span className="text-xs text-ink-tertiary tabular">of {totalRows}</span>
+          <span className="text-xs text-ink-tertiary tabular">
+            {t("onboarding.csvProcessing.ofTotal", { total: totalRows })}
+          </span>
         </div>
       </div>
 
       <p className="mt-10 font-serif italic text-base text-ink-secondary lowercase-title">
-        {STATUS_TEXTS[statusIdx]}
+        {t(STATUS_KEYS[statusIdx])}
       </p>
 
       <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-hairline bg-surface px-3 py-1.5 text-xs text-ink-tertiary">

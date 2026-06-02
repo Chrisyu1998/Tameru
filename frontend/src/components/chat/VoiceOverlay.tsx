@@ -1,4 +1,5 @@
 import { Mic, RefreshCw, Square } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { VoiceError, VoiceLang } from "@/lib/voice";
 import { VOICE_LANGS } from "@/lib/voice";
 
@@ -39,6 +40,7 @@ export function VoiceOverlay({
   onSubmitNow,
   onStop,
 }: VoiceOverlayProps) {
+  const { t } = useTranslation();
   const progress =
     silenceMsLeft > 0
       ? Math.min(1, 1 - silenceMsLeft / silenceWindowMs)
@@ -57,7 +59,7 @@ export function VoiceOverlay({
       <button
         type="button"
         onClick={cycleLang}
-        aria-label={`voice language: ${LANG_ARIA_LABEL[lang]}. tap to change.`}
+        aria-label={t("chat.voice.langChipAria", { lang: LANG_ARIA_LABEL_KEY[lang] })}
         className="absolute right-4 top-3 rounded-full border border-hairline bg-surface px-2.5 py-1 text-[0.7rem] font-medium tracking-wide text-ink-secondary hover:bg-elevated hover:text-ink"
       >
         {LANG_CHIP_LABEL[lang]}
@@ -74,7 +76,7 @@ export function VoiceOverlay({
               : "min-h-[1.5rem] text-center text-[0.9rem] italic text-ink-tertiary"
           }
         >
-          {transcript || "listening…"}
+          {transcript || t("chat.voice.listening")}
         </p>
       )}
 
@@ -112,10 +114,10 @@ export function VoiceOverlay({
           type="button"
           onClick={onStop}
           className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-surface px-3 py-1.5 text-[0.78rem] text-ink-secondary transition-colors hover:bg-sunken/60 hover:text-ink"
-          aria-label="cancel voice input"
+          aria-label={t("chat.voice.cancelVoiceInput")}
         >
           <Square className="h-3 w-3" />
-          cancel
+          {t("chat.voice.cancel")}
         </button>
         <button
           type="button"
@@ -123,7 +125,7 @@ export function VoiceOverlay({
           disabled={!!error}
           className="text-[0.85rem] text-moss hover:text-moss-deep underline-offset-4 hover:underline disabled:opacity-40 disabled:hover:no-underline"
         >
-          submit now
+          {t("chat.voice.submitNow")}
         </button>
         <span
           className="w-10 text-right text-[0.7rem] tabular text-ink-tertiary"
@@ -144,16 +146,17 @@ export function VoiceOverlay({
  * (e.g. how to re-enable mic permission) rather than a generic failure.
  */
 function ErrorChip({ error, onRetry }: { error: VoiceError; onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="mx-auto flex max-w-md items-center justify-center gap-2 rounded-lg border border-hairline bg-sunken px-3 py-2 text-center text-[0.8rem] text-ink-secondary">
-      <span className="flex-1 leading-snug">{ERROR_MESSAGE[error.code]}</span>
+      <span className="flex-1 leading-snug">{ERROR_I18N_KEY[error.code] ? t(ERROR_I18N_KEY[error.code]) : error.code}</span>
       <button
         type="button"
         onClick={onRetry}
         className="inline-flex items-center gap-1 rounded-full bg-moss px-2.5 py-1 text-[0.7rem] text-surface hover:bg-moss-deep"
       >
         <RefreshCw className="h-3 w-3" />
-        try again
+        {t("chat.voice.tryAgain")}
       </button>
     </div>
   );
@@ -167,17 +170,18 @@ const LANG_CHIP_LABEL: Record<VoiceLang, string> = {
   "ja-JP": "日",
 };
 
-const LANG_ARIA_LABEL: Record<VoiceLang, string> = {
+/** Used in the aria-label — resolved through t() so the label is localized. */
+const LANG_ARIA_LABEL_KEY: Record<VoiceLang, string> = {
   "en-US": "english",
   "zh-TW": "chinese",
   "ja-JP": "japanese",
 };
 
-const ERROR_MESSAGE: Record<VoiceError["code"], string> = {
-  "not-allowed":
-    "voice access denied. enable mic for this site in your browser settings, then try again.",
-  "no-speech": "didn't catch that. try again.",
-  network: "voice needs internet — try again when you reconnect.",
-  "audio-capture": "no mic detected. check your device.",
-  unknown: "voice failed. try again.",
+/** Maps VoiceError.code → i18n key. */
+const ERROR_I18N_KEY: Record<VoiceError["code"], string> = {
+  "not-allowed": "chat.voice.errorNotAllowed",
+  "no-speech": "chat.voice.errorNoSpeech",
+  network: "chat.voice.errorNetwork",
+  "audio-capture": "chat.voice.errorAudioCapture",
+  unknown: "chat.voice.errorUnknown",
 };

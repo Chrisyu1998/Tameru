@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { RotateCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface AutoLoggedBadgeProps {
@@ -15,9 +16,11 @@ interface AutoLoggedBadgeProps {
  * tameru inferred.
  */
 export function AutoLoggedBadge({
-  tooltip = "auto-logged by tameru — detected as a recurring charge.",
+  tooltip,
   className,
 }: AutoLoggedBadgeProps) {
+  const { t } = useTranslation();
+  const resolvedTooltip = tooltip ?? t("common.autoLoggedTooltip");
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
 
@@ -35,7 +38,7 @@ export function AutoLoggedBadge({
     <span ref={wrapRef} className={cn("relative inline-flex", className)}>
       <button
         type="button"
-        aria-label="auto-logged by tameru"
+        aria-label={t("common.autoLoggedAriaLabel")}
         onClick={(e) => {
           // Don't trigger the row's onClick (e.g. opening the edit sheet).
           e.stopPropagation();
@@ -50,7 +53,7 @@ export function AutoLoggedBadge({
           role="tooltip"
           className="absolute left-1/2 top-full z-20 mt-1.5 w-52 -translate-x-1/2 rounded-xl border border-hairline bg-elevated px-3 py-2 text-[0.72rem] leading-snug text-ink-secondary shadow-sm"
         >
-          {tooltip}
+          {resolvedTooltip}
         </span>
       )}
     </span>

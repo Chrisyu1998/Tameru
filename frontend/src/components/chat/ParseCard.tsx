@@ -1,6 +1,8 @@
 import { AlertCircle, Calendar, Check, CreditCard, Tag, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cardLabel, type ParseDraft } from "@/lib/chat";
 import type { Card } from "@/lib/fixtures";
+import { useCategoryLabel } from "@/lib/categories";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +73,8 @@ export function ParseCard({
   onConfirm,
   onFix,
 }: ParseCardProps) {
+  const { t } = useTranslation();
+  const catLabel = useCategoryLabel();
   const card = cardLabel(draft.cardId, cards);
 
   // Lower confidence → muted warning glyph next to the field. No edit
@@ -91,7 +95,7 @@ export function ParseCard({
   const cardDisplay =
     draft.cardId && card.last4 !== "—"
       ? `${card.name} · ${card.last4}`
-      : "Other";
+      : t("chat.parseCard.other");
 
   return (
     <div className="w-full max-w-[88%] animate-slide-up-in">
@@ -113,7 +117,7 @@ export function ParseCard({
         {/* Merchant + amount headline */}
         <div className="flex items-start justify-between gap-3">
           <DisplayField
-            label="merchant"
+            label={t("chat.parseCard.merchant")}
             confident={!lowConf(draft.confidence.merchant)}
             display={
               <span className="font-serif text-lg text-ink lowercase-title">
@@ -122,7 +126,7 @@ export function ParseCard({
             }
           />
           <DisplayField
-            label="amount"
+            label={t("chat.parseCard.amount")}
             confident={!lowConf(draft.confidence.amount)}
             display={
               <span className="font-serif text-lg tabular text-ink">
@@ -136,21 +140,21 @@ export function ParseCard({
         <div className="mt-3 flex flex-col gap-2 border-t border-hairline pt-3">
           <MetaRow
             icon={<Calendar className="h-3.5 w-3.5" />}
-            label="date"
+            label={t("chat.parseCard.date")}
             confident={!lowConf(draft.confidence.date)}
             displayValue={formatShortDate(draft.date)}
           />
           <MetaRow
             icon={<CreditCard className="h-3.5 w-3.5" />}
-            label="card"
+            label={t("chat.parseCard.card")}
             confident={!lowConf(draft.confidence.card)}
             displayValue={cardDisplay}
           />
           <MetaRow
             icon={<Tag className="h-3.5 w-3.5" />}
-            label="category"
+            label={t("chat.parseCard.category")}
             confident={!lowConf(draft.confidence.category)}
-            displayValue={draft.category}
+            displayValue={catLabel(draft.category)}
           />
         </div>
 
@@ -159,23 +163,23 @@ export function ParseCard({
         {isLogged && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-moss-deep">
             <Check className="h-3.5 w-3.5" />
-            <span>logged.</span>
+            <span>{t("chat.parseCard.logged")}</span>
           </div>
         )}
         {isDeleted && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
             <Trash2 className="h-3.5 w-3.5" />
-            <span>deleted.</span>
+            <span>{t("chat.parseCard.deleted")}</span>
           </div>
         )}
         {isCancelled && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
-            <span>not saved.</span>
+            <span>{t("chat.parseCard.notSaved")}</span>
           </div>
         )}
         {isPending && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
-            <span>queued — syncs when online.</span>
+            <span>{t("chat.parseCard.queued")}</span>
           </div>
         )}
         {!committed && !frozen && !pendingSync && (
@@ -186,18 +190,18 @@ export function ParseCard({
                 onClick={() => onConfirm(draft)}
                 className="h-11 w-full rounded-2xl bg-moss text-[0.95rem] font-medium text-surface transition-colors hover:bg-moss-deep"
               >
-                looks right
+                {t("chat.parseCard.looksRight")}
               </button>
               <button
                 type="button"
                 onClick={onFix}
                 className="h-10 w-full rounded-2xl border border-hairline text-[0.9rem] text-ink transition-colors hover:bg-sunken/60"
               >
-                let me fix it
+                {t("chat.parseCard.letMeFixIt")}
               </button>
             </div>
             <p className="mt-3 text-center text-[0.72rem] text-ink-tertiary">
-              or just tell me what to change.
+              {t("chat.parseCard.orJustTell")}
             </p>
           </>
         )}
@@ -253,10 +257,11 @@ function MetaRow({ icon, label, displayValue, confident }: MetaRowProps) {
 /** Low-confidence cue — surfaces "double-check this" without offering an
  * inline edit affordance. The user tap-fixes via the sheet. */
 function LowConfidenceGlyph() {
+  const { t } = useTranslation();
   return (
     <span
       className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-warn-wash text-warn"
-      aria-label="double-check this field"
+      aria-label={t("chat.parseCard.doubleCheckField")}
     >
       <AlertCircle className="h-3 w-3 stroke-[2.2]" />
     </span>

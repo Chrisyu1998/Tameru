@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { tourEntryNudge } from "@/fixtures/tour";
+import { useCategoryLabel } from "@/lib/categories";
 import { cn } from "@/lib/utils";
 
 /**
@@ -34,6 +36,8 @@ export function EntryNudgeAnimation() {
 }
 
 function NudgeCycle() {
+  const { t } = useTranslation();
+  const catLabel = useCategoryLabel();
   // Beat advances on a timer. Each beat reveals one more element.
   // Beat values: 0 = nothing, 1 = user bubble, 2 = +parse card,
   // 3 = +looks-right highlight, 4 = confirmed line replaces parse card,
@@ -71,14 +75,14 @@ function NudgeCycle() {
       {showParse && (
         <div className="animate-slide-up-in rounded-2xl border border-hairline bg-elevated p-4">
           <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-            does this look right?
+            {t("tour.entry.doesThisLookRight")}
           </p>
           <div className="mt-3 flex flex-col gap-1.5 text-sm">
-            <ParseRow label="merchant" value={tourEntryNudge.parseCard.merchant} />
-            <ParseRow label="amount" value={tourEntryNudge.parseCard.amount} />
-            <ParseRow label="category" value={tourEntryNudge.parseCard.category} />
-            <ParseRow label="card" value={tourEntryNudge.parseCard.card} />
-            <ParseRow label="date" value={tourEntryNudge.parseCard.date} />
+            <ParseRow label={t("tour.entry.merchant")} value={tourEntryNudge.parseCard.merchant} />
+            <ParseRow label={t("tour.entry.amount")} value={tourEntryNudge.parseCard.amount} />
+            <ParseRow label={t("tour.entry.category")} value={catLabel(tourEntryNudge.parseCard.category)} />
+            <ParseRow label={t("tour.entry.card")} value={tourEntryNudge.parseCard.card} />
+            <ParseRow label={t("tour.entry.date")} value={tourEntryNudge.parseCard.date} />
           </div>
           <div className="mt-4 flex items-center gap-2">
             <button
@@ -91,14 +95,14 @@ function NudgeCycle() {
                   : "bg-moss text-surface"
               )}
             >
-              looks right
+              {t("tour.entry.looksRight")}
             </button>
             <button
               type="button"
               disabled
               className="rounded-full border border-hairline px-4 py-1.5 text-xs text-ink-secondary"
             >
-              fix it
+              {t("tour.entry.fixIt")}
             </button>
           </div>
         </div>
@@ -120,7 +124,7 @@ function NudgeCycle() {
             </div>
           </div>
           <p className="mt-1 ml-9 text-[0.7rem] text-ink-tertiary">
-            {tourEntryNudge.confirmedLine.category.toLowerCase()} · logged
+            {catLabel(tourEntryNudge.confirmedLine.category).toLowerCase()} · {t("tour.entry.logged")}
           </p>
         </div>
       )}

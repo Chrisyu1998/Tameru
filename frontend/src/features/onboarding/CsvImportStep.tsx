@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { StepDots } from "./StepDots";
 import { cn } from "@/lib/utils";
@@ -12,6 +13,7 @@ interface CsvImportStepProps {
 }
 
 export function CsvImportStep({ onContinue, onSkip }: CsvImportStepProps) {
+  const { t } = useTranslation();
   const [filename, setFilename] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -23,13 +25,13 @@ export function CsvImportStep({ onContinue, onSkip }: CsvImportStepProps) {
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-16 animate-fade-up">
-      <StepDots current={2} total={2} label="step 2 of 2" />
+      <StepDots current={2} total={2} label={t("onboarding.csvImport.stepLabel")} />
 
       <h1 className="mt-6 font-serif text-3xl text-ink lowercase-title">
-        bring in some history
+        {t("onboarding.csvImport.title")}
       </h1>
       <p className="mt-2 text-sm text-ink-secondary">
-        drop a CSV from your bank to seed your ledger.
+        {t("onboarding.csvImport.subtitle")}
       </p>
 
       <label
@@ -59,14 +61,14 @@ export function CsvImportStep({ onContinue, onSkip }: CsvImportStepProps) {
             <span className="font-serif text-base text-ink lowercase-title">
               {filename}
             </span>
-            <span className="text-xs text-ink-tertiary">tap to choose another</span>
+            <span className="text-xs text-ink-tertiary">{t("onboarding.csvImport.tapToChooseAnother")}</span>
           </>
         ) : (
           <>
             <span className="font-serif text-base text-ink lowercase-title">
-              drop your CSV here
+              {t("onboarding.csvImport.dropHere")}
             </span>
-            <span className="text-xs text-ink-tertiary">or tap to browse</span>
+            <span className="text-xs text-ink-tertiary">{t("onboarding.csvImport.orTapBrowse")}</span>
           </>
         )}
         <input
@@ -81,7 +83,7 @@ export function CsvImportStep({ onContinue, onSkip }: CsvImportStepProps) {
 
       <div className="mt-5">
         <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-          works with exports from
+          {t("onboarding.csvImport.worksWith")}
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           {BANK_HINTS.map((b) => (
@@ -104,14 +106,14 @@ export function CsvImportStep({ onContinue, onSkip }: CsvImportStepProps) {
           disabled={!filename}
           onClick={() => filename && onContinue(filename)}
         >
-          continue with import
+          {t("onboarding.csvImport.continueWithImport")}
         </Button>
         <button
           type="button"
           onClick={onSkip}
           className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
         >
-          skip for now
+          {t("onboarding.csvImport.skipForNow")}
         </button>
       </div>
     </div>

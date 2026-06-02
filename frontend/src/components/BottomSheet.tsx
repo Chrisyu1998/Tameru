@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface BottomSheetProps {
@@ -29,6 +30,7 @@ export function BottomSheet({
   ariaLabel = "sheet",
   desktopVariant = "dialog",
 }: BottomSheetProps) {
+  const { t } = useTranslation();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -76,7 +78,7 @@ export function BottomSheet({
             <button
               type="button"
               onClick={onClose}
-              aria-label="close"
+              aria-label={t("common.close")}
               className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken/60 hover:text-ink"
             >
               <X className="h-4 w-4" />
@@ -101,7 +103,7 @@ export function BottomSheet({
     >
       <button
         type="button"
-        aria-label="close sheet"
+        aria-label={t("common.closeSheet")}
         onClick={() => {
           if (!blockDismiss) onClose();
         }}
@@ -135,7 +137,7 @@ export function BottomSheet({
           <button
             type="button"
             onClick={onClose}
-            aria-label="close"
+            aria-label={t("common.close")}
             className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
           >
             <X className="h-4 w-4" />
@@ -166,6 +168,7 @@ function MobileBottomSheet({
   className?: string;
   ariaLabel: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       role="dialog"
@@ -175,7 +178,7 @@ function MobileBottomSheet({
     >
       <button
         type="button"
-        aria-label="close sheet"
+        aria-label={t("common.closeSheet")}
         onClick={() => {
           if (!blockDismiss) onClose();
         }}
@@ -199,7 +202,7 @@ function MobileBottomSheet({
           <button
             type="button"
             onClick={onClose}
-            aria-label="close"
+            aria-label={t("common.close")}
             className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
           >
             <X className="h-4 w-4" />

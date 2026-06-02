@@ -8,6 +8,7 @@ import {
   Plug,
   Upload,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { SketchIcon } from "@/components/SketchIcon";
 import { BottomSheet } from "@/components/BottomSheet";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
@@ -25,6 +26,7 @@ import {
 type SheetKey = "import" | "notifications" | "signout" | null;
 
 export default function MorePage() {
+  const { t } = useTranslation();
   // Live "is anything connected via OAuth" probe for the row chip.
   // Best-effort: a failure leaves the chip at "not connected" so the
   // user can still navigate in and see a real error message there.
@@ -42,7 +44,7 @@ export default function MorePage() {
   }, []);
   const [openSheet, setOpenSheet] = useState<SheetKey>(null);
   const email = useAppStore((s) => s.user?.email ?? "");
-  const handle = email.split("@")[0] || "you";
+  const handle = email.split("@")[0] || t("more.identity.youFallback");
   const avatar = (email[0] ?? "t").toUpperCase();
 
   return (
@@ -64,33 +66,33 @@ export default function MorePage() {
       <ul className="mt-6 divide-y divide-hairline rounded-2xl border border-hairline bg-surface">
         <RowLink
           to="/cards"
-          label="my cards"
+          label={t("more.primary.cards")}
           icon={<SketchIcon kind="card" size={18} seed={23} />}
         />
         <RowLink
           to="/subscriptions"
-          label="subscriptions"
+          label={t("more.primary.subscriptions")}
           icon={<SketchIcon kind="repeat" size={18} seed={37} />}
         />
         <RowLink
           to="/goals"
-          label="goals"
+          label={t("more.primary.goals")}
           icon={<SketchIcon kind="seedling" size={18} seed={47} />}
         />
         <RowLink
           to="/memory"
-          label="ai memory"
+          label={t("more.primary.aiMemory")}
           icon={<SketchIcon kind="sparkle" size={16} seed={53} />}
         />
         <RowLink
           to="/connections"
-          label="claude connections"
+          label={t("more.primary.claudeConnections")}
           icon={<Plug className="h-4 w-4" />}
           chip={
             claudeConnected ? (
-              <Pill tone="moss">connected</Pill>
+              <Pill tone="moss">{t("more.primary.connected")}</Pill>
             ) : (
-              <Pill tone="neutral">not connected</Pill>
+              <Pill tone="neutral">{t("more.primary.notConnected")}</Pill>
             )
           }
         />
@@ -98,26 +100,26 @@ export default function MorePage() {
 
       {/* Secondary section */}
       <p className="mt-7 px-2 text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-        account & data
+        {t("more.secondary.heading")}
       </p>
       <ul className="mt-2 divide-y divide-hairline rounded-2xl border border-hairline bg-surface">
         <RowButton
-          label="import data"
+          label={t("more.secondary.importData")}
           icon={<Upload className="h-4 w-4" />}
           onClick={() => setOpenSheet("import")}
         />
         <RowButton
-          label="notifications"
+          label={t("more.secondary.notifications")}
           icon={<Bell className="h-4 w-4" />}
           onClick={() => setOpenSheet("notifications")}
         />
         <RowLink
           to="/privacy"
-          label="privacy"
+          label={t("more.secondary.privacy")}
           icon={<Lock className="h-4 w-4" />}
         />
         <RowButton
-          label="sign out"
+          label={t("more.secondary.signOut")}
           icon={<LogOut className="h-4 w-4 text-over" />}
           tone="over"
           onClick={() => setOpenSheet("signout")}
@@ -267,19 +269,20 @@ function NotificationsSheet({
       });
   };
 
+  const { t } = useTranslation();
   return (
-    <BottomSheet open={open} onClose={onClose} ariaLabel="notifications">
+    <BottomSheet open={open} onClose={onClose} ariaLabel={t("more.notifications.ariaLabel")}>
       <h2 className="font-serif text-2xl text-ink lowercase-title">
-        notifications
+        {t("more.notifications.title")}
       </h2>
       <p className="mt-1 text-[0.85rem] text-ink-tertiary">
-        tameru speaks softly. you choose how often.
+        {t("more.notifications.subtitle")}
       </p>
 
       <div className="mt-5 divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <ToggleRow
-          label="weekly digest"
-          desc="a quiet recap every monday morning. unsubscribe link in every send."
+          label={t("more.notifications.weeklyDigestLabel")}
+          desc={t("more.notifications.weeklyDigestDesc")}
           checked={digest}
           onChange={handleDigestChange}
           disabled={savingDigest}
@@ -292,7 +295,7 @@ function NotificationsSheet({
         onClick={onClose}
         className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
       >
-        done
+        {t("more.notifications.done")}
       </button>
     </BottomSheet>
   );
@@ -363,6 +366,7 @@ function SignOutDialog({
     };
   }, [open, onClose]);
 
+  const { t } = useTranslation();
   if (!open) return null;
 
   return (
@@ -374,7 +378,7 @@ function SignOutDialog({
     >
       <button
         type="button"
-        aria-label="close dialog"
+        aria-label={t("more.signOut.closeAriaLabel")}
         onClick={onClose}
         className="absolute inset-0 bg-ink/40 backdrop-blur-[2px] animate-scrim-in"
       />
@@ -383,11 +387,10 @@ function SignOutDialog({
           id="sign-out-title"
           className="font-serif text-2xl text-ink lowercase-title"
         >
-          sign out?
+          {t("more.signOut.title")}
         </h2>
         <p className="mt-2 text-[0.9rem] leading-relaxed text-ink-secondary">
-          your data stays exactly where it is. you can sign back in anytime —
-          nothing is deleted.
+          {t("more.signOut.body")}
         </p>
         <div className="mt-6 grid grid-cols-2 gap-2">
           <button
@@ -395,7 +398,7 @@ function SignOutDialog({
             onClick={onClose}
             className="inline-flex h-11 items-center justify-center rounded-2xl border border-hairline bg-surface text-sm font-medium text-ink hover:bg-sunken"
           >
-            cancel
+            {t("more.signOut.cancel")}
           </button>
           <button
             type="button"
@@ -408,7 +411,7 @@ function SignOutDialog({
             }}
             className="inline-flex h-11 items-center justify-center rounded-2xl bg-over text-sm font-medium text-surface hover:opacity-90"
           >
-            sign out
+            {t("more.signOut.confirm")}
           </button>
         </div>
       </div>

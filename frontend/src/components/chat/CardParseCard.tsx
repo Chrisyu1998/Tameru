@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Check, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import {
   ISSUERS,
   ISSUER_LABELS,
@@ -73,6 +74,7 @@ export function CardParseCard({
   pendingSync,
   onConfirm,
 }: CardParseCardProps) {
+  const { t } = useTranslation();
   const [local, setLocal] = useState<CardParseDraft>(draft);
   const lastFourValid = /^\d{4}$/.test(local.lastFour);
   const issuerUnresolved = local.issuer === null;
@@ -121,13 +123,13 @@ export function CardParseCard({
 
         {(issuerUnresolved || networkUnresolved) && !committed && !frozen && !pendingSync && (
           <p className="mt-2 text-xs text-warn">
-            lookup couldn't determine
+            {t("chat.cardParseCard.lookupWarning")}
             {issuerUnresolved && networkUnresolved
-              ? " issuer or network"
+              ? t("chat.cardParseCard.lookupWarningIssuerAndNetwork")
               : issuerUnresolved
-                ? " the issuing bank"
-                : " the card network"}{" "}
-            — pick below to continue.
+                ? t("chat.cardParseCard.lookupWarningIssuer")
+                : t("chat.cardParseCard.lookupWarningNetwork")}{" "}
+            {t("chat.cardParseCard.lookupWarningTail")}
           </p>
         )}
 
@@ -140,7 +142,7 @@ export function CardParseCard({
           <>
             <div className="mt-4 grid grid-cols-2 gap-3 border-t border-hairline pt-3">
               <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-                last 4
+                {t("chat.cardParseCard.last4")}
                 <input
                   type="text"
                   inputMode="numeric"
@@ -158,7 +160,7 @@ export function CardParseCard({
                 />
               </label>
               <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-                annual fee
+                {t("chat.cardParseCard.annualFee")}
                 <input
                   type="text"
                   inputMode="decimal"
@@ -185,7 +187,7 @@ export function CardParseCard({
             {hasPositiveAnnualFee(local.annualFee) && (
               <div className="mt-3">
                 <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-                  next renewal (optional)
+                  {t("chat.cardParseCard.nextRenewal")}
                   <div className="mt-1 flex items-center gap-2">
                     <input
                       type="date"
@@ -206,7 +208,7 @@ export function CardParseCard({
                         onClick={() =>
                           setLocal({ ...local, nextAnnualFeeDate: null })
                         }
-                        aria-label="clear renewal date"
+                        aria-label={t("chat.cardParseCard.clearRenewalDate")}
                         className="rounded-md px-1.5 py-1 text-ink-tertiary hover:bg-elevated"
                       >
                         ✕
@@ -215,7 +217,7 @@ export function CardParseCard({
                   </div>
                   {local.nextAnnualFeeDate && (
                     <p className="mt-1 text-[0.65rem] normal-case text-ink-quaternary">
-                      we'll auto-log it when it hits.
+                      {t("chat.cardParseCard.autoLog")}
                     </p>
                   )}
                 </label>
@@ -225,7 +227,7 @@ export function CardParseCard({
             {(issuerUnresolved || networkUnresolved || local.needsManual) && (
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-                  issuer
+                  {t("chat.cardParseCard.issuer")}
                   <select
                     value={local.issuer ?? ""}
                     onChange={(e) =>
@@ -243,7 +245,7 @@ export function CardParseCard({
                   >
                     {issuerUnresolved && (
                       <option value="" disabled>
-                        select…
+                        {t("chat.cardParseCard.selectPlaceholder")}
                       </option>
                     )}
                     {ISSUERS.map((i) => (
@@ -254,7 +256,7 @@ export function CardParseCard({
                   </select>
                 </label>
                 <label className="flex flex-col text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-                  network
+                  {t("chat.cardParseCard.network")}
                   <select
                     value={local.network ?? ""}
                     onChange={(e) =>
@@ -272,7 +274,7 @@ export function CardParseCard({
                   >
                     {networkUnresolved && (
                       <option value="" disabled>
-                        select…
+                        {t("chat.cardParseCard.selectPlaceholder")}
                       </option>
                     )}
                     {NETWORKS.map((n) => (
@@ -304,7 +306,7 @@ export function CardParseCard({
 
         {local.sourceUrls.length > 0 && !committed && !frozen && !pendingSync && (
           <div className="mt-3 border-t border-hairline pt-2 text-[0.7rem] text-ink-quaternary">
-            sources:&nbsp;
+            {t("chat.cardParseCard.sources")}&nbsp;
             {local.sourceUrls.slice(0, 3).map((u, i) => (
               <span key={u}>
                 {i > 0 ? ", " : ""}
@@ -327,23 +329,23 @@ export function CardParseCard({
         {isAdded && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-moss-deep">
             <Check className="h-3.5 w-3.5" />
-            <span>added.</span>
+            <span>{t("chat.cardParseCard.added")}</span>
           </div>
         )}
         {isDeleted && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
             <Trash2 className="h-3.5 w-3.5" />
-            <span>deleted.</span>
+            <span>{t("chat.cardParseCard.deleted")}</span>
           </div>
         )}
         {isCancelled && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
-            <span>not saved.</span>
+            <span>{t("chat.cardParseCard.notSaved")}</span>
           </div>
         )}
         {isPending && (
           <div className="mt-4 flex items-center gap-1.5 text-[0.85rem] text-ink-tertiary">
-            <span>queued — syncs when online.</span>
+            <span>{t("chat.cardParseCard.queued")}</span>
           </div>
         )}
         {!committed && !frozen && !pendingSync && (
@@ -354,11 +356,11 @@ export function CardParseCard({
               disabled={!canConfirm}
               className="mt-4 h-11 w-full rounded-2xl bg-moss text-[0.95rem] font-medium text-surface transition-colors hover:bg-moss-deep disabled:cursor-not-allowed disabled:opacity-50"
             >
-              looks right
+              {t("chat.cardParseCard.looksRight")}
             </button>
             {!lastFourValid && (
               <p className="mt-2 text-center text-[0.72rem] text-ink-tertiary">
-                enter the last 4 digits to continue.
+                {t("chat.cardParseCard.enterLast4")}
               </p>
             )}
           </>

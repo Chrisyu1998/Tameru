@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Pill } from "@/components/Pill";
 import { SwipeableRow } from "@/components/SwipeableRow";
 import { SketchIcon } from "@/components/SketchIcon";
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 export default function GoalsPage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { goals, pendingGoalDeletes } = useLedger();
   const [editing, setEditing] = useState<GoalWithSpend | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +56,9 @@ export default function GoalsPage() {
   return (
     <div className="mx-auto w-full max-w-md px-5 pt-8 pb-24">
       <header>
-        <h1 className="font-serif text-3xl text-ink lowercase-title">goals</h1>
+        <h1 className="font-serif text-3xl text-ink lowercase-title">{t("goals.title")}</h1>
         <p className="mt-2 text-sm text-ink-tertiary">
-          tap a goal to edit. swipe left to remove.
+          {t("goals.subtitle")}
         </p>
       </header>
 
@@ -67,7 +69,7 @@ export default function GoalsPage() {
       )}
 
       {!hasLoaded ? (
-        <p className="mt-10 text-center text-sm text-ink-tertiary">loading…</p>
+        <p className="mt-10 text-center text-sm text-ink-tertiary">{t("goals.loading")}</p>
       ) : goals.length === 0 ? (
         <EmptyGoals onAsk={askToAddGoal} />
       ) : (
@@ -108,7 +110,7 @@ export default function GoalsPage() {
       )}
 
       <AIHintFooter
-        label="ask tameru to set a goal"
+        label={t("goals.aiHint")}
         onClick={askToAddGoal}
       />
 
@@ -138,6 +140,7 @@ function GoalTile({
   goal: GoalWithSpend;
   pending: boolean;
 }) {
+  const { t } = useTranslation();
   const catLabel = useCategoryLabel();
   // Localized category display label; the "overall" (null-category) goal keeps
   // its chrome label until Tier 2b translates it (DESIGN.md §6.6).
@@ -180,13 +183,13 @@ function GoalTile({
 
       {pending ? (
         <p className="mt-2 text-[0.72rem] text-moss-deep tabular">
-          deleting · tap to undo
+          {t("goals.tile.pendingDelete")}
         </p>
       ) : (
         <p className="mt-2 text-[0.78rem] text-ink-tertiary tabular">
           ${spent.toFixed(spent % 1 === 0 ? 0 : 2)} of $
-          {amount.toFixed(amount % 1 === 0 ? 0 : 2)} this{" "}
-          {goal.goal.period}
+          {amount.toFixed(amount % 1 === 0 ? 0 : 2)}{" "}
+          {t("goals.tile.thisPeriod", { period: goal.goal.period })}
         </p>
       )}
     </div>
@@ -194,6 +197,7 @@ function GoalTile({
 }
 
 function EmptyGoals({ onAsk }: { onAsk: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="mt-12 flex flex-col items-center text-center">
       <SketchIllustration
@@ -202,10 +206,10 @@ function EmptyGoals({ onAsk }: { onAsk: () => void }) {
         className="text-ink-tertiary"
       />
       <p className="mt-4 font-serif text-xl text-ink lowercase-title">
-        no budgets yet
+        {t("goals.empty.heading")}
       </p>
       <p className="mt-1 max-w-[28ch] text-[0.85rem] text-ink-tertiary">
-        set a budget and tameru will track how close you are.
+        {t("goals.empty.body")}
       </p>
       <button
         type="button"
@@ -213,7 +217,7 @@ function EmptyGoals({ onAsk }: { onAsk: () => void }) {
         className="mt-5 inline-flex h-11 items-center gap-2 rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
       >
         <SketchIcon kind="sparkle" size={16} seed={9} />
-        ask tameru ai to set one
+        {t("goals.empty.cta")}
       </button>
     </div>
   );

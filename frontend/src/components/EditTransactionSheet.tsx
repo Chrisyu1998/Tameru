@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Calendar, ChevronDown, CreditCard, Tag } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
-import { CATEGORIES, type Category } from "@/lib/categories";
+import { CATEGORIES, useCategoryLabel, type Category } from "@/lib/categories";
 import { currencySymbol } from "@/lib/format";
 import { ledger } from "@/lib/ledger";
 import { type Card, type Transaction } from "@/lib/fixtures";
@@ -33,6 +34,8 @@ export function EditTransactionSheet({
   onRequestDelete,
   onSave,
 }: EditTransactionSheetProps) {
+  const { t } = useTranslation();
+  const catLabel = useCategoryLabel();
   const [merchant, setMerchant] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
@@ -86,11 +89,11 @@ export function EditTransactionSheet({
   const selectedCard = cards.find((c) => c.id === cardId);
 
   return (
-    <BottomSheet open={open} onClose={onClose} ariaLabel="edit transaction" desktopVariant="side">
-      <h2 className="font-serif text-xl text-ink lowercase-title">edit transaction</h2>
+    <BottomSheet open={open} onClose={onClose} ariaLabel={t("editTransaction.ariaLabel")} desktopVariant="side">
+      <h2 className="font-serif text-xl text-ink lowercase-title">{t("editTransaction.title")}</h2>
 
       <div className="mt-5 flex flex-col gap-4">
-        <FieldGroup label="merchant">
+        <FieldGroup label={t("editTransaction.fields.merchant")}>
           <input
             value={merchant}
             onChange={(e) => setMerchant(e.target.value)}
@@ -98,7 +101,7 @@ export function EditTransactionSheet({
           />
         </FieldGroup>
 
-        <FieldGroup label="amount">
+        <FieldGroup label={t("editTransaction.fields.amount")}>
           <div className="flex items-center gap-1">
             <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
@@ -110,7 +113,7 @@ export function EditTransactionSheet({
           </div>
         </FieldGroup>
 
-        <FieldGroup label="date">
+        <FieldGroup label={t("editTransaction.fields.date")}>
           <div className="flex items-center gap-2">
             <Calendar className="h-3.5 w-3.5 text-ink-tertiary" />
             <input
@@ -123,30 +126,30 @@ export function EditTransactionSheet({
         </FieldGroup>
 
         <FieldButton
-          label="card"
+          label={t("editTransaction.fields.card")}
           icon={<CreditCard className="h-3.5 w-3.5" />}
-          value={selectedCard ? `${selectedCard.name} · ${selectedCard.last4}` : "Other"}
+          value={selectedCard ? `${selectedCard.name} · ${selectedCard.last4}` : t("editTransaction.card.other")}
           onClick={() => setPickerOpen("card")}
         />
 
         <FieldButton
-          label="category"
+          label={t("editTransaction.fields.category")}
           icon={<Tag className="h-3.5 w-3.5" />}
-          value={category}
+          value={catLabel(category)}
           onClick={() => setPickerOpen("category")}
         />
       </div>
 
       <div className="mt-7 flex flex-col gap-3">
         <Button fullWidth disabled={!dirty || !valid} onClick={save}>
-          save changes
+          {t("editTransaction.saveChanges")}
         </Button>
         <button
           type="button"
           onClick={() => onRequestDelete(transaction)}
           className="self-center text-sm text-over hover:underline underline-offset-4"
         >
-          delete transaction
+          {t("editTransaction.deleteTransaction")}
         </button>
       </div>
 
@@ -154,17 +157,17 @@ export function EditTransactionSheet({
       <BottomSheet
         open={pickerOpen !== null}
         onClose={() => setPickerOpen(null)}
-        ariaLabel={pickerOpen === "card" ? "choose card" : "choose category"}
+        ariaLabel={pickerOpen === "card" ? t("editTransaction.cardPicker.ariaLabel") : t("editTransaction.categoryPicker.ariaLabel")}
       >
         {pickerOpen === "card" && (
           <>
-            <h3 className="font-serif text-lg text-ink lowercase-title">choose a card</h3>
+            <h3 className="font-serif text-lg text-ink lowercase-title">{t("editTransaction.cardPicker.title")}</h3>
             <ul className="mt-3 flex flex-col">
               <li>
                 <PickerRow
                   active={cardId === ""}
-                  label="Other / Cash"
-                  sub="cash or unassigned"
+                  label={t("editTransaction.card.otherCash")}
+                  sub={t("editTransaction.card.otherCashSub")}
                   onClick={() => {
                     setCardId("");
                     setPickerOpen(null);
@@ -189,13 +192,13 @@ export function EditTransactionSheet({
         )}
         {pickerOpen === "category" && (
           <>
-            <h3 className="font-serif text-lg text-ink lowercase-title">choose a category</h3>
+            <h3 className="font-serif text-lg text-ink lowercase-title">{t("editTransaction.categoryPicker.title")}</h3>
             <ul className="mt-3 flex flex-col">
               {CATEGORIES.map((c) => (
                 <li key={c}>
                   <PickerRow
                     active={c === category}
-                    label={c}
+                    label={catLabel(c)}
                     onClick={() => {
                       setCategory(c);
                       setPickerOpen(null);

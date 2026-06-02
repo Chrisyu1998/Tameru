@@ -1,10 +1,12 @@
 import { CloudOff } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 /**
  * Persistent strip shown between top bar and main content while offline.
  * Sunken background tone — calm, not alarming.
  */
 export function OfflineBanner() {
+  const { t } = useTranslation();
   return (
     <div
       role="status"
@@ -13,7 +15,7 @@ export function OfflineBanner() {
     >
       <CloudOff className="h-3.5 w-3.5 flex-shrink-0 text-ink-tertiary" />
       <span>
-        you're offline — entries queue locally and send when you reconnect.
+        {t("chat.offline_banner")}
       </span>
     </div>
   );

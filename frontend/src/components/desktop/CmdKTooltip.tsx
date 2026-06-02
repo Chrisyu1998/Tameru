@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 const STORAGE_KEY = "tameru:cmdk-tooltip-shown";
 
@@ -40,6 +41,8 @@ export function CmdKTooltip() {
     return () => window.removeEventListener("keydown", onKey);
   }, [visible]);
 
+  const { t } = useTranslation();
+
   if (!visible) return null;
 
   return (
@@ -48,13 +51,13 @@ export function CmdKTooltip() {
         <kbd className="inline-flex h-6 select-none items-center rounded-md border border-hairline bg-canvas px-2 text-[0.7rem] text-ink-secondary">
           ⌘K
         </kbd>
-        <span className="lowercase">opens tameru ai from anywhere</span>
+        <span className="lowercase">{t("chat.cmdkTooltip.label")}</span>
         <button
           type="button"
           onClick={dismiss}
           className="ml-1 text-[0.72rem] text-ink-tertiary hover:text-ink"
         >
-          got it
+          {t("chat.cmdkTooltip.gotIt")}
         </button>
       </div>
     </div>

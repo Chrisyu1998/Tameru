@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 
 /*
@@ -8,6 +9,7 @@ import { useRegisterSW } from 'virtual:pwa-register/react';
  * Kept intentionally tiny: this isn't the place for a toast framework.
  */
 export function UpdateToast() {
+  const { t } = useTranslation();
   const {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
@@ -28,7 +30,7 @@ export function UpdateToast() {
       className="fixed inset-x-4 bottom-4 z-50 flex items-center justify-between gap-3 rounded-2xl border border-hairline bg-elevated px-4 py-3"
     >
       <span className="text-sm text-ink">
-        a new version is available.
+        {t("common.updateToast.message")}
       </span>
       <div className="flex items-center gap-3">
         <button
@@ -36,14 +38,14 @@ export function UpdateToast() {
           onClick={() => setNeedRefresh(false)}
           className="text-sm text-ink-tertiary"
         >
-          later
+          {t("common.updateToast.later")}
         </button>
         <button
           type="button"
           onClick={() => void updateServiceWorker(true)}
           className="text-sm font-medium text-moss-deep"
         >
-          refresh
+          {t("common.updateToast.refresh")}
         </button>
       </div>
     </div>

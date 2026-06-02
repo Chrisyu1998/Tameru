@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CloudOff, RefreshCw } from "lucide-react";
 import {
   getPendingCount,
@@ -24,6 +25,7 @@ import {
  * both are present).
  */
 export function PendingSyncBanner() {
+  const { t } = useTranslation();
   const [count, setCount] = useState<number>(getPendingCount());
 
   useEffect(() => {
@@ -69,7 +71,7 @@ export function PendingSyncBanner() {
           <CloudOff className="h-3 w-3" aria-hidden />
         )}
         <span className="tabular">
-          {count} pending sync{count === 1 ? "" : "s"}
+          {t("common.pendingSync", { count })}
         </span>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, FileText, Upload, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { BottomSheet } from "@/components/BottomSheet";
 import { Button } from "@/components/Button";
 import { ledger, useLedger } from "@/lib/ledger";
@@ -66,6 +67,7 @@ export function ImportCsvSheet({ open, onClose }: ImportCsvSheetProps) {
    * safe, but it's still better UX to let the stream finish or use the
    * explicit cancel).
    */
+  const { t } = useTranslation();
   const { cards } = useLedger();
   const [phase, setPhase] = useState<Phase>({ kind: "select" });
   const [pickedFile, setPickedFile] = useState<File | null>(null);
@@ -186,10 +188,10 @@ export function ImportCsvSheet({ open, onClose }: ImportCsvSheetProps) {
     >
       <header className="mb-5">
         <h2 className="font-serif text-2xl text-ink lowercase-title">
-          import csv
+          {t("importCsv.title")}
         </h2>
         <p className="mt-1 text-sm text-ink-tertiary">
-          bring a bank or card csv into tameru.
+          {t("importCsv.subtitle")}
         </p>
       </header>
 
@@ -206,7 +208,7 @@ export function ImportCsvSheet({ open, onClose }: ImportCsvSheetProps) {
         />
       )}
 
-      {phase.kind === "previewing" && <BusyStep label="reading your csv…" />}
+      {phase.kind === "previewing" && <BusyStep label={t("importCsv.detectingColumns")} />}
 
       {phase.kind === "confirm" && (
         <ConfirmStep
@@ -293,12 +295,13 @@ function SelectStep({
   onCancel: () => void;
 }) {
   /** Step 1 — pick a CSV, pick a card, click `next`. */
+  const { t } = useTranslation();
   const ready = pickedFile !== null && pickedCardId !== null;
   return (
     <div className="space-y-5">
       <section>
         <h3 className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-          csv file
+          {t("importCsv.select.fileLabel")}
         </h3>
         <input
           ref={fileInputRef}
@@ -325,7 +328,7 @@ function SelectStep({
             <button
               type="button"
               onClick={() => onPickFile(null)}
-              aria-label="remove file"
+              aria-label={t("importCsv.select.removeFile")}
               className="text-ink-tertiary hover:text-ink"
             >
               <X className="h-4 w-4" />
@@ -338,23 +341,21 @@ function SelectStep({
             className="mt-2 inline-flex h-10 items-center gap-2 rounded-2xl border border-hairline bg-elevated px-4 text-sm text-ink hover:bg-sunken"
           >
             <Upload className="h-4 w-4" />
-            choose a csv
+            {t("importCsv.select.chooseCsv")}
           </button>
         )}
         <p className="mt-2 text-[0.78rem] text-ink-tertiary">
-          export from your bank — usually under statements or activity. up to
-          5 MB and 5,000 rows.
+          {t("importCsv.select.fileHint")}
         </p>
       </section>
 
       <section>
         <h3 className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-          which card?
+          {t("importCsv.select.whichCard")}
         </h3>
         {cards.length === 0 ? (
           <p className="mt-2 rounded-2xl border border-hairline bg-surface px-4 py-3 text-[0.9rem] text-ink-tertiary">
-            add a card first — imports attach every transaction to one of
-            your cards.
+            {t("importCsv.select.noCards")}
           </p>
         ) : (
           <ul className="mt-2 divide-y divide-hairline rounded-2xl border border-hairline bg-surface">
@@ -384,10 +385,10 @@ function SelectStep({
 
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="tertiary" onClick={onCancel}>
-          cancel
+          {t("importCsv.cancel")}
         </Button>
         <Button onClick={onNext} disabled={!ready}>
-          next
+          {t("importCsv.next")}
         </Button>
       </div>
     </div>
@@ -416,30 +417,33 @@ function ConfirmStep({
   onBack: () => void;
 }) {
   /** Step 2 — high-confidence branch: show Gemini's guess for approval. */
+  const { t } = useTranslation();
   const mapping = preview.detected_columns;
   return (
     <div className="space-y-5">
       <section>
         <h3 className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-          tameru thinks
+          {t("importCsv.confirm.tameruThinks")}
         </h3>
         <dl className="mt-2 divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
-          <MappingRow label="date" value={mapping.date} />
-          <MappingRow label="merchant" value={mapping.merchant} />
-          <MappingRow label="amount" value={mapping.amount} />
+          <MappingRow label={t("importCsv.confirm.date")} value={mapping.date} />
+          <MappingRow label={t("importCsv.confirm.merchant")} value={mapping.merchant} />
+          <MappingRow label={t("importCsv.confirm.amount")} value={mapping.amount} />
           {mapping.currency && (
-            <MappingRow label="currency" value={mapping.currency} />
+            <MappingRow label={t("importCsv.confirm.currency")} value={mapping.currency} />
           )}
         </dl>
         <p className="mt-2 text-[0.78rem] text-ink-tertiary">
-          {preview.total_rows.toLocaleString()} rows · confidence{" "}
-          {Math.round(preview.confidence * 100)}%
+          {t("importCsv.confirm.rowsConfidence", {
+            rows: preview.total_rows.toLocaleString(),
+            pct: Math.round(preview.confidence * 100),
+          })}
         </p>
       </section>
 
       <section>
         <h3 className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-          first rows
+          {t("importCsv.confirm.firstRows")}
         </h3>
         <SampleRowsTable rows={preview.sample_rows} />
       </section>
@@ -449,14 +453,14 @@ function ConfirmStep({
         onClick={onSwitchToManual}
         className="text-[0.85rem] text-ink-tertiary underline-offset-2 hover:underline"
       >
-        these look wrong — let me map them
+        {t("importCsv.confirm.wrongMapThem")}
       </button>
 
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="tertiary" onClick={onBack}>
-          back
+          {t("importCsv.back")}
         </Button>
-        <Button onClick={() => onConfirm(mapping)}>looks right</Button>
+        <Button onClick={() => onConfirm(mapping)}>{t("importCsv.confirm.looksRight")}</Button>
       </div>
     </div>
   );
@@ -472,6 +476,7 @@ function ManualMappingStep({
   onBack: () => void;
 }) {
   /** Step 2 — low-confidence (or user-requested) manual column picker. */
+  const { t } = useTranslation();
   const [date, setDate] = useState<string>(preview.headers[0] ?? "");
   const [merchant, setMerchant] = useState<string>(preview.headers[1] ?? "");
   const [amount, setAmount] = useState<string>(preview.headers[2] ?? "");
@@ -510,29 +515,29 @@ function ManualMappingStep({
     <div className="space-y-5">
       <section>
         <h3 className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-          map columns
+          {t("importCsv.manual.mapColumns")}
         </h3>
         <div className="mt-2 space-y-3">
           <ColumnSelect
-            label="date column"
+            label={t("importCsv.manual.dateColumn")}
             value={date}
             options={preview.headers}
             onChange={setDate}
           />
           <ColumnSelect
-            label="merchant column"
+            label={t("importCsv.manual.merchantColumn")}
             value={merchant}
             options={preview.headers}
             onChange={setMerchant}
           />
           <ColumnSelect
-            label="amount column"
+            label={t("importCsv.manual.amountColumn")}
             value={amount}
             options={preview.headers}
             onChange={setAmount}
           />
           <ColumnSelect
-            label="currency column (optional)"
+            label={t("importCsv.manual.currencyColumn")}
             value={currency}
             options={["", ...preview.headers]}
             onChange={setCurrency}
@@ -547,10 +552,9 @@ function ManualMappingStep({
               data-testid="manual-mapping-negative-charges"
             />
             <span>
-              this csv shows charges as <strong>negative</strong> numbers
+              {t("importCsv.manual.chargesNegativeLabel")}
               <span className="block text-[0.72rem] text-ink-tertiary">
-                check this for chase activity / citi activity exports; leave
-                unchecked for amex / most monthly statement exports.
+                {t("importCsv.manual.chargesNegativeHint")}
               </span>
             </span>
           </label>
@@ -559,17 +563,17 @@ function ManualMappingStep({
 
       <section>
         <h3 className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
-          first rows
+          {t("importCsv.confirm.firstRows")}
         </h3>
         <SampleRowsTable rows={preview.sample_rows} />
       </section>
 
       <div className="flex justify-end gap-2 pt-2">
         <Button variant="tertiary" onClick={onBack}>
-          back
+          {t("importCsv.back")}
         </Button>
         <Button onClick={handleSubmit} disabled={!ready}>
-          import
+          {t("importCsv.import")}
         </Button>
       </div>
     </div>
@@ -584,6 +588,7 @@ function CommittingStep({
   onCancel: () => void;
 }) {
   /** Step 3 — SSE in flight; render progress bar + cancel. */
+  const { t } = useTranslation();
   const pct =
     progress && progress.total > 0
       ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
@@ -591,11 +596,14 @@ function CommittingStep({
   return (
     <div className="space-y-5">
       <div>
-        <p className="text-[0.95rem] text-ink lowercase-title">importing…</p>
+        <p className="text-[0.95rem] text-ink lowercase-title">{t("importCsv.committing.importing")}</p>
         <p className="mt-1 text-[0.78rem] text-ink-tertiary">
           {progress
-            ? `${progress.processed.toLocaleString()} / ${progress.total.toLocaleString()} rows`
-            : "starting up…"}
+            ? t("importCsv.committing.progress", {
+                processed: progress.processed.toLocaleString(),
+                total: progress.total.toLocaleString(),
+              })
+            : t("importCsv.committing.startingUp")}
         </p>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-sunken">
@@ -606,12 +614,13 @@ function CommittingStep({
       </div>
       {progress?.current_category && (
         <p className="text-[0.78rem] text-ink-tertiary">
-          categorizing as <span className="text-ink">{progress.current_category}</span>
+          {t("importCsv.committing.categorizingAs")}{" "}
+          <span className="text-ink">{progress.current_category}</span>
         </p>
       )}
       <div className="flex justify-end pt-2">
         <Button variant="tertiary" onClick={onCancel}>
-          cancel
+          {t("importCsv.cancel")}
         </Button>
       </div>
     </div>
@@ -626,32 +635,33 @@ function DoneStep({
   onClose: () => void;
 }) {
   /** Step 4 — summary of the four counters. */
+  const { t } = useTranslation();
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3 rounded-2xl border border-hairline bg-surface px-4 py-4">
         <CheckCircle2 className="h-5 w-5 text-moss" />
         <div>
-          <p className="text-[0.95rem] text-ink lowercase-title">all set.</p>
+          <p className="text-[0.95rem] text-ink lowercase-title">{t("importCsv.done.allSet")}</p>
           <p className="mt-0.5 text-[0.78rem] text-ink-tertiary">
-            {result.inserted.toLocaleString()} transactions imported.
+            {t("importCsv.done.transactionsImported", { count: result.inserted.toLocaleString() })}
           </p>
         </div>
       </div>
       <ul className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
-        <SummaryRow label="imported" value={result.inserted} />
-        <SummaryRow label="duplicates skipped" value={result.skipped_duplicates} />
-        <SummaryRow label="refunds skipped" value={result.skipped_refunds} />
+        <SummaryRow label={t("importCsv.done.imported")} value={result.inserted} />
+        <SummaryRow label={t("importCsv.done.duplicatesSkipped")} value={result.skipped_duplicates} />
+        <SummaryRow label={t("importCsv.done.refundsSkipped")} value={result.skipped_refunds} />
         <SummaryRow
-          label="foreign-currency skipped"
+          label={t("importCsv.done.foreignSkipped")}
           value={result.skipped_foreign_currency}
         />
         <SummaryRow
-          label="couldn't read"
+          label={t("importCsv.done.couldntRead")}
           value={result.skipped_parse_errors}
         />
       </ul>
       <div className="flex justify-end pt-2">
-        <Button onClick={onClose}>done</Button>
+        <Button onClick={onClose}>{t("importCsv.done.done")}</Button>
       </div>
     </div>
   );
@@ -667,13 +677,14 @@ function ErrorStep({
   onRetry: () => void;
 }) {
   /** Sibling state — entered from any step on failure. */
+  const { t } = useTranslation();
   return (
     <div className="space-y-5">
       <div className="flex items-start gap-3 rounded-2xl border border-hairline bg-surface px-4 py-4">
         <AlertTriangle className="mt-0.5 h-5 w-5 text-ink-tertiary" />
         <div className="min-w-0">
           <p className="text-[0.95rem] text-ink lowercase-title">
-            import couldn't finish.
+            {t("importCsv.error.title")}
           </p>
           <p className="mt-0.5 break-words text-[0.78rem] text-ink-tertiary">
             {message}
@@ -686,10 +697,10 @@ function ErrorStep({
         </div>
       </div>
       <p className="text-[0.78rem] text-ink-tertiary">
-        anything already imported is safe — re-uploading will skip duplicates.
+        {t("importCsv.error.safeToRetry")}
       </p>
       <div className="flex justify-end pt-2">
-        <Button onClick={onRetry}>try again</Button>
+        <Button onClick={onRetry}>{t("importCsv.error.tryAgain")}</Button>
       </div>
     </div>
   );
@@ -740,6 +751,8 @@ function ColumnSelect({
   allowEmpty?: boolean;
 }) {
   /** Native select for the manual-mapping picker — no Radix dep needed. */
+  const { t } = useTranslation();
+  const noneLabel = t("importCsv.manual.none");
   return (
     <label className="block">
       <span className="text-[0.72rem] uppercase tracking-wider text-ink-tertiary">
@@ -750,12 +763,12 @@ function ColumnSelect({
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 h-10 w-full rounded-2xl border border-hairline bg-surface px-3 text-[0.9rem] text-ink hover:bg-elevated focus:outline-none focus:ring-1 focus:ring-ink"
       >
-        {allowEmpty && <option value="">(none)</option>}
+        {allowEmpty && <option value="">{noneLabel}</option>}
         {options
           .filter((o) => o !== "" || allowEmpty)
           .map((o) => (
             <option key={o || "__empty"} value={o}>
-              {o || "(none)"}
+              {o || noneLabel}
             </option>
           ))}
       </select>
@@ -765,10 +778,11 @@ function ColumnSelect({
 
 function SampleRowsTable({ rows }: { rows: Record<string, string>[] }) {
   /** Wide-table preview of the first N data rows from the upload. */
+  const { t } = useTranslation();
   const headers = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
   if (rows.length === 0 || headers.length === 0) {
     return (
-      <p className="mt-2 text-[0.78rem] text-ink-tertiary">no rows to preview.</p>
+      <p className="mt-2 text-[0.78rem] text-ink-tertiary">{t("importCsv.noRowsToPreview")}</p>
     );
   }
   return (

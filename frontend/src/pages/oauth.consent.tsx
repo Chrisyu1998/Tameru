@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Lock, Mail, ShieldCheck } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { signInWithGoogle, signInWithMagicLink } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
@@ -49,6 +50,7 @@ type LoadState =
   | { kind: "error"; message: string };
 
 export default function OauthConsentPage() {
+  const { t } = useTranslation();
   const [params] = useSearchParams();
   const authorizationId = params.get("authorization_id");
   const jwt = useAppStore((s) => s.jwt);
@@ -67,8 +69,7 @@ export default function OauthConsentPage() {
     if (missingId) {
       setState({
         kind: "error",
-        message:
-          "this page is opened by claude.ai when you connect tameru. open it from there.",
+        message: t("oauth.errorMissingId"),
       });
       return;
     }
@@ -81,7 +82,7 @@ export default function OauthConsentPage() {
       if (error) {
         setState({
           kind: "error",
-          message: error.message || "couldn't load the authorization request.",
+          message: error.message || t("oauth.errorLoadFailed"),
         });
         return;
       }
@@ -103,7 +104,7 @@ export default function OauthConsentPage() {
       }
       setState({
         kind: "error",
-        message: "unexpected authorization response.",
+        message: t("oauth.errorUnexpected"),
       });
     })();
     return () => {
@@ -141,7 +142,7 @@ export default function OauthConsentPage() {
       setSubmitting(null);
       setState({
         kind: "error",
-        message: error.message || "couldn't complete the approval.",
+        message: error.message || t("oauth.errorApproveFailed"),
       });
       return;
     }
@@ -161,7 +162,7 @@ export default function OauthConsentPage() {
       setSubmitting(null);
       setState({
         kind: "error",
-        message: error.message || "couldn't cancel the request.",
+        message: error.message || t("oauth.errorDenyFailed"),
       });
       return;
     }
@@ -174,16 +175,16 @@ export default function OauthConsentPage() {
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-10 pb-10">
       <header>
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          allow connection
+          {t("oauth.title")}
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-ink-secondary">
-          another app is asking to read your tameru data.
+          {t("oauth.subtitle")}
         </p>
       </header>
 
       <section className="mt-7 flex-1">
         {state.kind === "loading" && (
-          <p className="text-sm text-ink-tertiary">checking the request…</p>
+          <p className="text-sm text-ink-tertiary">{t("oauth.loading")}</p>
         )}
 
         {state.kind === "error" && (
@@ -217,7 +218,7 @@ export default function OauthConsentPage() {
                 : "bg-sunken text-ink-quaternary cursor-not-allowed",
             )}
           >
-            {submitting === "approve" ? "connecting…" : "allow"}
+            {submitting === "approve" ? t("oauth.connecting") : t("oauth.allow")}
           </button>
           <button
             type="button"
@@ -225,7 +226,7 @@ export default function OauthConsentPage() {
             disabled={submitting !== null}
             className="inline-flex h-12 w-full items-center justify-center rounded-2xl border border-hairline bg-surface px-5 text-sm font-medium text-ink hover:bg-elevated disabled:cursor-not-allowed disabled:text-ink-quaternary"
           >
-            {submitting === "deny" ? "cancelling…" : "cancel"}
+            {submitting === "deny" ? t("oauth.cancelling") : t("oauth.cancel")}
           </button>
         </footer>
       )}
@@ -242,6 +243,7 @@ function ConsentBody({
   clientUri: string | null;
   userEmail: string;
 }) {
+  const { t } = useTranslation();
   const clientHost = useMemo(() => {
     if (!clientUri) return null;
     try {
@@ -255,7 +257,7 @@ function ConsentBody({
     <div className="space-y-5">
       <div className="rounded-2xl border border-hairline bg-surface px-4 py-4">
         <p className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
-          requesting access
+          {t("oauth.requestingAccess")}
         </p>
         <p className="mt-1.5 text-[1.05rem] font-medium text-ink">
           {clientName}
@@ -264,7 +266,7 @@ function ConsentBody({
           <p className="text-[0.78rem] text-ink-tertiary">{clientHost}</p>
         )}
         <p className="mt-3 text-[0.78rem] text-ink-tertiary">
-          signed in as <span className="text-ink-secondary">{userEmail}</span>
+          {t("oauth.signedInAs")} <span className="text-ink-secondary">{userEmail}</span>
         </p>
       </div>
 
@@ -272,16 +274,15 @@ function ConsentBody({
         <li className="flex items-start gap-2.5">
           <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-moss-deep" />
           <span>
-            <span className="text-ink">read-only.</span> {clientName} can see
-            your transactions, subscriptions, and card multipliers — it cannot
-            add, edit, or delete anything.
+            <span className="text-ink">{t("oauth.readOnly")}</span>{" "}
+            {t("oauth.readOnlyDetail", { clientName })}
           </span>
         </li>
         <li className="flex items-start gap-2.5">
           <Lock className="mt-0.5 h-4 w-4 flex-shrink-0 text-moss-deep" />
           <span>
-            you can disconnect any time from{" "}
-            <span className="text-ink">settings → connected apps</span>.
+            {t("oauth.disconnectHint")}{" "}
+            <span className="text-ink">{t("oauth.disconnectPath")}</span>.
           </span>
         </li>
       </ul>
@@ -305,6 +306,7 @@ function SignInGate({
   missingId: boolean;
   returnTo: string;
 }) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<"choose" | "email" | "sent">("choose");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -316,15 +318,14 @@ function SignInGate({
     return (
       <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-10 pb-10">
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          allow connection
+          {t("oauth.title")}
         </h1>
         <div
           role="alert"
           className="mt-7 rounded-2xl border border-hairline bg-warn-wash px-4 py-4"
         >
           <p className="text-sm leading-relaxed text-ink">
-            this page is opened by claude.ai when you connect tameru. open it
-            from there.
+            {t("oauth.errorMissingId")}
           </p>
         </div>
       </div>
@@ -338,7 +339,7 @@ function SignInGate({
       await signInWithGoogle(returnTo);
     } catch (e) {
       setBusy(false);
-      setError(e instanceof Error ? e.message : "could not start sign-in.");
+      setError(e instanceof Error ? e.message : t("oauth.signIn.errorGoogle"));
     }
   };
 
@@ -351,7 +352,7 @@ function SignInGate({
       await signInWithMagicLink(trimmed, returnTo);
       setMode("sent");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "could not send the link.");
+      setError(e instanceof Error ? e.message : t("oauth.signIn.errorMagicLink"));
     } finally {
       setBusy(false);
     }
@@ -361,10 +362,10 @@ function SignInGate({
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pt-10 pb-10">
       <header>
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          sign in to continue
+          {t("oauth.signIn.title")}
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-ink-secondary">
-          an app is asking to read your tameru data. sign in to approve.
+          {t("oauth.signIn.subtitle")}
         </p>
       </header>
 
@@ -372,19 +373,19 @@ function SignInGate({
         {mode === "sent" && (
           <div className="rounded-2xl border border-hairline bg-elevated p-5">
             <p className="font-serif text-lg text-ink lowercase-title">
-              check your email
+              {t("oauth.signIn.checkEmail")}
             </p>
             <p className="mt-2 text-sm text-ink-secondary">
-              we sent a sign-in link to{" "}
-              <span className="text-ink">{email}</span>. open it on this
-              device — it brings you straight back here.
+              {t("oauth.signIn.sentLinkTo")}{" "}
+              <span className="text-ink">{email}</span>.{" "}
+              {t("oauth.signIn.sentLinkHint")}
             </p>
             <button
               type="button"
               onClick={() => setMode("email")}
               className="mt-3 text-[0.85rem] text-ink-tertiary hover:text-ink"
             >
-              use a different email
+              {t("oauth.signIn.useDifferentEmail")}
             </button>
           </div>
         )}
@@ -400,7 +401,7 @@ function SignInGate({
                 busy && "cursor-not-allowed opacity-60",
               )}
             >
-              {busy ? "starting…" : "sign in with google"}
+              {busy ? t("oauth.signIn.starting") : t("oauth.signIn.withGoogle")}
             </button>
             <button
               type="button"
@@ -408,7 +409,7 @@ function SignInGate({
               disabled={busy}
               className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-hairline bg-surface px-5 text-sm font-medium text-ink hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <Mail className="h-4 w-4" /> sign in with email
+              <Mail className="h-4 w-4" /> {t("oauth.signIn.withEmail")}
             </button>
           </div>
         )}
@@ -419,7 +420,7 @@ function SignInGate({
               htmlFor="signin-email"
               className="block text-[0.78rem] uppercase tracking-wider text-ink-tertiary"
             >
-              email
+              {t("oauth.signIn.emailLabel")}
             </label>
             <input
               id="signin-email"
@@ -427,7 +428,7 @@ function SignInGate({
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              placeholder={t("oauth.signIn.emailPlaceholder")}
               className="block w-full rounded-2xl border border-hairline bg-surface px-4 py-3 text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:outline-none"
             />
             <button
@@ -441,7 +442,7 @@ function SignInGate({
                   : "bg-moss text-surface hover:bg-moss-deep",
               )}
             >
-              {busy ? "sending…" : "send sign-in link"}
+              {busy ? t("oauth.signIn.sending") : t("oauth.signIn.sendLink")}
             </button>
             <button
               type="button"
@@ -449,7 +450,7 @@ function SignInGate({
               disabled={busy}
               className="inline-flex h-10 w-full items-center justify-center text-[0.85rem] text-ink-tertiary hover:text-ink disabled:cursor-not-allowed"
             >
-              back
+              {t("oauth.signIn.back")}
             </button>
           </div>
         )}

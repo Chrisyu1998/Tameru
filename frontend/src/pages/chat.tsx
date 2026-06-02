@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronLeft, Mic, RefreshCw, Send, SquarePen, WifiOff, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { CandidateCards } from "@/components/chat/CandidateCards";
 import { CardParseCard } from "@/components/chat/CardParseCard";
 import { Chart } from "@/components/chat/Chart";
@@ -28,6 +29,7 @@ import { cn } from "@/lib/utils";
 const SILENCE_WINDOW_MS = 1500;
 
 export default function ChatPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { transactions, cards } = useLedger();
   const { messages, busy, capEngaged, streamingText, lastError } = useChatStore();
@@ -190,7 +192,7 @@ export default function ChatPage() {
         <button
           type="button"
           onClick={() => navigate("/")}
-          aria-label="back"
+          aria-label={t("chat.back")}
           className="flex h-9 w-9 items-center justify-center rounded-full text-ink-secondary hover:bg-sunken/60 hover:text-ink"
         >
           <ChevronLeft className="h-5 w-5" />
@@ -212,7 +214,7 @@ export default function ChatPage() {
         <button
           type="button"
           onClick={newChat}
-          aria-label="new chat"
+          aria-label={t("chat.newChat")}
           className="flex h-9 w-9 items-center justify-center rounded-full text-ink-secondary hover:bg-sunken/60 hover:text-ink"
         >
           <SquarePen className="h-4.5 w-4.5" />
@@ -228,7 +230,7 @@ export default function ChatPage() {
           {/* Service-down banner */}
           {serviceDown && (
             <ServiceBanner
-              message="our ai is having a moment. try again in a few minutes."
+              message={t("chat.serviceBanner.aiMoment")}
               onDismiss={() => setServiceDown(false)}
             />
           )}
@@ -468,32 +470,35 @@ function EmptyChat({
   /** Null in production — gates the outage-banner dev affordance. */
   onSimulateOutage: (() => void) | null;
 }) {
-  const examples = [
-    "coffee $5.50",
-    "lunch with M $24",
-    "edit that lupa dinner",
-    "dining vs groceries",
-  ];
+  const { t } = useTranslation();
+  const exampleKeys = [
+    "chat.examples.coffee",
+    "chat.examples.lunch",
+    "chat.examples.editDinner",
+    "chat.examples.compare",
+  ] as const;
   return (
     <div className="mt-10 flex flex-col items-center text-center">
       <h2 className="font-serif text-2xl text-ink lowercase-title">
-        tell me what you spent
+        {t("chat.emptyState.heading")}
       </h2>
       <p className="mt-2 max-w-[28ch] text-[0.9rem] text-ink-secondary">
-        type or speak it. i'll structure the rest. you can also ask me to edit
-        or compare.
+        {t("chat.emptyState.body")}
       </p>
       <div className="mt-5 flex flex-wrap justify-center gap-2">
-        {examples.map((ex) => (
-          <button
-            key={ex}
-            type="button"
-            onClick={() => onPrompt(ex)}
-            className="rounded-full border border-hairline bg-surface px-3 py-1 text-[0.78rem] text-ink-secondary hover:bg-elevated hover:text-ink"
-          >
-            {ex}
-          </button>
-        ))}
+        {exampleKeys.map((key) => {
+          const ex = t(key);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => onPrompt(ex)}
+              className="rounded-full border border-hairline bg-surface px-3 py-1 text-[0.78rem] text-ink-secondary hover:bg-elevated hover:text-ink"
+            >
+              {ex}
+            </button>
+          );
+        })}
       </div>
       {onSimulateOutage && (
         <button
@@ -501,7 +506,7 @@ function EmptyChat({
           onClick={onSimulateOutage}
           className="mt-8 text-[0.65rem] text-ink-quaternary hover:text-ink-tertiary"
         >
-          dev · simulate ai outage banner
+          {t("chat.emptyState.devSimulateOutage")}
         </button>
       )}
     </div>
@@ -521,6 +526,7 @@ function RetryBanner({
   onRetry: () => void;
   onDismiss: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="border-t border-hairline bg-canvas/95 px-3 pt-3 backdrop-blur">
       <div className="mx-auto flex max-w-md items-center justify-between gap-2 rounded-lg border border-hairline bg-sunken px-3 py-2 text-[0.8rem] text-ink-secondary">
@@ -533,12 +539,12 @@ function RetryBanner({
             className="flex items-center gap-1 rounded-full bg-moss px-3 py-1 text-[0.75rem] text-surface hover:bg-moss-deep disabled:opacity-50"
           >
             <RefreshCw className="h-3 w-3" />
-            retry
+            {t("chat.retry")}
           </button>
           <button
             type="button"
             onClick={onDismiss}
-            aria-label="dismiss"
+            aria-label={t("chat.dismiss")}
             className="flex h-6 w-6 items-center justify-center rounded-full text-ink-tertiary hover:bg-elevated hover:text-ink"
           >
             <X className="h-3.5 w-3.5" />
@@ -568,6 +574,7 @@ function InputRow({
   offline: boolean;
   busy: boolean;
 }) {
+  const { t } = useTranslation();
   const hasText = value.trim().length > 0;
   const canSend = hasText && !busy;
   return (
@@ -575,13 +582,13 @@ function InputRow({
       {offline && (
         <div className="mx-auto mb-2 flex max-w-md items-center gap-1.5 px-2 text-[0.7rem] text-ink-tertiary">
           <WifiOff className="h-3 w-3" />
-          <span>offline — messages will send when you reconnect.</span>
+          <span>{t("chat.offlineNotice")}</span>
         </div>
       )}
       {busy && (
         <div className="mx-auto mb-2 flex max-w-md items-center gap-1.5 px-2 text-[0.7rem] italic text-ink-tertiary">
           <span className="inline-block h-1.5 w-1.5 animate-ping-soft rounded-full bg-moss" />
-          <span>thinking…</span>
+          <span>{t("chat.thinking")}</span>
         </div>
       )}
       <div className="mx-auto flex max-w-md items-end gap-2">
@@ -596,7 +603,7 @@ function InputRow({
               }
             }}
             rows={1}
-            placeholder="type or tap the mic"
+            placeholder={t("chat.placeholder")}
             disabled={busy}
             className="block max-h-32 w-full resize-none bg-transparent text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:outline-none disabled:opacity-60"
           />
@@ -605,7 +612,7 @@ function InputRow({
           <button
             type="button"
             onClick={onMic}
-            aria-label="record voice"
+            aria-label={t("chat.recordVoice")}
             disabled={busy}
             className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-hairline bg-surface text-ink-secondary transition-colors hover:bg-elevated hover:text-ink disabled:opacity-50"
           >
@@ -615,7 +622,7 @@ function InputRow({
         <button
           type="button"
           onClick={onSend}
-          aria-label="send"
+          aria-label={t("chat.send")}
           disabled={!canSend}
           className={cn(
             "flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full transition-all",

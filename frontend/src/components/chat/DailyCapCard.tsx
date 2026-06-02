@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { SketchIcon } from "@/components/SketchIcon";
 
 /**
@@ -5,6 +6,7 @@ import { SketchIcon } from "@/components/SketchIcon";
  * Honest copy: dashboard + edit still work. No retry button.
  */
 export function DailyCapCard() {
+  const { t } = useTranslation();
   return (
     <div className="border-t border-hairline bg-warn-wash px-5 py-5">
       <div className="mx-auto flex max-w-md items-start gap-3">
@@ -13,11 +15,10 @@ export function DailyCapCard() {
         </div>
         <div className="flex-1">
           <p className="font-serif text-[1rem] text-ink lowercase-title">
-            daily ai quota used
+            {t("chat.dailyCap.title")}
           </p>
           <p className="mt-1 text-[0.85rem] leading-relaxed text-ink-secondary">
-            i'll be back at midnight UTC. you can still browse your dashboard
-            and edit existing transactions in the meantime.
+            {t("chat.dailyCap.body")}
           </p>
         </div>
       </div>

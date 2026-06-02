@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { signOut } from '../lib/auth';
 import { useAppStore } from '../store';
 
@@ -12,6 +13,7 @@ import { useAppStore } from '../store';
  * subsequent flow is identical to a normal first sign-in.
  */
 export function DeviceDisplacedModal() {
+  const { t } = useTranslation();
   const displaced = useAppStore((s) => s.displaced);
   if (!displaced) return null;
 
@@ -38,17 +40,17 @@ export function DeviceDisplacedModal() {
     >
       <div className="flex w-full max-w-sm flex-col gap-5 rounded-2xl bg-elevated p-6">
         <h2 className="font-serif text-2xl text-ink lowercase-title">
-          you signed in on another device.
+          {t("common.displaced.title")}
         </h2>
         <p className="text-sm text-ink-secondary">
-          this session has ended.
+          {t("common.displaced.body")}
         </p>
         <button
           type="button"
           onClick={handleSignInAgain}
           className="rounded-2xl bg-moss-deep px-5 py-3 text-base text-surface hover:bg-moss"
         >
-          sign in again
+          {t("common.displaced.signInAgain")}
         </button>
       </div>
     </div>

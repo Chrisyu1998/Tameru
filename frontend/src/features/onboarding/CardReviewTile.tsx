@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { ChevronDown, Pencil, Check, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { Pill } from "@/components/Pill";
+import { useCategoryLabel } from "@/lib/categories";
 import { cn } from "@/lib/utils";
 import type { CardPreview, CardCategoryReward } from "./cardFixtures";
 
@@ -18,11 +20,11 @@ const confidenceClasses = {
   terracotta: "bg-over",
 };
 
-const confidenceLabels = {
-  moss: "high confidence",
-  amber: "medium confidence",
-  terracotta: "low confidence",
-};
+const CONFIDENCE_LABEL_KEYS = {
+  moss: "onboarding.cardReview.highConfidence",
+  amber: "onboarding.cardReview.mediumConfidence",
+  terracotta: "onboarding.cardReview.lowConfidence",
+} as const;
 
 export function CardReviewTile({
   preview,
@@ -30,6 +32,8 @@ export function CardReviewTile({
   onTryAgain,
   onDiscard,
 }: CardReviewTileProps) {
+  const { t } = useTranslation();
+  const catLabel = useCategoryLabel();
   const [rows, setRows] = useState<CardCategoryReward[]>(preview.categories);
   const [confirmed, setConfirmed] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<number | null>(null);
@@ -59,7 +63,7 @@ export function CardReviewTile({
     <div className="rounded-3xl border border-hairline bg-elevated p-5 animate-fade-up">
       <div className="flex items-start justify-between gap-3">
         <h3 className="font-serif text-lg text-ink lowercase-title">{preview.name}</h3>
-        <Pill tone="warn">AI draft · review before save</Pill>
+        <Pill tone="warn">{t("onboarding.cardReview.pillLabel")}</Pill>
       </div>
 
       <ul className="mt-4 flex flex-col">
@@ -76,7 +80,7 @@ export function CardReviewTile({
               )}
             >
               <span
-                aria-label={confidenceLabels[row.confidence]}
+                aria-label={t(CONFIDENCE_LABEL_KEYS[row.confidence])}
                 className={cn(
                   "h-2 w-2 shrink-0 rounded-full",
                   confidenceClasses[row.confidence]
@@ -98,7 +102,7 @@ export function CardReviewTile({
                   <button
                     type="button"
                     onClick={saveEdit}
-                    aria-label="confirm edit"
+                    aria-label={t("onboarding.cardReview.confirmEdit")}
                     className="flex h-7 w-7 items-center justify-center rounded-full bg-moss text-surface"
                   >
                     <Check className="h-3.5 w-3.5" />
@@ -106,7 +110,7 @@ export function CardReviewTile({
                   <button
                     type="button"
                     onClick={cancelEdit}
-                    aria-label="cancel edit"
+                    aria-label={t("onboarding.cardReview.cancelEdit")}
                     className="flex h-7 w-7 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -133,7 +137,7 @@ export function CardReviewTile({
                   <button
                     type="button"
                     onClick={() => startEdit(i)}
-                    aria-label={`edit ${row.category}`}
+                    aria-label={t("onboarding.cardReview.editRow", { category: catLabel(row.category) })}
                     className="flex h-7 w-7 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken/60 hover:text-ink"
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -151,7 +155,7 @@ export function CardReviewTile({
         className="mt-3 flex w-full items-center justify-between rounded-xl px-1 py-2 text-left text-xs text-ink-tertiary transition-colors hover:text-ink-secondary"
         aria-expanded={sourcesOpen}
       >
-        <span className="lowercase tracking-wider">sources</span>
+        <span className="lowercase tracking-wider">{t("onboarding.cardReview.sources")}</span>
         <ChevronDown
           className={cn(
             "h-3.5 w-3.5 transition-transform",
@@ -172,18 +176,18 @@ export function CardReviewTile({
 
       <div className="mt-5 flex flex-col gap-2">
         <Button fullWidth onClick={onSave}>
-          save card
+          {t("onboarding.cardReview.saveCard")}
         </Button>
         <div className="flex items-center justify-between gap-3">
           <Button variant="secondary" size="sm" onClick={onTryAgain} className="flex-1">
-            try again
+            {t("onboarding.cardReview.tryAgain")}
           </Button>
           <button
             type="button"
             onClick={onDiscard}
             className="text-sm text-over hover:underline underline-offset-4 px-3"
           >
-            discard
+            {t("onboarding.cardReview.discard")}
           </button>
         </div>
       </div>

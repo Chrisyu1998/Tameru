@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown, Lock, Check } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { BottomSheet } from "@/components/BottomSheet";
@@ -17,6 +18,7 @@ interface CurrencyStepProps {
 }
 
 export function CurrencyStep({ onConfirm }: CurrencyStepProps) {
+  const { t } = useTranslation();
   const [selected, setSelected] = useState<Currency>(
     () => detectDefaultCurrency() as Currency,
   );
@@ -37,7 +39,7 @@ export function CurrencyStep({ onConfirm }: CurrencyStepProps) {
       useAppStore.getState().setUiLanguage(res.ui_language);
       onConfirm(selected);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "could not set your currency.");
+      setError(e instanceof Error ? e.message : t("onboarding.currency.error"));
     } finally {
       setBusy(false);
     }
@@ -49,14 +51,14 @@ export function CurrencyStep({ onConfirm }: CurrencyStepProps) {
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-20 animate-fade-up">
       <div className="flex items-center gap-2 text-xs text-ink-tertiary">
         <Lock className="h-3 w-3" />
-        <span className="lowercase tracking-wider">irreversible</span>
+        <span className="lowercase tracking-wider">{t("onboarding.currency.irreversible")}</span>
       </div>
 
       <h1 className="mt-3 font-serif text-3xl text-ink lowercase-title">
-        your home currency
+        {t("onboarding.currency.title")}
       </h1>
       <p className="mt-2 text-sm text-ink-secondary">
-        the lens through which everything is counted.
+        {t("onboarding.currency.subtitle")}
       </p>
 
       <button
@@ -83,22 +85,16 @@ export function CurrencyStep({ onConfirm }: CurrencyStepProps) {
           </div>
           <div className="flex flex-col gap-2">
             <p className="font-serif text-sm text-ink lowercase-title">
-              once set, your home currency stays
+              {t("onboarding.currency.warningTitle")}
             </p>
             <ul className="flex flex-col gap-1.5 text-[0.85rem] leading-relaxed text-ink-secondary">
               <li className="flex gap-2">
                 <span className="text-ink-quaternary">·</span>
-                <span>
-                  every transaction, in any currency, is converted into this one
-                  for your totals.
-                </span>
+                <span>{t("onboarding.currency.warningBullet1")}</span>
               </li>
               <li className="flex gap-2">
                 <span className="text-ink-quaternary">·</span>
-                <span>
-                  changing it later would invalidate every historical figure —
-                  so we don't allow it.
-                </span>
+                <span>{t("onboarding.currency.warningBullet2")}</span>
               </li>
             </ul>
           </div>
@@ -116,16 +112,16 @@ export function CurrencyStep({ onConfirm }: CurrencyStepProps) {
         onClick={() => void handleConfirm()}
         disabled={busy}
       >
-        {busy ? "setting…" : `I understand — set ${selected}`}
+        {busy ? t("onboarding.currency.setting") : t("onboarding.currency.confirm", { currency: selected })}
       </Button>
 
       <BottomSheet
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        ariaLabel="choose home currency"
+        ariaLabel={t("onboarding.currency.sheetAriaLabel")}
       >
         <h2 className="font-serif text-xl text-ink lowercase-title">
-          choose your home currency
+          {t("onboarding.currency.sheetTitle")}
         </h2>
         <ul className="mt-4 flex flex-col">
           {CURRENCIES.map((c) => {

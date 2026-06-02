@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronsLeft, ChevronsRight, SquarePen, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { CandidateCards } from "@/components/chat/CandidateCards";
 import { CardParseCard } from "@/components/chat/CardParseCard";
 import { Chart } from "@/components/chat/Chart";
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
  * pane stays interactive. Closes only on X / Esc / ⌘\.
  */
 export function ChatDrawer() {
+  const { t } = useTranslation();
   const {
     drawerOpen,
     drawerExpanded,
@@ -54,7 +56,7 @@ export function ChatDrawer() {
   return (
     <aside
       role="complementary"
-      aria-label="tameru chat"
+      aria-label={t("chat.drawer.label")}
       className={cn(
         "fixed top-0 right-0 z-30 hidden h-screen md:flex flex-col border-l border-hairline bg-canvas",
         "animate-slide-in-right",
@@ -72,7 +74,7 @@ export function ChatDrawer() {
           <button
             type="button"
             onClick={() => chatStore.newChat()}
-            aria-label="new chat"
+            aria-label={t("chat.drawer.newChat")}
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken/60 hover:text-ink"
           >
             <SquarePen className="h-4 w-4" />
@@ -80,7 +82,7 @@ export function ChatDrawer() {
           <button
             type="button"
             onClick={() => chatStore.toggleExpanded()}
-            aria-label={drawerExpanded ? "collapse" : "expand"}
+            aria-label={drawerExpanded ? t("chat.drawer.collapse") : t("chat.drawer.expand")}
             title={drawerExpanded ? "collapse (⌘\\)" : "expand"}
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken/60 hover:text-ink"
           >
@@ -93,7 +95,7 @@ export function ChatDrawer() {
           <button
             type="button"
             onClick={() => chatStore.closeDrawer()}
-            aria-label="close"
+            aria-label={t("chat.drawer.close")}
             className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken/60 hover:text-ink"
           >
             <X className="h-4 w-4" />
@@ -107,10 +109,10 @@ export function ChatDrawer() {
           {messages.length === 0 && (
             <div className="mt-10 text-center">
               <h2 className="font-serif text-xl text-ink lowercase-title">
-                ask anything about your money
+                {t("chat.drawer.emptyHeading")}
               </h2>
               <p className="mt-2 text-[0.85rem] text-ink-secondary">
-                log a spend, edit a transaction, or compare categories.
+                {t("chat.drawer.emptyBody")}
               </p>
             </div>
           )}
@@ -142,12 +144,12 @@ export function ChatDrawer() {
                 onClick={() => void chatStore.retry()}
                 className="rounded-full bg-moss px-2.5 py-0.5 text-[0.7rem] text-surface hover:bg-moss-deep"
               >
-                retry
+                {t("chat.drawer.retry")}
               </button>
               <button
                 type="button"
                 onClick={() => chatStore.dismissError()}
-                aria-label="dismiss"
+                aria-label={t("chat.drawer.dismiss")}
                 className="text-ink-tertiary hover:text-ink"
               >
                 ✕

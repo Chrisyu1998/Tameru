@@ -96,6 +96,22 @@ export function detectUiLanguage(): 'en' | 'ja' | 'zh-TW' {
   }
 }
 
+/**
+ * Resolve the *effective* UI language (for `<html lang>` and i18next chrome)
+ * from the store's `uiLanguage`. An explicit choice ('en' | 'ja' | 'zh-TW')
+ * wins; null/undefined (legacy user with no stored choice, or mid-boot before
+ * /me resolves) falls back to the browser-detected language — matching both
+ * `i18n.ts`'s initial language and `displayLocale()`'s null/undefined contract
+ * (DESIGN.md §6.6). Mapping the unset case to 'en' would force English chrome
+ * on a Japanese/Chinese browser whose `ui_language` is null.
+ */
+export function resolveUiLanguage(
+  stored: 'en' | 'ja' | 'zh-TW' | null | undefined,
+): 'en' | 'ja' | 'zh-TW' {
+  if (stored === 'en' || stored === 'ja' || stored === 'zh-TW') return stored;
+  return detectUiLanguage();
+}
+
 export type CheckDeviceResponse = {
   is_active: boolean;
   active_device_id: string | null;

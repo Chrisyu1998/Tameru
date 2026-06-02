@@ -1,0 +1,826 @@
+{
+  "nav": {
+    "home": "ホーム",
+    "cards": "マイカード",
+    "subscriptions": "サブスク",
+    "goals": "目標",
+    "memory": "AIメモリー",
+    "settings": "設定",
+    "more": "その他",
+    "chat": "チャット"
+  },
+  "common": {
+    "clearLedgerDev": "台帳をクリア（開発）",
+    "restartOnboardingDev": "オンボーディングを再開（開発）",
+    "pendingSync_one": "{{count}}件同期待ち",
+    "pendingSync_other": "{{count}}件同期待ち",
+    "undoToast": {
+      "removing": "削除中",
+      "undo": "元に戻す"
+    },
+    "close": "閉じる",
+    "closeSheet": "シートを閉じる",
+    "displaced": {
+      "title": "別の端末でサインインしました。",
+      "body": "このセッションは終了しました。",
+      "signInAgain": "再度サインイン"
+    },
+    "updateToast": {
+      "message": "新しいバージョンが利用可能です。",
+      "later": "後で",
+      "refresh": "再読み込み"
+    },
+    "delete": "削除",
+    "confirmDelete": "削除を確認",
+    "autoLoggedAriaLabel": "tameruが自動記録",
+    "autoLoggedTooltip": "tameruが自動記録 — 定期的な請求として検出されました。"
+  },
+  "onboarding": {
+    "back": "戻る",
+    "splash": {
+      "tagline": "心のこもった家計簿",
+      "continue": "続ける",
+      "takeTour": "ツアーを見る"
+    },
+    "philosophy": {
+      "title": "なぜ手動入力なの？",
+      "p1": "ほとんどの家計簿アプリは、銀行口座と自動同期します。tameru はわざとそうしていません。",
+      "p2": "購入を記録するという行為は、たった10秒でも、お金への意識を育てます。Mint はすべてを自動同期していました。それでも人々は使いすぎました。自動化は「見えない化」を意味するからです。",
+      "p3": "tameru はあなたが支出を記録することを求めます。AIが残りを担います——カテゴリ分け、パターン分析、質問への回答、そしてそっとした気づき。データはあなたが。インテリジェンスはtameruが。",
+      "p4": "それが正しいトレードオフだと思うなら、始めましょう。",
+      "getStarted": "始める",
+      "takeTour": "ツアーを見る"
+    },
+    "signin": {
+      "title": "サインイン",
+      "subtitle": "あなたの家計簿は、ふたりだけの秘密にします。",
+      "checkEmail": "メールを確認してください",
+      "sentLinkTo": "サインインリンクを送信しました：",
+      "openOnDevice": "このデバイスで開いてください。",
+      "useDifferentEmail": "別のメールアドレスを使う",
+      "google": "Googleでサインイン",
+      "or": "または",
+      "email": "メールでサインイン",
+      "emailPlaceholder": "you@example.com",
+      "sending": "送信中…",
+      "sendLink": "サインインリンクを送る",
+      "errorGoogle": "サインインを開始できませんでした。",
+      "errorLink": "リンクを送信できませんでした。",
+      "legalPrefix": "続けることで、",
+      "legalTerms": "利用規約",
+      "legalAnd": "と",
+      "legalPrivacy": "プライバシー通知",
+      "legalNeverSell": "に同意したことになります。データを販売することはありません。"
+    },
+    "currency": {
+      "irreversible": "変更できません",
+      "title": "基準通貨",
+      "subtitle": "すべてを計算するための基準となります。",
+      "warningTitle": "一度設定すると、基準通貨は変更できません",
+      "warningBullet1": "あらゆる通貨の取引は、この通貨に換算されて集計されます。",
+      "warningBullet2": "後で変更すると過去のすべての数値が無効になるため、変更は許可されていません。",
+      "setting": "設定中…",
+      "confirm": "{{currency}} に設定する（変更不可）",
+      "sheetTitle": "基準通貨を選択",
+      "sheetAriaLabel": "基準通貨を選択",
+      "error": "通貨を設定できませんでした。"
+    },
+    "addCard": {
+      "stepLabel": "ステップ 1 / 2",
+      "title": "最初のカードを追加",
+      "subtitle": "カード名を入力してください——残りはこちらで調べます。",
+      "namePlaceholder": "カード名",
+      "lookingUp": "ポイント倍率を検索中…",
+      "nameChanged": "カード名が変更されました——「調べる」をタップして{{cardName}}の倍率を更新してください。",
+      "thisCard": "このカード",
+      "lookItUp": "調べる",
+      "adding": "追加中…",
+      "addCard": "カードを追加",
+      "skipForNow": "今はスキップ",
+      "lookupFailed": "検索に失敗しました——手動で入力してください。",
+      "errorDuplicate": "{{name}}（末尾{{lastFour}}）はすでに登録されています——カードページから編集してください。",
+      "errorGeneric": "カードを追加できませんでした。もう一度お試しください。",
+      "preview": {
+        "unresolvedBoth": "発行会社とネットワークを特定できませんでした——下から選択してください。",
+        "unresolvedIssuer": "発行銀行を特定できませんでした——下から選択してください。",
+        "unresolvedNetwork": "カードネットワークを特定できませんでした——下から選択してください。",
+        "needsManual": "自動入力できませんでした——下のフィールドを調整してください。",
+        "issuer": "発行会社",
+        "network": "ネットワーク",
+        "selectPlaceholder": "選択…",
+        "lastFour": "末尾4桁",
+        "annualFee": "年会費",
+        "program": "プログラム",
+        "sources": "出典："
+      }
+    },
+    "csvImport": {
+      "stepLabel": "ステップ 2 / 2",
+      "title": "取引履歴を取り込む",
+      "subtitle": "銀行のCSVファイルをドロップして、家計簿に反映させましょう。",
+      "dropHere": "CSVをここにドロップ",
+      "orTapBrowse": "またはタップしてブラウズ",
+      "tapToChooseAnother": "タップして別のファイルを選択",
+      "worksWith": "対応している銀行",
+      "continueWithImport": "インポートを続ける",
+      "skipForNow": "今はスキップ"
+    },
+    "csvProcessing": {
+      "status1": "行を解析中…",
+      "status2": "加盟店をマッチング中…",
+      "status3": "カテゴリ分け中…",
+      "status4": "もうすぐ完了…",
+      "ofTotal": "/ {{total}}"
+    },
+    "cardReview": {
+      "pillLabel": "AI下書き · 保存前に確認してください",
+      "highConfidence": "信頼度：高",
+      "mediumConfidence": "信頼度：中",
+      "lowConfidence": "信頼度：低",
+      "confirmEdit": "編集を確定",
+      "cancelEdit": "編集をキャンセル",
+      "editRow": "{{category}}を編集",
+      "sources": "出典",
+      "saveCard": "カードを保存",
+      "tryAgain": "やり直す",
+      "discard": "破棄"
+    }
+  },
+  "chat": {
+    "back": "戻る",
+    "newChat": "新しいチャット",
+    "placeholder": "入力またはマイクをタップ",
+    "thinking": "考え中…",
+    "offline": "オフライン — 再接続時に送信されます。",
+    "retry": "再試行",
+    "dismiss": "閉じる",
+    "send": "送信",
+    "recordVoice": "音声を録音",
+    "emptyState": {
+      "heading": "何を使ったか教えてください",
+      "body": "入力または音声で。あとは整理します。編集や比較もできます。",
+      "devSimulateOutage": "dev · AIダウンバナーをシミュレート"
+    },
+    "examples": {
+      "coffee": "コーヒー $5.50",
+      "lunch": "Mとランチ $24",
+      "editDinner": "ルパのディナーを編集",
+      "compare": "外食 vs 食料品"
+    },
+    "serviceBanner": {
+      "aiMoment": "AIがただいまご利用いただけません。数分後に再試行してください。",
+      "dismiss": "閉じる"
+    },
+    "dailyCap": {
+      "title": "1日のAI利用上限に達しました",
+      "body": "深夜0時（UTC）に復活します。それまでダッシュボードの閲覧や既存の取引の編集はご利用いただけます。"
+    },
+    "offlineNotice": "オフライン — 再接続時に送信されます。",
+    "parseCard": {
+      "merchant": "支払先",
+      "amount": "金額",
+      "date": "日付",
+      "card": "カード",
+      "category": "カテゴリー",
+      "other": "その他",
+      "looksRight": "これでOK",
+      "letMeFixIt": "修正する",
+      "orJustTell": "変更点を入力してください。",
+      "logged": "記録済み。",
+      "deleted": "削除済み。",
+      "notSaved": "未保存。",
+      "queued": "キュー済み — オンライン時に同期されます。",
+      "doubleCheckField": "このフィールドを確認してください"
+    },
+    "cardParseCard": {
+      "last4": "下4桁",
+      "annualFee": "年会費",
+      "nextRenewal": "次回更新日（任意）",
+      "autoLog": "更新日に自動記録します。",
+      "clearRenewalDate": "更新日をクリア",
+      "issuer": "発行元",
+      "network": "ネットワーク",
+      "selectPlaceholder": "選択…",
+      "lookupWarning": "照合で確認できませんでした",
+      "lookupWarningIssuerAndNetwork": "発行元またはネットワーク",
+      "lookupWarningIssuer": "発行銀行",
+      "lookupWarningNetwork": "カードネットワーク",
+      "lookupWarningTail": "— 続けるには以下で選択してください。",
+      "sources": "情報源:",
+      "looksRight": "これでOK",
+      "enterLast4": "続けるには下4桁を入力してください。",
+      "added": "追加済み。",
+      "deleted": "削除済み。",
+      "notSaved": "未保存。",
+      "queued": "キュー済み — オンライン時に同期されます。"
+    },
+    "subscriptionParseCard": {
+      "amount": "金額",
+      "category": "カテゴリー",
+      "card": "カード",
+      "noCardACH": "カードなし・銀行口座引き落とし",
+      "starts": "開始",
+      "firstAutoLog": "初回自動記録",
+      "backfillNotice": "今日の請求は自動記録されません — 台帳に追加する場合は手動で入力してください。周期を変更するにはキャンセルして再登録してください。",
+      "amountError": "金額は正の数である必要があります。",
+      "cadence": "頻度:",
+      "looksRight": "これでOK",
+      "tracking": "追跡中。",
+      "paused": "一時停止中。",
+      "cancelled": "キャンセル済み。",
+      "notSaved": "未保存。",
+      "queued": "キュー済み — オンライン時に同期されます。"
+    },
+    "candidateCards": {
+      "nothingMatched": "一致しませんでした。",
+      "more": "さらに{{count}}件"
+    },
+    "voice": {
+      "listening": "聞き取り中…",
+      "submitNow": "今すぐ送信",
+      "cancel": "キャンセル",
+      "cancelVoiceInput": "音声入力をキャンセル",
+      "langChipAria": "音声言語: {{lang}}。タップして変更。",
+      "errorNotAllowed": "音声アクセスが拒否されました。ブラウザの設定でこのサイトのマイクを有効にして再試行してください。",
+      "errorNoSpeech": "聞き取れませんでした。再試行してください。",
+      "errorNetwork": "音声にはインターネット接続が必要です — 再接続後に再試行してください。",
+      "errorAudioCapture": "マイクが検出されません。デバイスを確認してください。",
+      "errorUnknown": "音声入力に失敗しました。再試行してください。",
+      "tryAgain": "再試行",
+      "langEn": "en",
+      "langZh": "中",
+      "langJa": "日",
+      "langAriaEn": "英語",
+      "langAriaZh": "中国語",
+      "langAriaJa": "日本語"
+    },
+    "toolAttribution": {
+      "via": "使用ツール"
+    },
+    "drawer": {
+      "label": "tameru チャット",
+      "emptyHeading": "お金について何でも聞いて",
+      "emptyBody": "支出を記録したり、取引を編集したり、カテゴリーを比較したりできます。",
+      "newChat": "新しいチャット",
+      "collapse": "折りたたむ",
+      "expand": "展開",
+      "close": "閉じる",
+      "retry": "再試行",
+      "dismiss": "閉じる"
+    },
+    "cmdkTooltip": {
+      "label": "どこからでもtameru AIを開く",
+      "gotIt": "わかった"
+    },
+    "desktopComposer": {
+      "hint": "✨ tameru に聞く",
+      "inputAria": "tameru に聞く",
+      "recordVoice": "音声を録音",
+      "send": "送信"
+    },
+    "rowActions": {
+      "edit": "編集",
+      "delete": "削除"
+    },
+    "aiUnavailable": "AIは一時的に利用できません。ダッシュボード、カード、編集はすべて引き続きご利用いただけます — チャットアシスタントのみ停止中です。",
+    "offline_banner": "オフラインです — エントリはローカルにキューされ、再接続時に送信されます。"
+  },
+  "tour": {
+    "back": "戻る",
+    "sampleData": "サンプルデータ",
+    "next": "次へ",
+    "skipTour": "ツアーをスキップ",
+    "importCsv": "CSVをインポート",
+    "logFirstTransaction": "最初の取引を記録",
+    "lastScreenHint": "これは3ヶ月分のデータがあるtameruです。最初の取引を記録するか、CSVをインポートしてここまで到達しましょう。",
+    "screen1": {
+      "title": "今週の状況を一目で",
+      "callout": "支出は絶対金額ではなく、差分で表示されます。"
+    },
+    "screen2": {
+      "title": "小さな習慣",
+      "callout": "記録して、確認して、静かな気づきを受け取る。"
+    },
+    "screen3": {
+      "title": "自然な言葉で質問",
+      "callout": "家計簿が、親切に、文脈を踏まえて答えます。"
+    },
+    "screen4": {
+      "title": "週次ダイジェスト",
+      "callout": "週に一度の穏やかなまとめ。それだけです。"
+    },
+    "entry": {
+      "doesThisLookRight": "これで合っていますか？",
+      "merchant": "加盟店",
+      "amount": "金額",
+      "category": "カテゴリ",
+      "card": "カード",
+      "date": "日付",
+      "looksRight": "合っています",
+      "fixIt": "修正する",
+      "logged": "記録済み"
+    },
+    "digest": {
+      "inbox": "受信トレイ",
+      "time": "午前8:02"
+    }
+  },
+  "goals": {
+    "title": "目標",
+    "subtitle": "タップして編集。左にスワイプして削除。",
+    "loading": "読み込み中…",
+    "aiHint": "tameraに目標を設定してもらう",
+    "tile": {
+      "pendingDelete": "削除中 · タップで元に戻す",
+      "thisPeriod": "今{{period}}の"
+    },
+    "empty": {
+      "heading": "予算がまだありません",
+      "body": "予算を設定すると、tameraが達成度を追跡します。",
+      "cta": "tameru AIに設定を依頼する"
+    }
+  },
+  "memory": {
+    "title": "AIメモリー",
+    "subtitle": "tameraが覚えていること · 編集・削除できます。",
+    "loading": "読み込み中…",
+    "empty": "tameraはまだ何も記憶していません — チャットすると記録されます。",
+    "hintFooter": "tameru AIで情報を修正・追加する",
+    "capacity": {
+      "label": "容量",
+      "count": "{{used}} / {{total}} 件",
+      "oldestReinforced": "最も古い記憶の更新日: {{age}}",
+      "overEightyWarning": "メモリーが80%以上埋まっています。新しい情報が入ると古い情報が削除される場合があります — 不要なものを整理してください。"
+    },
+    "fact": {
+      "removeAriaLabel": "記憶を削除",
+      "pendingDelete": "削除中 · タップで元に戻す",
+      "confirmRemove": "この記憶を削除する",
+      "cancel": "キャンセル"
+    },
+    "provenance": {
+      "savedFromChat": "チャットから保存",
+      "reinforced": "{{age}}に更新"
+    },
+    "age": {
+      "today": "今日",
+      "oneDay": "1日前",
+      "nDays": "{{count}}日前",
+      "oneMonth": "1ヶ月前",
+      "nMonths": "{{count}}ヶ月前"
+    }
+  },
+  "home": {
+    "title": "ホーム",
+    "loading": "読み込み中…",
+    "emptyTitle": "台帳は空です",
+    "emptyBody": "下のチャットボタンをタップして最初の取引を記録しましょう。",
+    "hintPrompt": "最初の取引を入力または話しかけてください",
+    "hintDismiss": "閉じる",
+    "breakdownLink": "内訳",
+    "vsAvg": "{{percent}} 平均より",
+    "stillLearning": "学習中",
+    "bandAbove": "平均より上",
+    "bandBelow": "平均より下",
+    "bandUsual": "いつも通り",
+    "bandNeutral": "変化なし"
+  },
+  "breakdown": {
+    "title": "内訳",
+    "backAriaLabel": "戻る",
+    "transactionCount": "{{count}} 件",
+    "vsYourBudgets": "今月の予算との比較",
+    "seeAll": "すべて {{count}} 件を見る →",
+    "unknownCategory": "不明なカテゴリー",
+    "unknownCategoryBody": "「{{slug}}」というカテゴリーは見つかりません。",
+    "backToBreakdown": "← 内訳に戻る",
+    "filterMonth": "月",
+    "filterAll": "すべて",
+    "filterThisMonth": "今月",
+    "filterLastMonth": "先月",
+    "filterCard": "カード",
+    "filterAllCards": "すべてのカード",
+    "searchPlaceholder": "加盟店を検索",
+    "clearSearch": "検索をクリア",
+    "deletingTapToUndo": "削除中 · タップで元に戻す",
+    "emptyFilters": "フィルターに一致する項目がありません。"
+  },
+  "oauth": {
+    "title": "接続を許可",
+    "subtitle": "別のアプリがtameruのデータへのアクセスを求めています。",
+    "loading": "リクエストを確認中…",
+    "allow": "許可",
+    "connecting": "接続中…",
+    "cancel": "キャンセル",
+    "cancelling": "キャンセル中…",
+    "requestingAccess": "アクセスをリクエスト",
+    "signedInAs": "サインイン済み：",
+    "readOnly": "読み取り専用。",
+    "readOnlyDetail": "{{clientName}}はあなたのトランザクション、サブスクリプション、カード特典を閲覧できます — 追加、編集、削除はできません。",
+    "disconnectHint": "いつでも切断できます：",
+    "disconnectPath": "設定 → 接続済みアプリ",
+    "errorMissingId": "このページはtameruに接続するときにclaude.aiが開きます。そちらから開いてください。",
+    "errorLoadFailed": "認証リクエストを読み込めませんでした。",
+    "errorUnexpected": "予期しない認証レスポンスです。",
+    "errorApproveFailed": "承認を完了できませんでした。",
+    "errorDenyFailed": "リクエストをキャンセルできませんでした。",
+    "signIn": {
+      "title": "続けるにはサインインしてください",
+      "subtitle": "アプリがtameruのデータへのアクセスを求めています。承認するにはサインインしてください。",
+      "checkEmail": "メールを確認してください",
+      "sentLinkTo": "サインインリンクを送信しました：",
+      "sentLinkHint": "このデバイスで開いてください — そのままここに戻ります。",
+      "useDifferentEmail": "別のメールアドレスを使用",
+      "withGoogle": "Googleでサインイン",
+      "withEmail": "メールでサインイン",
+      "starting": "起動中…",
+      "emailLabel": "メールアドレス",
+      "emailPlaceholder": "you@example.com",
+      "sendLink": "サインインリンクを送信",
+      "sending": "送信中…",
+      "back": "戻る",
+      "errorGoogle": "サインインを開始できませんでした。",
+      "errorMagicLink": "リンクを送信できませんでした。"
+    }
+  },
+  "importCsv": {
+    "title": "CSVをインポート",
+    "subtitle": "銀行やカードのCSVをtameruに取り込みます。",
+    "detectingColumns": "CSVを読み込み中…",
+    "cancel": "キャンセル",
+    "back": "戻る",
+    "next": "次へ",
+    "import": "インポート",
+    "noRowsToPreview": "プレビューする行がありません。",
+    "select": {
+      "fileLabel": "CSVファイル",
+      "removeFile": "ファイルを削除",
+      "chooseCsv": "CSVを選択",
+      "fileHint": "銀行からエクスポート — 通常は明細またはアクティビティから。最大5MBおよび5,000行。",
+      "whichCard": "どのカード？",
+      "noCards": "先にカードを追加してください — インポートはすべてのトランザクションをカードに紐付けます。"
+    },
+    "confirm": {
+      "tameruThinks": "tameruの推定",
+      "date": "日付",
+      "merchant": "加盟店",
+      "amount": "金額",
+      "currency": "通貨",
+      "rowsConfidence": "{{rows}}行 · 信頼度{{pct}}%",
+      "firstRows": "最初の行",
+      "wrongMapThem": "間違っているようです — 手動でマッピングします",
+      "looksRight": "合っています"
+    },
+    "manual": {
+      "mapColumns": "列をマッピング",
+      "dateColumn": "日付列",
+      "merchantColumn": "加盟店列",
+      "amountColumn": "金額列",
+      "currencyColumn": "通貨列（任意）",
+      "chargesNegativeLabel": "このCSVは請求を負の数で表示しています",
+      "chargesNegativeHint": "Chaseアクティビティ / Citiアクティビティのエクスポートにはチェックを入れてください。Amex / 大多数の月次明細エクスポートにはチェック不要。",
+      "none": "（なし）"
+    },
+    "committing": {
+      "importing": "インポート中…",
+      "progress": "{{processed}} / {{total}}行",
+      "startingUp": "開始中…",
+      "categorizingAs": "カテゴリ分類："
+    },
+    "done": {
+      "allSet": "完了。",
+      "transactionsImported": "{{count}}件のトランザクションをインポートしました。",
+      "imported": "インポート済み",
+      "duplicatesSkipped": "重複をスキップ",
+      "refundsSkipped": "返金をスキップ",
+      "foreignSkipped": "外貨建てをスキップ",
+      "couldntRead": "読み取れなかった",
+      "done": "完了"
+    },
+    "error": {
+      "title": "インポートを完了できませんでした。",
+      "safeToRetry": "既にインポートされたものは安全です — 再アップロードすると重複はスキップされます。",
+      "tryAgain": "もう一度試す"
+    }
+  },
+  "layout": {
+    "notFound": {
+      "title": "見つかりません",
+      "body": "このページはまだ作成されていません — または存在しません。",
+      "goHome": "ホームへ"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "nav": {
+      "account": "アカウント",
+      "connections": "claude 接続",
+      "import": "インポート",
+      "notifications": "通知",
+      "privacy": "プライバシー"
+    },
+    "account": {
+      "title": "アカウント",
+      "subtitle": "あなたの基本情報。",
+      "emailLabel": "メール",
+      "currencyLabel": "基準通貨",
+      "immutable": "変更不可",
+      "immutableNote": "これらはデザイン上、現時点では変更できません。基準通貨はすべての比較の基準となり、メールはデータの識別子です。"
+    },
+    "import": {
+      "title": "インポート",
+      "subtitle": "別のツールから取引データを取り込む。",
+      "body": "銀行・ynab・copilot からエクスポートした csv を選択してください。",
+      "chooseCsv": "csv を選択",
+      "hint": "tameru が列を自動検出し、一括でカテゴリ分けします。重複行はスキップされます。最大 5 MB・5,000 行。"
+    },
+    "notifications": {
+      "title": "通知",
+      "subtitle": "tameru は静かに話します。頻度はあなたが決めます。",
+      "weeklyDigestLabel": "週次ダイジェストメール",
+      "weeklyDigestDesc": "毎週月曜午前9時（あなたの時間）に静かな振り返り。毎回の送信に配信停止リンクあり。"
+    },
+    "privacy": {
+      "title": "プライバシー",
+      "subtitle": "tameru があなたのデータで行うことと行わないこと。"
+    },
+    "timezone": {
+      "label": "タイムゾーン",
+      "desc": "ダイジェストの配信時刻と日付の基準。このデバイスのタイムゾーンがデフォルト。",
+      "loading": "読み込み中…"
+    },
+    "language": {
+      "label": "言語",
+      "desc": "tameru があなたに話しかける方法 — インターフェース、チャットの返答、週次ダイジスト。このデバイスの言語がデフォルト。"
+    },
+    "theme": {
+      "switchToLight": "ライトモードに切り替え",
+      "switchToDark": "ダークモードに切り替え"
+    }
+  },
+  "more": {
+    "identity": {
+      "youFallback": "あなた"
+    },
+    "primary": {
+      "cards": "マイカード",
+      "subscriptions": "サブスクリプション",
+      "goals": "ゴール",
+      "aiMemory": "AI メモリ",
+      "claudeConnections": "claude 接続",
+      "connected": "接続済み",
+      "notConnected": "未接続"
+    },
+    "secondary": {
+      "heading": "アカウント & データ",
+      "importData": "データをインポート",
+      "notifications": "通知",
+      "privacy": "プライバシー",
+      "signOut": "サインアウト"
+    },
+    "notifications": {
+      "ariaLabel": "通知",
+      "title": "通知",
+      "subtitle": "tameru は静かに話します。頻度はあなたが決めます。",
+      "weeklyDigestLabel": "週次ダイジェスト",
+      "weeklyDigestDesc": "毎週月曜の朝に静かな振り返り。毎回の送信に配信停止リンクあり。",
+      "done": "完了"
+    },
+    "signOut": {
+      "closeAriaLabel": "ダイアログを閉じる",
+      "title": "サインアウトしますか？",
+      "body": "データはそのまま保持されます。いつでもサインインし直せます — 何も削除されません。",
+      "cancel": "キャンセル",
+      "confirm": "サインアウト"
+    }
+  },
+  "privacy": {
+    "title": "プライバシー",
+    "subtitle": "tameru があなたのデータで行うことと行わないこと。",
+    "analytics": {
+      "label": "プロダクト分析を一時停止",
+      "desc": "機能使用イベントを即座に停止します。取引データは分析に送信されません。"
+    },
+    "export": {
+      "label": "データをエクスポート",
+      "desc": "取引、カード、サブスクリプション、メモリーのファクト、チャット履歴、設定を含む json ファイルをダウンロードします。",
+      "button": "エクスポート",
+      "preparing": "準備中…",
+      "errorRetry": "エクスポートを準備できませんでした。しばらくしてからもう一度お試しください。",
+      "errorGeneric": "エラーが発生しました。しばらくしてからもう一度お試しください。"
+    },
+    "deleteAccount": {
+      "label": "アカウントを削除",
+      "desc": "メールでご連絡ください。7日以内にすべてのデータを消去します。アプリ内ボタンは後日リリース予定です。",
+      "button": "メールで連絡",
+      "emailSubject": "アカウントの削除",
+      "emailBodyLine1": "tameru サポートへ、",
+      "emailBodyLine2": "アカウントとすべての関連データを削除してください。",
+      "emailBodyLine3": "これが恒久的な操作であり、取引、カード、サブスクリプション、チャット履歴、メモリーのファクトが含まれることを理解しています。",
+      "emailBodyLine4": "よろしくお願いします。"
+    },
+    "disclosure": {
+      "aiProvidersHeading": "AI プロバイダー",
+      "aiProvidersAnthropicParagraph": "tameru でチャットする際 — 取引の追加、質問、その他 — メッセージは anthropic に送信されます。カード特典倍率の照会も anthropic に送信されますが、公開されているカード名と下4桁のみが含まれ、取引データは含まれません。anthropic のデフォルト保持期間はトラスト & セーフティーレビューのため30日ですが、tameru 組織に対してゼロデータ保持が申請されており、これにより0になります。anthropic はいかなるティアでも API データをトレーニングに使用しません。",
+      "aiProvidersGeminiParagraph": "各取引のカテゴリ選択に google gemini の有料プランも使用しています — 商店名と金額のみが gemini に送信され、それ以外は何もありません。gemini は csv インポートとレシート写真の解析にも使用されます。google の有料プランは API データをトレーニングに使用しません。無料プランは使用しますが、tameru では決して無料プランを使用しません。",
+      "analyticsHeading": "プロダクト分析",
+      "analyticsParagraph1": "posthog（米国クラウド）を使用して構造的なイベントのみをカウントしています：チャットセッションの開始と終了、機能の使用状況、オンボーディングのステップ、週次ダイジェストの開封、表示されたエラー。取引金額、商店名、カード詳細、チャットで質問したテキストは決して送信しません。",
+      "analyticsParagraph2": "上のトグルで新しいイベントを即座に停止できます。既にカウントされたデータは、削除を依頼するまで posthog に残ります。"
+    }
+  },
+  "connections": {
+    "title": "接続済みアプリ",
+    "subtitle": {
+      "before": "支出データの読み取りを許可したアプリ — 例：",
+      "accessIs": "アクセスは",
+      "readOnly": "読み取り専用",
+      "after": "です：接続されたアプリは台帳を閲覧できますが、追加・編集・削除はできません。"
+    },
+    "setup": {
+      "heading": "claude.ai に tameru を追加",
+      "step1Before": "1. claude.ai で",
+      "step1SettingsConnectors": "設定 → コネクター",
+      "step1And": "を開き、",
+      "step1AddConnector": "カスタムコネクターを追加",
+      "step2": "2. このサーバー URL を貼り付けてください：",
+      "copy": "コピー",
+      "copied": "コピー済み",
+      "hint": "claude.ai が tameru の同意ページを開きます — 承認して完了です。ここに貼り付けるものは何もありません。"
+    },
+    "list": {
+      "heading": "現在の接続",
+      "refresh": "更新",
+      "refreshAriaLabel": "更新",
+      "loading": "接続を読み込み中…",
+      "empty": "まだアプリが接続されていません。",
+      "connectedFallback": "接続済み",
+      "disconnect": "接続解除",
+      "errorDisconnect": "そのアプリを接続解除できませんでした。"
+    },
+    "disconnect": {
+      "ariaLabel": "アプリの接続解除",
+      "title": "{{name}} を接続解除しますか？",
+      "warning": "アプリは数分以内にアクセスを失います。進行中のセッションはトークンが期限切れになるまで読み取り可能な場合があります。",
+      "confirmButton": "接続解除",
+      "disconnecting": "接続解除中…",
+      "cancel": "キャンセル"
+    }
+  },
+  "cards": {
+    "title": "マイカード",
+    "subtitle": "カードをタップして編集。左にスワイプして削除。",
+    "chatSeedAddCard": "新しいカードを追加：",
+    "hintAddCard": "tameruにカードの追加を依頼する",
+    "deletingTapToUndo": "削除中 · タップで元に戻す",
+    "afChip": {
+      "editAriaLabel": "年会費のトラッキングを編集",
+      "next": "次回 {{date}}",
+      "trackAriaLabel": "年会費をトラック",
+      "trackLabel": "${{amount}} 年会費をトラック"
+    },
+    "empty": {
+      "heading": "カードがありません",
+      "body": "カードを登録するとtameruがより賢くなります。",
+      "cta": "tameruに追加を依頼する"
+    }
+  },
+  "subscriptions": {
+    "title": "サブスク",
+    "subtitle": "定期的な支出を静かに記録。",
+    "chatSeedAdd": "新しいサブスクを追加：",
+    "hintAdd": "tameruにサブスクの追加を依頼する",
+    "empty": "まだサブスクがありません — tameruに追加を依頼してください。",
+    "needsNewCard": {
+      "heading": "新しいカードが必要",
+      "body_one": "{{count}}件のサブスクに紐付いたカードを削除しました。新しいカードを選択するか、解約してください。",
+      "body_other": "{{count}}件のサブスクに紐付いたカードを削除しました。新しいカードを選択するか、解約してください。"
+    },
+    "status": {
+      "paused": "一時停止",
+      "cancelled": "解約済み"
+    },
+    "row": {
+      "pausedNote": "一時停止中 · 今後の請求なし",
+      "nextBilling": "次回 {{date}} · {{frequency}}"
+    }
+  },
+  "editCard": {
+    "ariaLabel": "カードを編集",
+    "title": "カードを編集",
+    "fields": {
+      "name": "名前",
+      "last4": "下4桁（識別用 — 編集不可）",
+      "last4Hint": "削除して再追加で変更",
+      "program": "ポイントプログラム",
+      "color": "カラー",
+      "colorAriaLabel": "カードカラー",
+      "annualFee": "年会費",
+      "amount": "金額"
+    },
+    "saveChanges": "保存",
+    "saving": "保存中…",
+    "deleteCard": "カードを削除",
+    "programPicker": {
+      "ariaLabel": "プログラムを選択",
+      "title": "プログラムを選択"
+    },
+    "af": {
+      "ariaLabel": "年会費のトラッキングを編集",
+      "titleEdit": "年会費を編集",
+      "titleTrack": "年会費をトラック",
+      "nextRenewal": "次回更新日",
+      "autoLogHint": "来年のこの日付に年会費を自動記録します。",
+      "errorAmountInvalid": "金額は0以上の数値を入力してください。",
+      "errorDateInvalid": "更新日は今日以降を入力してください。",
+      "stopTracking": "このAFのトラッキングを停止"
+    }
+  },
+  "editSubscription": {
+    "ariaLabel": "サブスクを編集",
+    "title": "サブスクを編集",
+    "fields": {
+      "name": "名前",
+      "amount": "金額",
+      "category": "カテゴリー",
+      "card": "カード",
+      "cardClosed": "カード（解約済み — 新しいカードを選択）",
+      "frequency": "頻度",
+      "nextBilling": "次回請求",
+      "lastBilling": "最終請求",
+      "started": "開始日"
+    },
+    "cadenceHint": "請求サイクルと開始日は変更不可 — 解約して再追加してください。",
+    "saveChanges": "保存",
+    "card": {
+      "needsNewCard": "新しいカードが必要",
+      "bankAch": "銀行口座引き落とし",
+      "bankAchSub": "カードなし（家賃、光熱費、住宅ローンなど）"
+    },
+    "actions": {
+      "pause": "一時停止",
+      "resume": "再開",
+      "resumeAsAch": "銀行口座引き落としで再開",
+      "cancel": "サブスクを解約"
+    },
+    "cardPicker": {
+      "ariaLabel": "カードを選択",
+      "title": "カードを選択"
+    },
+    "categoryPicker": {
+      "ariaLabel": "カテゴリーを選択",
+      "title": "カテゴリーを選択"
+    }
+  },
+  "editTransaction": {
+    "ariaLabel": "取引を編集",
+    "title": "取引を編集",
+    "fields": {
+      "merchant": "支払先",
+      "amount": "金額",
+      "date": "日付",
+      "card": "カード",
+      "category": "カテゴリー"
+    },
+    "card": {
+      "other": "その他",
+      "otherCash": "その他 / 現金",
+      "otherCashSub": "現金またはカード未設定"
+    },
+    "saveChanges": "保存",
+    "deleteTransaction": "取引を削除",
+    "cardPicker": {
+      "ariaLabel": "カードを選択",
+      "title": "カードを選択"
+    },
+    "categoryPicker": {
+      "ariaLabel": "カテゴリーを選択",
+      "title": "カテゴリーを選択"
+    }
+  },
+  "editGoal": {
+    "ariaLabel": "目標を編集",
+    "title": "目標を編集",
+    "fields": {
+      "category": "カテゴリー（編集不可）",
+      "categoryHint": "削除して再追加で変更",
+      "amount": "金額",
+      "period": "期間"
+    },
+    "saveChanges": "保存",
+    "saving": "保存中…",
+    "deleteGoal": "目標を削除",
+    "errorConflict": "このカテゴリーと期間の目標はすでに存在します。先に削除するか、別の期間を選択してください。",
+    "errorGeneric": "変更を保存できませんでした。もう一度お試しください。"
+  },
+  "multipliers": {
+    "label": "ポイント還元",
+    "needsManual": "以下にカードのボーナスカテゴリーを追加してください",
+    "empty": "ボーナスカテゴリーはまだありません。",
+    "removeAriaLabel": "{{cat}} を削除",
+    "customOption": "カスタム…",
+    "customPlaceholder": "例：「スーパーマーケット」",
+    "cancel": "キャンセル",
+    "add": "追加",
+    "addCategory": "カテゴリーを追加"
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { Pill } from "@/components/Pill";
@@ -36,6 +37,7 @@ export function EditGoalSheet({
   onClose,
   onRequestDelete,
 }: EditGoalSheetProps) {
+  const { t } = useTranslation();
   const [amount, setAmount] = useState("");
   const [period, setPeriod] = useState<GoalPeriod>("month");
   const [error, setError] = useState<string | null>(null);
@@ -88,12 +90,10 @@ export function EditGoalSheet({
     } catch (err) {
       setSaving(false);
       if (err instanceof ApiError && err.status === 409) {
-        setError(
-          "you already have a goal for this category and period. delete it first, or pick a different period.",
-        );
+        setError(t("editGoal.errorConflict"));
         return;
       }
-      setError("couldn't save changes. try again?");
+      setError(t("editGoal.errorGeneric"));
     }
   };
 
@@ -101,22 +101,22 @@ export function EditGoalSheet({
     <BottomSheet
       open={open}
       onClose={onClose}
-      ariaLabel="edit goal"
+      ariaLabel={t("editGoal.ariaLabel")}
       desktopVariant="side"
     >
-      <h2 className="font-serif text-xl text-ink lowercase-title">edit goal</h2>
+      <h2 className="font-serif text-xl text-ink lowercase-title">{t("editGoal.title")}</h2>
 
       <div className="mt-5 flex flex-col gap-4">
-        <FieldGroup label="category (not editable)">
+        <FieldGroup label={t("editGoal.fields.category")}>
           <div className="flex items-center justify-between">
             <Pill tone="moss">{categoryLabel}</Pill>
             <span className="text-[0.7rem] text-ink-quaternary">
-              delete + re-add to move
+              {t("editGoal.fields.categoryHint")}
             </span>
           </div>
         </FieldGroup>
 
-        <FieldGroup label="amount">
+        <FieldGroup label={t("editGoal.fields.amount")}>
           <div className="flex items-center gap-1">
             <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
@@ -129,7 +129,7 @@ export function EditGoalSheet({
           </div>
         </FieldGroup>
 
-        <FieldGroup label="period">
+        <FieldGroup label={t("editGoal.fields.period")}>
           <div className="mt-1 grid grid-cols-3 gap-1.5">
             {PERIOD_OPTIONS.map((p) => (
               <button
@@ -158,14 +158,14 @@ export function EditGoalSheet({
 
       <div className="mt-7 flex flex-col gap-3">
         <Button fullWidth disabled={!dirty || !valid || saving} onClick={save}>
-          {saving ? "saving…" : "save changes"}
+          {saving ? t("editGoal.saving") : t("editGoal.saveChanges")}
         </Button>
         <button
           type="button"
           onClick={() => onRequestDelete(goal)}
           className="self-center text-sm text-over hover:underline underline-offset-4"
         >
-          delete goal
+          {t("editGoal.deleteGoal")}
         </button>
       </div>
     </BottomSheet>

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Trash2, AlertTriangle, ArrowRight } from "lucide-react";
 import { SketchIcon } from "@/components/SketchIcon";
 import { Pill } from "@/components/Pill";
@@ -16,6 +18,7 @@ import { cn } from "@/lib/utils";
 const LONG_PRESS_MS = 500;
 
 export default function MemoryPage() {
+  const { t } = useTranslation();
   // Memory state + pending-delete timers live in the ledger store at
   // module scope. Navigating away during the undo window still commits
   // the DELETE (parity with cards/transactions). The page itself owns
@@ -58,10 +61,10 @@ export default function MemoryPage() {
     <div className="mx-auto w-full max-w-2xl px-5 pt-8 pb-20">
       <header>
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          ai memory
+          {t("memory.title")}
         </h1>
         <p className="mt-2 text-sm text-ink-secondary">
-          what tameru remembers about you · you can edit or remove anything.
+          {t("memory.subtitle")}
         </p>
       </header>
 
@@ -80,10 +83,10 @@ export default function MemoryPage() {
 
       {/* Facts grid */}
       {!hasLoaded ? (
-        <p className="mt-10 text-center text-sm text-ink-tertiary">loading…</p>
+        <p className="mt-10 text-center text-sm text-ink-tertiary">{t("memory.loading")}</p>
       ) : memory.length === 0 ? (
         <p className="mt-10 text-center text-sm text-ink-tertiary">
-          tameru hasn't remembered anything yet — facts get added as you chat.
+          {t("memory.empty")}
         </p>
       ) : (
         <ul className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -117,7 +120,7 @@ export default function MemoryPage() {
           className="inline-flex items-center gap-2 text-[0.85rem] text-ink-secondary hover:text-ink"
         >
           <SketchIcon kind="sparkle" size={14} seed={59} className="text-moss" />
-          <span>correct or add facts via tameru ai</span>
+          <span>{t("memory.hintFooter")}</span>
           <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </div>
@@ -134,6 +137,7 @@ function CapacityRow({
   overEighty: boolean;
   oldestReinforcedAt: string | null;
 }) {
+  const { t } = useTranslation();
   const pct = Math.min(100, (used / MEMORY_CAPACITY) * 100);
   const oldestDaysAgo =
     oldestReinforcedAt === null ? null : daysSince(oldestReinforcedAt);
@@ -141,10 +145,10 @@ function CapacityRow({
     <div className="mt-6 rounded-2xl border border-hairline bg-surface px-4 py-3">
       <div className="flex items-center justify-between">
         <span className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
-          capacity
+          {t("memory.capacity.label")}
         </span>
         <span className="tabular text-[0.85rem] text-ink-secondary">
-          {used} / {MEMORY_CAPACITY} facts
+          {t("memory.capacity.count", { used, total: MEMORY_CAPACITY })}
         </span>
       </div>
       <div className="mt-2 h-1 overflow-hidden rounded-full bg-sunken">
@@ -158,15 +162,14 @@ function CapacityRow({
       </div>
       {oldestDaysAgo !== null && (
         <div className="mt-2 text-[0.75rem] text-ink-tertiary">
-          oldest fact reinforced {formatDaysAgo(oldestDaysAgo)}
+          {t("memory.capacity.oldestReinforced", { age: formatDaysAgo(oldestDaysAgo, t) })}
         </div>
       )}
       {overEighty && (
         <div className="mt-2 flex items-start gap-2 rounded-xl bg-warn-wash px-3 py-2 text-[0.78rem] text-ink-secondary">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-warn" />
           <span>
-            memory is more than 80% full. older facts may be forgotten as new
-            ones come in — tidy up anything you no longer need.
+            {t("memory.capacity.overEightyWarning")}
           </span>
         </div>
       )}
@@ -200,6 +203,7 @@ function FactTile({
   onUndo: () => void;
   longPressMs: number;
 }) {
+  const { t } = useTranslation();
   const timerRef = useRef<number | null>(null);
 
   const startLongPress = () => {
@@ -222,8 +226,9 @@ function FactTile({
       MEMORY_CATEGORY_LABELS[fact.category as MemoryCategory] ?? fact.category,
     [fact.category],
   );
-  const provenance = useMemo(() => formatProvenance(fact.reinforced_at), [
+  const provenance = useMemo(() => formatProvenance(fact.reinforced_at, t), [
     fact.reinforced_at,
+    t,
   ]);
 
   return (
@@ -248,7 +253,7 @@ function FactTile({
           <button
             type="button"
             onClick={onArm}
-            aria-label="remove fact"
+            aria-label={t("memory.fact.removeAriaLabel")}
             className="flex h-7 w-7 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken hover:text-over"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -267,7 +272,7 @@ function FactTile({
 
       {pending ? (
         <p className="mt-2 text-[0.72rem] text-moss-deep tabular">
-          deleting · tap to undo
+          {t("memory.fact.pendingDelete")}
         </p>
       ) : (
         <p className="mt-2 text-[0.7rem] text-ink-tertiary">{provenance}</p>
@@ -280,7 +285,7 @@ function FactTile({
             onClick={onConfirmDelete}
             className="font-medium text-over hover:underline"
           >
-            remove this fact
+            {t("memory.fact.confirmRemove")}
           </button>
           <span className="text-ink-quaternary">·</span>
           <button
@@ -288,7 +293,7 @@ function FactTile({
             onClick={onCancel}
             className="text-ink-secondary hover:text-ink"
           >
-            cancel
+            {t("memory.fact.cancel")}
           </button>
         </div>
       )}
@@ -303,10 +308,10 @@ function FactTile({
   );
 }
 
-function formatProvenance(reinforcedAt: string): string {
+function formatProvenance(reinforcedAt: string, t: TFunction): string {
   const days = daysSince(reinforcedAt);
-  if (days === null) return "saved from chat";
-  return `reinforced ${formatDaysAgo(days)}`;
+  if (days === null) return t("memory.provenance.savedFromChat");
+  return t("memory.provenance.reinforced", { age: formatDaysAgo(days, t) });
 }
 
 // Whole-day count from an ISO timestamp to "now". Negative ages clamp to
@@ -324,11 +329,11 @@ function daysSince(iso: string): number | null {
 // compose it ("reinforced N days ago" vs "oldest fact reinforced N days
 // ago"). Months threshold (30) matches the recency-decay constant in the
 // pg_cron prune scoring (DESIGN.md §7.6).
-function formatDaysAgo(days: number): string {
-  if (days <= 0) return "today";
-  if (days === 1) return "1 day ago";
-  if (days < 30) return `${days} days ago`;
+function formatDaysAgo(days: number, t: TFunction): string {
+  if (days <= 0) return t("memory.age.today");
+  if (days === 1) return t("memory.age.oneDay");
+  if (days < 30) return t("memory.age.nDays", { count: days });
   const months = Math.floor(days / 30);
-  if (months === 1) return "1 month ago";
-  return `${months} months ago`;
+  if (months === 1) return t("memory.age.oneMonth");
+  return t("memory.age.nMonths", { count: months });
 }

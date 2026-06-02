@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { CATEGORIES } from "@/lib/categories";
 
 /**
@@ -28,6 +29,7 @@ export function MultipliersEditor(props: {
   onMultipliers: (m: Record<string, number>) => void;
   needsManual?: boolean;
 }) {
+  const { t } = useTranslation();
   const [adding, setAdding] = useState(false);
   const [draftCat, setDraftCat] = useState<string>(CATEGORIES[0]);
   const [draftCustom, setDraftCustom] = useState("");
@@ -57,17 +59,17 @@ export function MultipliersEditor(props: {
   return (
     <div className="mt-4">
       <div className="flex items-center justify-between">
-        <div className="text-xs text-ink-tertiary">multipliers</div>
+        <div className="text-xs text-ink-tertiary">{t("multipliers.label")}</div>
         {props.needsManual && entries.length === 0 && (
           <span className="text-[0.7rem] text-amber-deep">
-            add your card's bonus categories below
+            {t("multipliers.needsManual")}
           </span>
         )}
       </div>
 
       {entries.length === 0 && !adding && (
         <p className="mt-1 text-xs text-ink-quaternary">
-          no bonus categories yet.
+          {t("multipliers.empty")}
         </p>
       )}
 
@@ -88,7 +90,7 @@ export function MultipliersEditor(props: {
               />
               <button
                 type="button"
-                aria-label={`remove ${cat}`}
+                aria-label={t("multipliers.removeAriaLabel", { cat })}
                 onClick={() => removeRow(cat)}
                 className="rounded-lg p-1 text-ink-tertiary hover:bg-sunken/60 hover:text-ink"
               >
@@ -112,7 +114,7 @@ export function MultipliersEditor(props: {
                   {c}
                 </option>
               ))}
-              <option value="__custom">custom…</option>
+              <option value="__custom">{t("multipliers.customOption")}</option>
             </select>
             <input
               inputMode="decimal"
@@ -128,7 +130,7 @@ export function MultipliersEditor(props: {
             <input
               type="text"
               maxLength={48}
-              placeholder='e.g. "U.S. supermarkets"'
+              placeholder={t("multipliers.customPlaceholder")}
               value={draftCustom}
               onChange={(e) => setDraftCustom(e.target.value)}
               className="rounded-lg border border-hairline bg-elevated px-2 py-1 text-sm text-ink focus:outline-none"
@@ -144,7 +146,7 @@ export function MultipliersEditor(props: {
               }}
               className="text-xs text-ink-tertiary hover:text-ink"
             >
-              cancel
+              {t("multipliers.cancel")}
             </button>
             <button
               type="button"
@@ -156,7 +158,7 @@ export function MultipliersEditor(props: {
               }
               className="rounded-lg bg-moss px-2.5 py-1 text-xs font-medium text-surface disabled:bg-moss/40"
             >
-              add
+              {t("multipliers.add")}
             </button>
           </div>
         </div>
@@ -166,7 +168,7 @@ export function MultipliersEditor(props: {
           onClick={() => setAdding(true)}
           className="mt-2 inline-flex items-center gap-1 text-xs text-moss-deep hover:text-moss"
         >
-          <Plus className="h-3 w-3" /> add category
+          <Plus className="h-3 w-3" /> {t("multipliers.addCategory")}
         </button>
       )}
     </div>

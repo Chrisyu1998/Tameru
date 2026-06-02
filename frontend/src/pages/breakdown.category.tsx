@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Search, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { AutoLoggedBadge } from "@/components/AutoLoggedBadge";
 import { SwipeableRow } from "@/components/SwipeableRow";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
@@ -15,19 +16,20 @@ import type { Transaction } from "@/lib/fixtures";
 type MonthFilter = "all" | "current" | "previous";
 
 function NotFoundPanel({ slug }: { slug: string }) {
+  const { t } = useTranslation();
   return (
     <div className="mx-auto w-full max-w-md px-5 pt-16 text-center">
       <h1 className="font-serif text-2xl text-ink lowercase-title">
-        unknown category
+        {t("breakdown.unknownCategory")}
       </h1>
       <p className="mt-2 text-sm text-ink-secondary">
-        we don't have a category called "{slug}".
+        {t("breakdown.unknownCategoryBody", { slug })}
       </p>
       <Link
         to="/breakdown"
         className="mt-6 inline-block text-sm text-moss hover:text-moss-deep"
       >
-        ← back to breakdown
+        {t("breakdown.backToBreakdown")}
       </Link>
     </div>
   );
@@ -44,6 +46,7 @@ export default function CategoryListPage() {
 }
 
 function CategoryListBody({ category }: { category: Category }) {
+  const { t } = useTranslation();
   const { transactions, cards, pendingDeletes } = useLedger();
   const catLabel = useCategoryLabel();
 
@@ -93,7 +96,7 @@ function CategoryListBody({ category }: { category: Category }) {
       <header className="flex items-center justify-between">
         <Link
           to="/breakdown"
-          aria-label="back"
+          aria-label={t("breakdown.backAriaLabel")}
           className="flex h-10 w-10 items-center justify-center -ml-2 rounded-full text-ink-secondary transition-colors hover:bg-sunken/60 hover:text-ink"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -111,26 +114,26 @@ function CategoryListBody({ category }: { category: Category }) {
       </header>
 
       <p className="mt-4 text-center text-[0.7rem] uppercase tracking-wider text-ink-tertiary tabular">
-        {formatMoney(total)} · {filtered.length} transactions
+        {formatMoney(total)} · {t("breakdown.transactionCount", { count: filtered.length })}
       </p>
 
       {/* Filter chips */}
       <div className="mt-5 flex flex-col gap-3">
-        <ChipRow label="month">
+        <ChipRow label={t("breakdown.filterMonth")}>
           <Chip active={monthFilter === "all"} onClick={() => setMonthFilter("all")}>
-            all
+            {t("breakdown.filterAll")}
           </Chip>
           <Chip active={monthFilter === "current"} onClick={() => setMonthFilter("current")}>
-            this month
+            {t("breakdown.filterThisMonth")}
           </Chip>
           <Chip active={monthFilter === "previous"} onClick={() => setMonthFilter("previous")}>
-            last month
+            {t("breakdown.filterLastMonth")}
           </Chip>
         </ChipRow>
 
-        <ChipRow label="card">
+        <ChipRow label={t("breakdown.filterCard")}>
           <Chip active={cardFilter === "all"} onClick={() => setCardFilter("all")}>
-            all cards
+            {t("breakdown.filterAllCards")}
           </Chip>
           {cards.map((c) => (
             <Chip
@@ -148,14 +151,14 @@ function CategoryListBody({ category }: { category: Category }) {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="search merchants"
+            placeholder={t("breakdown.searchPlaceholder")}
             className="flex-1 bg-transparent text-sm text-ink placeholder:text-ink-quaternary focus:outline-none"
           />
           {search && (
             <button
               type="button"
               onClick={() => setSearch("")}
-              aria-label="clear search"
+              aria-label={t("breakdown.clearSearch")}
               className="text-ink-tertiary hover:text-ink"
             >
               <X className="h-3.5 w-3.5" />
@@ -166,18 +169,18 @@ function CategoryListBody({ category }: { category: Category }) {
 
       {/* Transaction list */}
       <ul className="mt-6 flex flex-col gap-1.5">
-        {filtered.map((t) => {
-          const pending = pendingDeletes[t.id];
+        {filtered.map((tx) => {
+          const pending = pendingDeletes[tx.id];
           return (
-            <li key={t.id}>
+            <li key={tx.id}>
               <SwipeableRow
-                onConfirmDelete={() => requestDelete(t)}
-                onEdit={() => setEditing(t)}
+                onConfirmDelete={() => requestDelete(tx)}
+                onEdit={() => setEditing(tx)}
               >
                 <button
                   type="button"
                   onClick={() =>
-                    pending ? ledger.undoDelete(t.id) : setEditing(t)
+                    pending ? ledger.undoDelete(tx.id) : setEditing(tx)
                   }
                   className={cn(
                     "flex w-full items-center justify-between bg-surface px-4 py-3 text-left transition-colors",
@@ -191,8 +194,8 @@ function CategoryListBody({ category }: { category: Category }) {
                         pending && "line-through decoration-1"
                       )}
                     >
-                      <span className="truncate">{t.merchant}</span>
-                      {t.autoLogged && <AutoLoggedBadge />}
+                      <span className="truncate">{tx.merchant}</span>
+                      {tx.autoLogged && <AutoLoggedBadge />}
                     </span>
                     <span
                       className={cn(
@@ -201,9 +204,9 @@ function CategoryListBody({ category }: { category: Category }) {
                       )}
                     >
                       {pending
-                        ? "deleting · tap to undo"
-                        : `${formatShortDate(t.date)} · ···· ${cardLast4(
-                            t.cardId
+                        ? t("breakdown.deletingTapToUndo")
+                        : `${formatShortDate(tx.date)} · ···· ${cardLast4(
+                            tx.cardId
                           )}`}
                     </span>
                   </div>
@@ -213,7 +216,7 @@ function CategoryListBody({ category }: { category: Category }) {
                       pending ? "text-ink-tertiary" : "text-ink"
                     )}
                   >
-                    {formatMoney(t.amountCents)}
+                    {formatMoney(tx.amountCents)}
                   </span>
                 </button>
                 {pending && (
@@ -229,7 +232,7 @@ function CategoryListBody({ category }: { category: Category }) {
         {filtered.length === 0 && (
           <li className="flex flex-col items-center gap-3 rounded-2xl border border-hairline bg-sunken/40 py-10 text-center text-sm text-ink-tertiary">
             <SketchIllustration kind="empty-list" size={84} className="text-ink-tertiary/70" />
-            <span>nothing matches your filters.</span>
+            <span>{t("breakdown.emptyFilters")}</span>
           </li>
         )}
       </ul>

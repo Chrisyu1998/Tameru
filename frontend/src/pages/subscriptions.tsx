@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { EditSubscriptionSheet } from "@/components/EditSubscriptionSheet";
 import { useLedger } from "@/lib/ledger";
 import {
@@ -26,6 +27,7 @@ function formatAmount(amount: string): string {
 
 export default function SubscriptionsPage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { items } = useSubscriptions();
   const { cards } = useLedger();
   const [selected, setSelected] = useState<SubscriptionRow | null>(null);
@@ -53,7 +55,7 @@ export default function SubscriptionsPage() {
     selected !== null ? (items.find((s) => s.id === selected.id) ?? selected) : null;
 
   const askToAdd = () => {
-    setChatSeed("Add a new subscription:");
+    setChatSeed(t("subscriptions.chatSeedAdd"));
     navigate("/chat");
   };
 
@@ -61,27 +63,25 @@ export default function SubscriptionsPage() {
     <div className="mx-auto w-full max-w-md px-5 pt-8 pb-24">
       <header>
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          subscriptions
+          {t("subscriptions.title")}
         </h1>
         <p className="mt-2 text-sm text-ink-tertiary">
-          recurring charges, quietly tracked.
+          {t("subscriptions.subtitle")}
         </p>
       </header>
 
       {needsCard.length > 0 && (
         <div className="mt-5 rounded-2xl border border-warn-wash/60 bg-warn-wash/20 px-4 py-3 text-[0.82rem] text-ink">
-          <p className="font-medium">needs a new card</p>
+          <p className="font-medium">{t("subscriptions.needsNewCard.heading")}</p>
           <p className="mt-1 text-ink-secondary">
-            you deleted a card that backed {needsCard.length} subscription
-            {needsCard.length === 1 ? "" : "s"}. tap a row below to pick a new
-            card, or cancel it.
+            {t("subscriptions.needsNewCard.body", { count: needsCard.length })}
           </p>
         </div>
       )}
 
       {items.length === 0 ? (
         <p className="mt-10 text-center text-sm text-ink-tertiary">
-          no subscriptions tracked yet — ask tameru to add one.
+          {t("subscriptions.empty")}
         </p>
       ) : (
         <>
@@ -95,7 +95,7 @@ export default function SubscriptionsPage() {
 
           {paused.length > 0 && (
             <>
-              <SectionHeader label="paused" />
+              <SectionHeader label={t("subscriptions.status.paused")} />
               <ul className="mt-2 flex flex-col">
                 {paused.map((sub) => (
                   <Row key={sub.id} sub={sub} onSelect={() => setSelected(sub)} />
@@ -106,7 +106,7 @@ export default function SubscriptionsPage() {
 
           {cancelled.length > 0 && (
             <>
-              <SectionHeader label="cancelled" />
+              <SectionHeader label={t("subscriptions.status.cancelled")} />
               <ul className="mt-2 flex flex-col">
                 {cancelled.map((sub) => (
                   <Row key={sub.id} sub={sub} onSelect={() => setSelected(sub)} />
@@ -118,7 +118,7 @@ export default function SubscriptionsPage() {
       )}
 
       <AIHintFooter
-        label="ask tameru to add a subscription"
+        label={t("subscriptions.hintAdd")}
         onClick={askToAdd}
       />
 
@@ -150,6 +150,7 @@ function Row({
   sub: SubscriptionRow;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   const dimmed = sub.status !== "active";
   return (
     <li>
@@ -165,14 +166,13 @@ function Row({
           <span className="truncate text-[0.95rem] text-ink">{sub.name}</span>
           {sub.status === "paused" ? (
             <p className="mt-0.5 text-[0.75rem] text-ink-tertiary">
-              paused · no upcoming charges
+              {t("subscriptions.row.pausedNote")}
             </p>
           ) : sub.status === "cancelled" ? (
-            <p className="mt-0.5 text-[0.75rem] text-ink-tertiary">cancelled</p>
+            <p className="mt-0.5 text-[0.75rem] text-ink-tertiary">{t("subscriptions.status.cancelled")}</p>
           ) : (
             <p className="mt-0.5 text-[0.75rem] text-ink-tertiary">
-              next {formatShortDate(sub.next_billing_date)} ·{" "}
-              {formatFrequency(sub.frequency)}
+              {t("subscriptions.row.nextBilling", { date: formatShortDate(sub.next_billing_date), frequency: formatFrequency(sub.frequency) })}
             </p>
           )}
         </div>

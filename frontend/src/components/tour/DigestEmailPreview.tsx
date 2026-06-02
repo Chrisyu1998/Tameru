@@ -1,4 +1,5 @@
 import { Mail } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { tourDigest } from "@/fixtures/tour";
 import { cn } from "@/lib/utils";
 
@@ -10,18 +11,19 @@ import { cn } from "@/lib/utils";
  * presentation or replace it with the production email layout.
  */
 export function DigestEmailPreview() {
+  const { t } = useTranslation();
   return (
     <div className="overflow-hidden rounded-2xl border border-hairline bg-surface shadow-sm">
       <div className="border-b border-hairline bg-sunken/50 px-4 py-3">
         <div className="flex items-center gap-2 text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
           <Mail className="h-3 w-3" strokeWidth={2} />
-          <span>inbox</span>
+          <span>{t("tour.digest.inbox")}</span>
         </div>
         <p className="mt-2 font-serif text-lg text-ink lowercase-title">
           {tourDigest.subject}
         </p>
         <p className="mt-0.5 text-[0.7rem] text-ink-tertiary">
-          {tourDigest.from} · 8:02am
+          {tourDigest.from} · {t("tour.digest.time")}
         </p>
       </div>
 

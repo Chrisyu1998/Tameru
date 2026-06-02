@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, CreditCard } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { BottomSheet } from "@/components/BottomSheet";
 import { MultipliersEditor } from "@/components/MultipliersEditor";
@@ -39,6 +40,7 @@ export function EditCardSheet({
   onClose,
   onRequestDelete,
 }: EditCardSheetProps) {
+  const { t } = useTranslation();
   const [name, setName] = useState("");
   const [color, setColor] = useState("");
   const [program, setProgram] = useState<CardProgram>("Cash");
@@ -106,11 +108,11 @@ export function EditCardSheet({
     PROGRAM_OPTIONS.find((o) => o.value === program)?.label ?? "Cash / Other";
 
   return (
-    <BottomSheet open={open} onClose={onClose} ariaLabel="edit card" desktopVariant="side">
-      <h2 className="font-serif text-xl text-ink lowercase-title">edit card</h2>
+    <BottomSheet open={open} onClose={onClose} ariaLabel={t("editCard.ariaLabel")} desktopVariant="side">
+      <h2 className="font-serif text-xl text-ink lowercase-title">{t("editCard.title")}</h2>
 
       <div className="mt-5 flex flex-col gap-4">
-        <FieldGroup label="name">
+        <FieldGroup label={t("editCard.fields.name")}>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -118,31 +120,31 @@ export function EditCardSheet({
           />
         </FieldGroup>
 
-        <FieldGroup label="last 4 (identity — not editable)">
+        <FieldGroup label={t("editCard.fields.last4")}>
           <div className="flex items-center justify-between">
             <span className="tabular text-[0.95rem] text-ink-tertiary">
               ···· {card.last4 || "—"}
             </span>
             <span className="text-[0.7rem] text-ink-quaternary">
-              delete + re-add to change
+              {t("editCard.fields.last4Hint")}
             </span>
           </div>
         </FieldGroup>
 
         <FieldButton
-          label="program"
+          label={t("editCard.fields.program")}
           icon={<CreditCard className="h-3.5 w-3.5" />}
           value={programLabel}
           onClick={() => setPickerOpen("program")}
         />
 
-        <FieldGroup label="color">
+        <FieldGroup label={t("editCard.fields.color")}>
           <div className="flex items-center gap-3">
             <input
               type="color"
               value={trimmedColor || "#8A8377"}
               onChange={(e) => setColor(e.target.value)}
-              aria-label="card color"
+              aria-label={t("editCard.fields.colorAriaLabel")}
               className="h-7 w-10 cursor-pointer rounded-lg border border-hairline bg-transparent"
             />
             <input
@@ -154,7 +156,7 @@ export function EditCardSheet({
           </div>
         </FieldGroup>
 
-        <FieldGroup label="annual fee">
+        <FieldGroup label={t("editCard.fields.annualFee")}>
           <div className="flex items-center gap-1">
             <span className="font-serif text-ink-tertiary">{currencySymbol()}</span>
             <input
@@ -177,23 +179,23 @@ export function EditCardSheet({
 
       <div className="mt-7 flex flex-col gap-3">
         <Button fullWidth disabled={!dirty || !valid} onClick={save}>
-          save changes
+          {t("editCard.saveChanges")}
         </Button>
         <button
           type="button"
           onClick={() => onRequestDelete(card)}
           className="self-center text-sm text-over hover:underline underline-offset-4"
         >
-          delete card
+          {t("editCard.deleteCard")}
         </button>
       </div>
 
       <BottomSheet
         open={pickerOpen !== null}
         onClose={() => setPickerOpen(null)}
-        ariaLabel="choose program"
+        ariaLabel={t("editCard.programPicker.ariaLabel")}
       >
-        <h3 className="font-serif text-lg text-ink lowercase-title">choose a program</h3>
+        <h3 className="font-serif text-lg text-ink lowercase-title">{t("editCard.programPicker.title")}</h3>
         <ul className="mt-3 flex flex-col">
           {PROGRAM_OPTIONS.map((o) => (
             <li key={o.value}>

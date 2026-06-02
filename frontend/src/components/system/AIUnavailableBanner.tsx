@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { SketchIcon } from "@/components/SketchIcon";
 
 interface Props {
@@ -10,6 +11,7 @@ interface Props {
  * Visually distinct from OfflineBanner (sunken/cool vs warn/warm).
  */
 export function AIUnavailableBanner({ onDismiss }: Props) {
+  const { t } = useTranslation();
   return (
     <div
       role="status"
@@ -29,13 +31,12 @@ export function AIUnavailableBanner({ onDismiss }: Props) {
         />
       </div>
       <p className="flex-1 leading-snug">
-        ai is temporarily unavailable. your dashboard, cards, and edits all
-        still work — only the chat assistant is down.
+        {t("chat.aiUnavailable")}
       </p>
       <button
         type="button"
         onClick={onDismiss}
-        aria-label="dismiss"
+        aria-label={t("chat.dismiss")}
         className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-ink-tertiary hover:bg-warn/15 hover:text-ink-secondary"
       >
         <X className="h-3 w-3" />

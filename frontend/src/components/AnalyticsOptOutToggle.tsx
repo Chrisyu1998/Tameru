@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { identifyUser, setOptOut } from "@/lib/analytics";
 import { updatePreferences } from "@/lib/preferencesApi";
@@ -79,15 +80,16 @@ export function AnalyticsOptOutToggle() {
       });
   };
 
+  const { t } = useTranslation();
+
   return (
     <div className="flex items-center justify-between gap-4 py-3.5">
       <div className="min-w-0">
         <p className="text-[0.95rem] text-ink lowercase-title">
-          pause product analytics
+          {t("privacy.analytics.label")}
         </p>
         <p className="mt-0.5 text-[0.78rem] text-ink-tertiary">
-          stops feature-usage events immediately. transaction data is never
-          sent to analytics.
+          {t("privacy.analytics.desc")}
         </p>
       </div>
       <button

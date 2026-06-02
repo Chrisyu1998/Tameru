@@ -1,9 +1,11 @@
 import { Link, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { SketchIcon } from "@/components/SketchIcon";
 import { cn } from "@/lib/utils";
 
 export function BottomNav() {
   const pathname = useLocation().pathname;
+  const { t } = useTranslation();
 
   const isActive = (path: string) =>
     path === "/" ? pathname === "/" : pathname.startsWith(path);
@@ -16,7 +18,7 @@ export function BottomNav() {
       <div className="relative mx-auto flex h-16 max-w-md items-center justify-between px-10">
         <NavItem
           to="/"
-          label="home"
+          label={t("nav.home")}
           active={isActive("/")}
           icon={<SketchIcon kind="home" size={22} seed={11} />}
         />
@@ -24,7 +26,7 @@ export function BottomNav() {
         {/* Center raised chat button — sketched bubble on moss circle */}
         <Link
           to="/chat"
-          aria-label="chat"
+          aria-label={t("nav.chat")}
           className={cn(
             "absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/3",
             "flex h-12 w-12 items-center justify-center rounded-full border border-hairline",
@@ -36,7 +38,7 @@ export function BottomNav() {
 
         <NavItem
           to="/more"
-          label="more"
+          label={t("nav.more")}
           active={isActive("/more")}
           icon={<SketchIcon kind="dots" size={22} seed={41} />}
         />

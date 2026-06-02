@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface MessageBubbleProps {
@@ -70,12 +71,13 @@ const TOOL_LABELS: Record<string, string> = {
 
 /** Tiny tertiary attribution line shown below an AI message. */
 export function ToolAttribution({ name }: { name: string }) {
+  const { t } = useTranslation();
   const label = TOOL_LABELS[name];
   return (
     <div className="mt-1 flex w-full justify-start">
       <span className="inline-flex items-center gap-1.5 px-1 text-[0.7rem] text-ink-tertiary tracking-wide">
         <span aria-hidden className="inline-block h-1 w-1 rounded-full bg-moss" />
-        via {label ? label : <span className="font-mono">{name}</span>}
+        {t("chat.toolAttribution.via")} {label ? label : <span className="font-mono">{name}</span>}
       </span>
     </div>
   );

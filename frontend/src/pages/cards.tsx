@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowRight, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Pill } from "@/components/Pill";
 import { SwipeableRow } from "@/components/SwipeableRow";
 import { SketchIcon } from "@/components/SketchIcon";
@@ -46,6 +47,7 @@ function hasTrackableFee(card: Card): boolean {
 
 export default function CardsPage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { cards, pendingCardDeletes } = useLedger();
   const [editing, setEditing] = useState<Card | null>(null);
   const [editingAf, setEditingAf] = useState<Card | null>(null);
@@ -74,7 +76,7 @@ export default function CardsPage() {
   }, [refreshAfs]);
 
   const askToAddCard = () => {
-    setChatSeed("Add a new card:");
+    setChatSeed(t("cards.chatSeedAddCard"));
     navigate("/chat");
   };
 
@@ -89,9 +91,9 @@ export default function CardsPage() {
   return (
     <div className="mx-auto w-full max-w-md px-5 pt-8 pb-24">
       <header>
-        <h1 className="font-serif text-3xl text-ink lowercase-title">my cards</h1>
+        <h1 className="font-serif text-3xl text-ink lowercase-title">{t("cards.title")}</h1>
         <p className="mt-2 text-sm text-ink-tertiary">
-          tap a card to edit. swipe left to remove.
+          {t("cards.subtitle")}
         </p>
       </header>
 
@@ -141,7 +143,7 @@ export default function CardsPage() {
       )}
 
       <AIHintFooter
-        label="ask tameru to add a card"
+        label={t("cards.hintAddCard")}
         onClick={askToAddCard}
       />
 
@@ -180,6 +182,7 @@ function CardTile({
   af: SubscriptionRow | null;
   onAfTap: () => void;
 }) {
+  const { t } = useTranslation();
   const stripe = card.color ?? "#8A8377";
   return (
     <div className="relative flex items-stretch overflow-hidden">
@@ -204,7 +207,7 @@ function CardTile({
         </div>
         {pending ? (
           <p className="mt-2 text-[0.72rem] text-moss-deep tabular">
-            deleting · tap to undo
+            {t("cards.deletingTapToUndo")}
           </p>
         ) : (
           <>
@@ -239,12 +242,12 @@ function CardTile({
                   }
                 }}
                 className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[0.72rem] text-ink-tertiary hover:bg-elevated cursor-pointer"
-                aria-label="edit annual fee tracking"
+                aria-label={t("cards.afChip.editAriaLabel")}
               >
                 <RefreshCw className="h-3 w-3" />
                 <span className="tabular">${formatAfAmount(af.amount)}</span>
                 <span>·</span>
-                <span>next {formatAfDate(af.next_billing_date)}</span>
+                <span>{t("cards.afChip.next", { date: formatAfDate(af.next_billing_date) })}</span>
               </div>
             ) : (
               hasTrackableFee(card) && (
@@ -263,10 +266,10 @@ function CardTile({
                     }
                   }}
                   className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-dashed border-hairline px-2 py-0.5 text-[0.72rem] text-ink-quaternary hover:bg-elevated cursor-pointer"
-                  aria-label="track annual fee"
+                  aria-label={t("cards.afChip.trackAriaLabel")}
                 >
                   <RefreshCw className="h-3 w-3" />
-                  <span>track ${formatAfAmount(card.annualFee ?? "")} AF</span>
+                  <span>{t("cards.afChip.trackLabel", { amount: formatAfAmount(card.annualFee ?? "") })}</span>
                 </div>
               )
             )}
@@ -289,14 +292,15 @@ function formatAfAmount(amount: string): string {
 const formatAfDate = formatFullDate;
 
 function EmptyCards({ onAsk }: { onAsk: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="mt-12 flex flex-col items-center text-center">
       <SketchIllustration kind="no-cards" size={108} className="text-ink-tertiary" />
       <p className="mt-4 font-serif text-xl text-ink lowercase-title">
-        no cards yet
+        {t("cards.empty.heading")}
       </p>
       <p className="mt-1 max-w-[28ch] text-[0.85rem] text-ink-tertiary">
-        tameru learns better with a card or two on file.
+        {t("cards.empty.body")}
       </p>
       <button
         type="button"
@@ -304,7 +308,7 @@ function EmptyCards({ onAsk }: { onAsk: () => void }) {
         className="mt-5 inline-flex h-11 items-center gap-2 rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
       >
         <SketchIcon kind="sparkle" size={16} seed={9} />
-        ask tameru ai to add one
+        {t("cards.empty.cta")}
       </button>
     </div>
   );

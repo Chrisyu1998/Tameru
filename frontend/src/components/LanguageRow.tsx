@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { detectUiLanguage } from "@/lib/auth";
 import { updatePreferences } from "@/lib/preferencesApi";
@@ -62,12 +63,13 @@ export function LanguageRow() {
       });
   };
 
+  const { t } = useTranslation();
+
   return (
     <div className="flex flex-col gap-1 px-1 py-3">
-      <span className="text-[0.95rem] text-ink">language</span>
+      <span className="text-[0.95rem] text-ink">{t("settings.language.label")}</span>
       <span className="text-[0.78rem] text-ink-tertiary">
-        how tameru talks to you — the interface, chat replies, and your weekly
-        digest. defaults to this device's language.
+        {t("settings.language.desc")}
       </span>
       <select
         value={current}

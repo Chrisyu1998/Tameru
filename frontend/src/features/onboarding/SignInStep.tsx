@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Mail } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { signInWithGoogle, signInWithMagicLink } from "@/lib/auth";
 
@@ -27,6 +28,7 @@ function GoogleLogo() {
 type Mode = "buttons" | "email" | "sent";
 
 export function SignInStep(_props: SignInStepProps) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<Mode>("buttons");
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,7 +41,7 @@ export function SignInStep(_props: SignInStepProps) {
       await signInWithGoogle();
     } catch (e) {
       setBusy(false);
-      setError(e instanceof Error ? e.message : "could not start sign-in.");
+      setError(e instanceof Error ? e.message : t("onboarding.signin.errorGoogle"));
     }
   };
 
@@ -52,7 +54,7 @@ export function SignInStep(_props: SignInStepProps) {
       await signInWithMagicLink(trimmed);
       setMode("sent");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "could not send the link.");
+      setError(e instanceof Error ? e.message : t("onboarding.signin.errorLink"));
     } finally {
       setBusy(false);
     }
@@ -60,19 +62,22 @@ export function SignInStep(_props: SignInStepProps) {
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-6 pb-10 pt-24 animate-fade-up">
-      <h1 className="font-serif text-3xl text-ink lowercase-title">sign in</h1>
+      <h1 className="font-serif text-3xl text-ink lowercase-title">
+        {t("onboarding.signin.title")}
+      </h1>
       <p className="mt-2 text-sm text-ink-tertiary">
-        we'll keep your ledger between us.
+        {t("onboarding.signin.subtitle")}
       </p>
 
       {mode === "sent" ? (
         <div className="mt-12 flex flex-col gap-4 rounded-2xl border border-hairline bg-elevated p-5">
           <p className="font-serif text-lg text-ink lowercase-title">
-            check your email
+            {t("onboarding.signin.checkEmail")}
           </p>
           <p className="text-sm text-ink-secondary">
-            we sent a sign-in link to{" "}
-            <span className="text-ink">{email}</span>. open it on this device.
+            {t("onboarding.signin.sentLinkTo")}{" "}
+            <span className="text-ink">{email}</span>.{" "}
+            {t("onboarding.signin.openOnDevice")}
           </p>
           <button
             type="button"
@@ -82,7 +87,7 @@ export function SignInStep(_props: SignInStepProps) {
             }}
             className="self-start text-xs text-ink-tertiary hover:text-ink-secondary"
           >
-            use a different email
+            {t("onboarding.signin.useDifferentEmail")}
           </button>
         </div>
       ) : (
@@ -94,12 +99,12 @@ export function SignInStep(_props: SignInStepProps) {
             className="inline-flex h-12 w-full items-center justify-center gap-3 rounded-2xl border border-hairline bg-elevated text-[0.95rem] font-medium text-ink transition-colors hover:bg-surface disabled:opacity-60"
           >
             <GoogleLogo />
-            continue with Google
+            {t("onboarding.signin.google")}
           </button>
 
           <div className="flex items-center gap-3 py-1 text-xs text-ink-quaternary">
             <span className="h-px flex-1 bg-hairline" />
-            <span className="lowercase tracking-wider">or</span>
+            <span className="lowercase tracking-wider">{t("onboarding.signin.or")}</span>
             <span className="h-px flex-1 bg-hairline" />
           </div>
 
@@ -111,7 +116,7 @@ export function SignInStep(_props: SignInStepProps) {
               disabled={busy}
             >
               <Mail className="h-4 w-4" />
-              continue with email
+              {t("onboarding.signin.email")}
             </Button>
           ) : (
             <form
@@ -127,7 +132,7 @@ export function SignInStep(_props: SignInStepProps) {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder={t("onboarding.signin.emailPlaceholder")}
                 disabled={busy}
                 className="h-12 w-full rounded-2xl border border-hairline bg-elevated px-4 text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:border-moss focus:outline-none disabled:opacity-60"
               />
@@ -137,7 +142,7 @@ export function SignInStep(_props: SignInStepProps) {
                 disabled={busy || email.trim().length === 0}
               >
                 <Mail className="h-4 w-4" />
-                {busy ? "sending…" : "send sign-in link"}
+                {busy ? t("onboarding.signin.sending") : t("onboarding.signin.sendLink")}
               </Button>
             </form>
           )}
@@ -149,10 +154,15 @@ export function SignInStep(_props: SignInStepProps) {
       <div className="flex-1" />
 
       <p className="mt-12 text-center text-[0.7rem] leading-relaxed text-ink-quaternary">
-        by continuing you agree to our{" "}
-        <span className="underline-offset-2 hover:underline">terms</span> and{" "}
-        <span className="underline-offset-2 hover:underline">privacy notice</span>.
-        we never sell your data.
+        {t("onboarding.signin.legalPrefix")}{" "}
+        <span className="underline-offset-2 hover:underline">
+          {t("onboarding.signin.legalTerms")}
+        </span>{" "}
+        {t("onboarding.signin.legalAnd")}{" "}
+        <span className="underline-offset-2 hover:underline">
+          {t("onboarding.signin.legalPrivacy")}
+        </span>
+        . {t("onboarding.signin.legalNeverSell")}
       </p>
     </div>
   );

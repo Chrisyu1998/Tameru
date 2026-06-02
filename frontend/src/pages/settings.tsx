@@ -9,6 +9,7 @@ import {
   Upload,
   User,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
@@ -52,36 +53,37 @@ type SectionId =
 
 interface Section {
   id: SectionId;
-  label: string;
+  labelKey: string;
   icon: React.ReactNode;
   /** When true, renders as a Link to a separate route instead of an in-pane section. */
   href?: string;
 }
 
 const sections: Section[] = [
-  { id: "account", label: "account", icon: <User className="h-4 w-4" /> },
+  { id: "account", labelKey: "settings.nav.account", icon: <User className="h-4 w-4" /> },
   {
     id: "connections",
-    label: "claude connections",
+    labelKey: "settings.nav.connections",
     icon: <Plug className="h-4 w-4" />,
     href: "/connections",
   },
-  { id: "import", label: "import", icon: <Upload className="h-4 w-4" /> },
+  { id: "import", labelKey: "settings.nav.import", icon: <Upload className="h-4 w-4" /> },
   {
     id: "notifications",
-    label: "notifications",
+    labelKey: "settings.nav.notifications",
     icon: <Bell className="h-4 w-4" />,
   },
-  { id: "privacy", label: "privacy", icon: <Shield className="h-4 w-4" /> },
+  { id: "privacy", labelKey: "settings.nav.privacy", icon: <Shield className="h-4 w-4" /> },
 ];
 
 export default function SettingsPage() {
   const [active, setActive] = useState<SectionId>("account");
+  const { t } = useTranslation();
 
   return (
     <div className="mx-auto w-full max-w-5xl px-5 pt-8 pb-20">
       <h1 className="font-serif text-3xl text-ink lowercase-title md:hidden">
-        settings
+        {t("settings.title")}
       </h1>
 
       {/* Mobile: simple list mirroring More menu's secondary section */}
@@ -94,7 +96,7 @@ export default function SettingsPage() {
                 className="flex items-center gap-3 px-4 py-3.5 text-[0.95rem] text-ink hover:bg-elevated"
               >
                 <span className="text-ink-tertiary">{s.icon}</span>
-                <span className="flex-1 lowercase">{s.label}</span>
+                <span className="flex-1 lowercase">{t(s.labelKey)}</span>
                 <ChevronRight className="h-4 w-4 text-ink-quaternary" />
               </Link>
             </li>
@@ -106,7 +108,7 @@ export default function SettingsPage() {
                 className="flex w-full items-center gap-3 px-4 py-3.5 text-left text-[0.95rem] text-ink hover:bg-elevated"
               >
                 <span className="text-ink-tertiary">{s.icon}</span>
-                <span className="flex-1 lowercase">{s.label}</span>
+                <span className="flex-1 lowercase">{t(s.labelKey)}</span>
                 <ChevronRight className="h-4 w-4 text-ink-quaternary" />
               </button>
             </li>
@@ -123,7 +125,7 @@ export default function SettingsPage() {
       <div className="hidden md:flex md:gap-8 md:pt-2">
         <aside className="w-56 flex-shrink-0">
           <h1 className="px-3 font-serif text-2xl text-ink lowercase-title">
-            settings
+            {t("settings.title")}
           </h1>
           <nav className="mt-5 flex flex-col gap-0.5">
             {sections.map((s) => {
@@ -137,7 +139,7 @@ export default function SettingsPage() {
                 return (
                   <Link key={s.id} to={s.href} className={baseCls}>
                     {s.icon}
-                    <span className="lowercase">{s.label}</span>
+                    <span className="lowercase">{t(s.labelKey)}</span>
                   </Link>
                 );
               }
@@ -149,7 +151,7 @@ export default function SettingsPage() {
                   className={cn(baseCls, "text-left")}
                 >
                   {s.icon}
-                  <span className="lowercase">{s.label}</span>
+                  <span className="lowercase">{t(s.labelKey)}</span>
                 </button>
               );
             })}
@@ -217,22 +219,22 @@ function ReadonlyRow({
 }
 
 function AccountPanel() {
+  const { t } = useTranslation();
   const email = useAppStore((s) => s.user?.email ?? "");
   const homeCurrency = useAppStore((s) => s.homeCurrency);
   return (
     <div>
-      <PanelHeading title="account" subtitle="who you are." />
+      <PanelHeading title={t("settings.account.title")} subtitle={t("settings.account.subtitle")} />
       <div className="rounded-2xl border border-hairline bg-surface px-4">
-        <ReadonlyRow label="email" value={email} note="immutable" />
+        <ReadonlyRow label={t("settings.account.emailLabel")} value={email} note={t("settings.account.immutable")} />
         <ReadonlyRow
-          label="home currency"
+          label={t("settings.account.currencyLabel")}
           value={currencyDisplay(homeCurrency)}
-          note="immutable"
+          note={t("settings.account.immutable")}
         />
       </div>
       <p className="mt-3 px-1 text-[0.78rem] text-ink-tertiary">
-        these can't be changed yet — by design. your home currency anchors
-        every comparison and your email anchors your data.
+        {t("settings.account.immutableNote")}
       </p>
       <div className="mt-5 rounded-2xl border border-hairline bg-surface px-4">
         <LanguageRow />
@@ -242,16 +244,17 @@ function AccountPanel() {
 }
 
 function ImportPanel() {
+  const { t } = useTranslation();
   const [sheetOpen, setSheetOpen] = useState(false);
   return (
     <div>
       <PanelHeading
-        title="import"
-        subtitle="bring transactions in from another tool."
+        title={t("settings.import.title")}
+        subtitle={t("settings.import.subtitle")}
       />
       <div className="rounded-2xl border border-hairline bg-surface px-4 py-4">
         <p className="text-[0.9rem] text-ink">
-          drop a csv exported from your bank, ynab, or copilot.
+          {t("settings.import.body")}
         </p>
         <button
           type="button"
@@ -260,11 +263,10 @@ function ImportPanel() {
           data-testid="open-import-csv"
         >
           <Upload className="h-4 w-4" />
-          choose a csv
+          {t("settings.import.chooseCsv")}
         </button>
         <p className="mt-3 text-[0.78rem] text-ink-tertiary">
-          tameru detects the columns, categorizes in batches, and skips
-          rows that already exist. up to 5 MB and 5,000 rows.
+          {t("settings.import.hint")}
         </p>
       </div>
       <ImportCsvSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
@@ -331,16 +333,17 @@ function NotificationsPanel() {
       });
   };
 
+  const { t } = useTranslation();
   return (
     <div>
       <PanelHeading
-        title="notifications"
-        subtitle="tameru speaks softly. you choose how often."
+        title={t("settings.notifications.title")}
+        subtitle={t("settings.notifications.subtitle")}
       />
       <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <ToggleRow
-          label="weekly digest email"
-          desc="a quiet recap at monday 9am your time. unsubscribe link in every send."
+          label={t("settings.notifications.weeklyDigestLabel")}
+          desc={t("settings.notifications.weeklyDigestDesc")}
           checked={weekly}
           onChange={handleWeeklyChange}
           disabled={savingWeekly}
@@ -358,11 +361,12 @@ function PrivacyPanel() {
   // land in one place. Optimistic-write + monotonic-sequence + SDK
   // lockstep for the opt-out toggle live in AnalyticsOptOutToggle
   // itself (Day 26).
+  const { t } = useTranslation();
   return (
     <div>
       <PanelHeading
-        title="privacy"
-        subtitle="what tameru does with your data, and what it doesn't."
+        title={t("settings.privacy.title")}
+        subtitle={t("settings.privacy.subtitle")}
       />
       <div className="divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <AnalyticsOptOutToggle />

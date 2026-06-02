@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Download } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { track } from "@/lib/analytics";
 import { downloadUserDataExport } from "@/lib/exportApi";
@@ -24,6 +25,7 @@ import { cn } from "@/lib/utils";
 export function ExportDataButton() {
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorText, setErrorText] = useState<string | null>(null);
+  const { t } = useTranslation();
 
   const handleClick = async () => {
     if (status === "loading") return;
@@ -38,8 +40,8 @@ export function ExportDataButton() {
       setStatus("error");
       setErrorText(
         err instanceof Error
-          ? "couldn't prepare your export. try again in a moment."
-          : "something went wrong. try again in a moment.",
+          ? t("privacy.export.errorRetry")
+          : t("privacy.export.errorGeneric"),
       );
     }
   };
@@ -49,11 +51,10 @@ export function ExportDataButton() {
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <p className="text-[0.95rem] text-ink lowercase-title">
-            export my data
+            {t("privacy.export.label")}
           </p>
           <p className="mt-0.5 text-[0.78rem] text-ink-tertiary">
-            downloads a json file with your transactions, cards,
-            subscriptions, memory facts, chat history, and preferences.
+            {t("privacy.export.desc")}
           </p>
         </div>
         <button
@@ -68,7 +69,7 @@ export function ExportDataButton() {
           data-testid="export-data-button"
         >
           <Download className="h-4 w-4" />
-          {status === "loading" ? "preparing…" : "export"}
+          {status === "loading" ? t("privacy.export.preparing") : t("privacy.export.button")}
         </button>
       </div>
       {status === "error" && errorText && (

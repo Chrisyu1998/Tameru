@@ -1,4 +1,5 @@
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface RowActionsProps {
@@ -14,6 +15,7 @@ interface RowActionsProps {
  * Edit + delete icons reveal on group-hover or keyboard focus.
  */
 export function RowActions({ onEdit, onDelete, className }: RowActionsProps) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -36,7 +38,7 @@ export function RowActions({ onEdit, onDelete, className }: RowActionsProps) {
               e.stopPropagation();
               onEdit();
             }}
-            aria-label="edit"
+            aria-label={t("chat.rowActions.edit")}
             className="flex h-7 w-7 items-center justify-center rounded-full text-ink-tertiary hover:bg-sunken/60 hover:text-ink focus:outline-none focus:bg-sunken/60 focus:text-ink"
           >
             <Pencil className="h-3.5 w-3.5" />
@@ -49,7 +51,7 @@ export function RowActions({ onEdit, onDelete, className }: RowActionsProps) {
               e.stopPropagation();
               onDelete();
             }}
-            aria-label="delete"
+            aria-label={t("chat.rowActions.delete")}
             className="flex h-7 w-7 items-center justify-center rounded-full text-ink-tertiary hover:bg-over-wash hover:text-over focus:outline-none focus:bg-over-wash focus:text-over"
           >
             <Trash2 className="h-3.5 w-3.5" />

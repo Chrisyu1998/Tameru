@@ -1,0 +1,826 @@
+{
+  "nav": {
+    "home": "首頁",
+    "cards": "我的卡片",
+    "subscriptions": "訂閱",
+    "goals": "目標",
+    "memory": "AI 記憶",
+    "settings": "設定",
+    "more": "更多",
+    "chat": "聊天"
+  },
+  "common": {
+    "clearLedgerDev": "清除帳本（開發）",
+    "restartOnboardingDev": "重新開始引導（開發）",
+    "pendingSync_one": "{{count}} 筆待同步",
+    "pendingSync_other": "{{count}} 筆待同步",
+    "undoToast": {
+      "removing": "刪除中",
+      "undo": "復原"
+    },
+    "close": "關閉",
+    "closeSheet": "關閉面板",
+    "displaced": {
+      "title": "您已在其他裝置登入。",
+      "body": "此工作階段已結束。",
+      "signInAgain": "重新登入"
+    },
+    "updateToast": {
+      "message": "有可用的新版本。",
+      "later": "稍後",
+      "refresh": "重新載入"
+    },
+    "delete": "刪除",
+    "confirmDelete": "確認刪除",
+    "autoLoggedAriaLabel": "tameru 自動記錄",
+    "autoLoggedTooltip": "tameru 自動記錄 — 偵測為定期扣款。"
+  },
+  "onboarding": {
+    "back": "返回",
+    "splash": {
+      "tagline": "有意識的帳本",
+      "continue": "繼續",
+      "takeTour": "導覽介紹"
+    },
+    "philosophy": {
+      "title": "為什麼要手動記帳？",
+      "p1": "大多數記帳應用程式會自動同步銀行資料。tameru 故意不這樣做。",
+      "p2": "記錄消費的動作，哪怕只有 10 秒，也能建立對金錢的意識。Mint 自動同步了一切，人們仍然超支——因為自動化意味著看不見。",
+      "p3": "tameru 要求你記錄自己的消費。AI 處理其餘的一切——分類、模式分析、提問與提示。你提供數據，tameru 提供洞察。",
+      "p4": "如果這聽起來是正確的取捨，讓我們開始吧。",
+      "getStarted": "開始",
+      "takeTour": "導覽介紹"
+    },
+    "signin": {
+      "title": "登入",
+      "subtitle": "你的帳本只有你我知道。",
+      "checkEmail": "查看你的電子郵件",
+      "sentLinkTo": "我們已將登入連結發送至",
+      "openOnDevice": "請在此裝置上開啟。",
+      "useDifferentEmail": "使用其他電子郵件",
+      "google": "透過 Google 繼續",
+      "or": "或",
+      "email": "透過電子郵件繼續",
+      "emailPlaceholder": "you@example.com",
+      "sending": "發送中…",
+      "sendLink": "發送登入連結",
+      "errorGoogle": "無法啟動登入。",
+      "errorLink": "無法發送連結。",
+      "legalPrefix": "繼續即表示你同意我們的",
+      "legalTerms": "使用條款",
+      "legalAnd": "及",
+      "legalPrivacy": "隱私說明",
+      "legalNeverSell": "我們絕不出售你的資料。"
+    },
+    "currency": {
+      "irreversible": "無法變更",
+      "title": "主要貨幣",
+      "subtitle": "這是計算所有支出的基準。",
+      "warningTitle": "一旦設定，主要貨幣無法更改",
+      "warningBullet1": "所有交易，無論使用哪種貨幣，都會換算成此貨幣進行統計。",
+      "warningBullet2": "之後更改將使所有歷史數據失效——因此我們不允許更改。",
+      "setting": "設定中…",
+      "confirm": "我了解——設定為 {{currency}}",
+      "sheetTitle": "選擇主要貨幣",
+      "sheetAriaLabel": "選擇主要貨幣",
+      "error": "無法設定你的貨幣。"
+    },
+    "addCard": {
+      "stepLabel": "第 1 步，共 2 步",
+      "title": "新增你的第一張卡片",
+      "subtitle": "輸入卡片名稱——我們會找出其餘資訊。",
+      "namePlaceholder": "卡片名稱",
+      "lookingUp": "查詢點數倍率中…",
+      "nameChanged": "卡片名稱已變更——點擊「查詢」以更新{{cardName}}的倍率。",
+      "thisCard": "此卡片",
+      "lookItUp": "查詢",
+      "adding": "新增中…",
+      "addCard": "新增卡片",
+      "skipForNow": "略過",
+      "lookupFailed": "查詢失敗——請手動填寫資訊。",
+      "errorDuplicate": "你已有末四碼為 {{lastFour}} 的 {{name}}——請從卡片頁面編輯該卡片。",
+      "errorGeneric": "無法新增卡片，請再試一次。",
+      "preview": {
+        "unresolvedBoth": "查詢無法確定發行商或網路——請從下方選擇以繼續。",
+        "unresolvedIssuer": "查詢無法確定發行銀行——請從下方選擇以繼續。",
+        "unresolvedNetwork": "查詢無法確定卡片網路——請從下方選擇以繼續。",
+        "needsManual": "無法自動填寫——請調整下方欄位。",
+        "issuer": "發行商",
+        "network": "網路",
+        "selectPlaceholder": "選擇…",
+        "lastFour": "末四碼",
+        "annualFee": "年費",
+        "program": "點數方案",
+        "sources": "資料來源："
+      }
+    },
+    "csvImport": {
+      "stepLabel": "第 2 步，共 2 步",
+      "title": "匯入過往記錄",
+      "subtitle": "拖入銀行的 CSV 檔案，為你的帳本預填資料。",
+      "dropHere": "將 CSV 拖放到這裡",
+      "orTapBrowse": "或點擊瀏覽",
+      "tapToChooseAnother": "點擊選擇其他檔案",
+      "worksWith": "支援以下銀行匯出",
+      "continueWithImport": "繼續匯入",
+      "skipForNow": "略過"
+    },
+    "csvProcessing": {
+      "status1": "解析資料列中…",
+      "status2": "比對商家中…",
+      "status3": "分類中…",
+      "status4": "即將完成…",
+      "ofTotal": "/ {{total}}"
+    },
+    "cardReview": {
+      "pillLabel": "AI 草稿 · 儲存前請確認",
+      "highConfidence": "高信心度",
+      "mediumConfidence": "中信心度",
+      "lowConfidence": "低信心度",
+      "confirmEdit": "確認編輯",
+      "cancelEdit": "取消編輯",
+      "editRow": "編輯{{category}}",
+      "sources": "資料來源",
+      "saveCard": "儲存卡片",
+      "tryAgain": "重試",
+      "discard": "捨棄"
+    }
+  },
+  "chat": {
+    "back": "返回",
+    "newChat": "新聊天",
+    "placeholder": "輸入或點擊麥克風",
+    "thinking": "思考中…",
+    "offline": "離線 — 重新連線後訊息將自動傳送。",
+    "retry": "重試",
+    "dismiss": "關閉",
+    "send": "傳送",
+    "recordVoice": "錄製語音",
+    "emptyState": {
+      "heading": "告訴我你花了什麼",
+      "body": "輸入或說出來，我來整理其餘的。也可以請我編輯或比較。",
+      "devSimulateOutage": "dev · 模擬 AI 中斷橫幅"
+    },
+    "examples": {
+      "coffee": "咖啡 $5.50",
+      "lunch": "與 M 午餐 $24",
+      "editDinner": "編輯那次 lupa 晚餐",
+      "compare": "餐飲 vs 食品雜貨"
+    },
+    "serviceBanner": {
+      "aiMoment": "AI 目前遇到問題，請幾分鐘後再試。",
+      "dismiss": "關閉"
+    },
+    "dailyCap": {
+      "title": "每日 AI 配額已用完",
+      "body": "我將在 UTC 午夜恢復。在此期間你仍可以瀏覽儀表板並編輯現有交易。"
+    },
+    "offlineNotice": "離線 — 重新連線後訊息將自動傳送。",
+    "parseCard": {
+      "merchant": "商家",
+      "amount": "金額",
+      "date": "日期",
+      "card": "卡片",
+      "category": "類別",
+      "other": "其他",
+      "looksRight": "沒問題",
+      "letMeFixIt": "我來修改",
+      "orJustTell": "或直接告訴我要改什麼。",
+      "logged": "已記錄。",
+      "deleted": "已刪除。",
+      "notSaved": "未儲存。",
+      "queued": "已排隊 — 上線後同步。",
+      "doubleCheckField": "請再確認這個欄位"
+    },
+    "cardParseCard": {
+      "last4": "末4碼",
+      "annualFee": "年費",
+      "nextRenewal": "下次續期（選填）",
+      "autoLog": "到期時將自動記錄。",
+      "clearRenewalDate": "清除續期日期",
+      "issuer": "發卡機構",
+      "network": "卡片網路",
+      "selectPlaceholder": "選擇…",
+      "lookupWarning": "查詢無法確認",
+      "lookupWarningIssuerAndNetwork": "發卡機構或卡片網路",
+      "lookupWarningIssuer": "發卡銀行",
+      "lookupWarningNetwork": "卡片網路",
+      "lookupWarningTail": "— 請在下方選擇以繼續。",
+      "sources": "資料來源:",
+      "looksRight": "沒問題",
+      "enterLast4": "請輸入末4碼以繼續。",
+      "added": "已新增。",
+      "deleted": "已刪除。",
+      "notSaved": "未儲存。",
+      "queued": "已排隊 — 上線後同步。"
+    },
+    "subscriptionParseCard": {
+      "amount": "金額",
+      "category": "類別",
+      "card": "卡片",
+      "noCardACH": "無卡片・銀行扣款",
+      "starts": "開始",
+      "firstAutoLog": "首次自動記錄",
+      "backfillNotice": "今天的費用不會回補 — 若要加入帳本請手動記錄。如需更改週期請取消後重新新增。",
+      "amountError": "金額必須是正數。",
+      "cadence": "週期:",
+      "looksRight": "沒問題",
+      "tracking": "追蹤中。",
+      "paused": "已暫停。",
+      "cancelled": "已取消。",
+      "notSaved": "未儲存。",
+      "queued": "已排隊 — 上線後同步。"
+    },
+    "candidateCards": {
+      "nothingMatched": "沒有符合的結果。",
+      "more": "還有{{count}}筆"
+    },
+    "voice": {
+      "listening": "聆聽中…",
+      "submitNow": "立即傳送",
+      "cancel": "取消",
+      "cancelVoiceInput": "取消語音輸入",
+      "langChipAria": "語音語言：{{lang}}。點擊切換。",
+      "errorNotAllowed": "語音存取遭拒。請在瀏覽器設定中為此網站啟用麥克風，然後再試。",
+      "errorNoSpeech": "沒有聽到聲音，請再試一次。",
+      "errorNetwork": "語音需要網路連線 — 重新連線後再試。",
+      "errorAudioCapture": "未偵測到麥克風，請檢查裝置。",
+      "errorUnknown": "語音輸入失敗，請再試。",
+      "tryAgain": "再試一次",
+      "langEn": "en",
+      "langZh": "中",
+      "langJa": "日",
+      "langAriaEn": "英文",
+      "langAriaZh": "中文",
+      "langAriaJa": "日文"
+    },
+    "toolAttribution": {
+      "via": "透過"
+    },
+    "drawer": {
+      "label": "tameru 聊天",
+      "emptyHeading": "隨意提問關於你的消費",
+      "emptyBody": "記錄消費、編輯交易或比較類別。",
+      "newChat": "新聊天",
+      "collapse": "收合",
+      "expand": "展開",
+      "close": "關閉",
+      "retry": "重試",
+      "dismiss": "關閉"
+    },
+    "cmdkTooltip": {
+      "label": "從任何地方開啟 tameru AI",
+      "gotIt": "了解"
+    },
+    "desktopComposer": {
+      "hint": "✨ 詢問 tameru",
+      "inputAria": "詢問 tameru",
+      "recordVoice": "錄製語音",
+      "send": "傳送"
+    },
+    "rowActions": {
+      "edit": "編輯",
+      "delete": "刪除"
+    },
+    "aiUnavailable": "AI 暫時無法使用。儀表板、卡片和編輯功能仍然正常 — 僅聊天助理暫停服務。",
+    "offline_banner": "你目前離線 — 項目會暫存在本地，重新連線後傳送。"
+  },
+  "tour": {
+    "back": "返回",
+    "sampleData": "範例資料",
+    "next": "下一步",
+    "skipTour": "略過導覽",
+    "importCsv": "匯入 CSV",
+    "logFirstTransaction": "記錄第一筆消費",
+    "lastScreenHint": "這是擁有 3 個月資料的 tameru。記錄你的第一筆消費或匯入 CSV 來達到這個狀態。",
+    "screen1": {
+      "title": "本週概覽",
+      "callout": "支出以差額顯示——從不顯示絕對總額。"
+    },
+    "screen2": {
+      "title": "小小的儀式",
+      "callout": "記錄、確認，然後聆聽輕聲的觀察。"
+    },
+    "screen3": {
+      "title": "用自然語言提問",
+      "callout": "你的帳本會親切地、有脈絡地回應你。"
+    },
+    "screen4": {
+      "title": "週日摘要",
+      "callout": "每週一次平靜的總結，僅此而已。"
+    },
+    "entry": {
+      "doesThisLookRight": "這樣對嗎？",
+      "merchant": "商家",
+      "amount": "金額",
+      "category": "類別",
+      "card": "卡片",
+      "date": "日期",
+      "looksRight": "沒問題",
+      "fixIt": "修正",
+      "logged": "已記錄"
+    },
+    "digest": {
+      "inbox": "收件匣",
+      "time": "上午 8:02"
+    }
+  },
+  "goals": {
+    "title": "目標",
+    "subtitle": "點擊以編輯。向左滑動以移除。",
+    "loading": "載入中…",
+    "aiHint": "請 tameru 設定目標",
+    "tile": {
+      "pendingDelete": "刪除中 · 點擊以復原",
+      "thisPeriod": "本{{period}}"
+    },
+    "empty": {
+      "heading": "尚無預算",
+      "body": "設定預算後，tameru 會追蹤您的達成進度。",
+      "cta": "請 tameru AI 協助設定"
+    }
+  },
+  "memory": {
+    "title": "AI 記憶",
+    "subtitle": "tameru 記住的資訊 · 您可以編輯或移除任何內容。",
+    "loading": "載入中…",
+    "empty": "tameru 尚未記住任何內容 — 聊天後會自動新增記憶。",
+    "hintFooter": "透過 tameru AI 修正或新增記憶",
+    "capacity": {
+      "label": "容量",
+      "count": "{{used}} / {{total}} 則",
+      "oldestReinforced": "最舊記憶強化時間：{{age}}",
+      "overEightyWarning": "記憶已超過 80% 容量。新記憶加入時，舊記憶可能會被刪除 — 請整理不再需要的內容。"
+    },
+    "fact": {
+      "removeAriaLabel": "移除記憶",
+      "pendingDelete": "刪除中 · 點擊以復原",
+      "confirmRemove": "移除這則記憶",
+      "cancel": "取消"
+    },
+    "provenance": {
+      "savedFromChat": "從聊天中儲存",
+      "reinforced": "{{age}}強化"
+    },
+    "age": {
+      "today": "今天",
+      "oneDay": "1 天前",
+      "nDays": "{{count}} 天前",
+      "oneMonth": "1 個月前",
+      "nMonths": "{{count}} 個月前"
+    }
+  },
+  "home": {
+    "title": "首頁",
+    "loading": "載入中…",
+    "emptyTitle": "帳本是空的",
+    "emptyBody": "點擊下方的聊天按鈕來記錄您的第一筆交易。",
+    "hintPrompt": "輸入或說出您的第一筆交易",
+    "hintDismiss": "關閉",
+    "breakdownLink": "明細",
+    "vsAvg": "{{percent}} 相較於平均",
+    "stillLearning": "學習中",
+    "bandAbove": "高於平均",
+    "bandBelow": "低於平均",
+    "bandUsual": "如往常",
+    "bandNeutral": "持平"
+  },
+  "breakdown": {
+    "title": "明細",
+    "backAriaLabel": "返回",
+    "transactionCount": "{{count}} 筆交易",
+    "vsYourBudgets": "本月與預算比較",
+    "seeAll": "查看全部 {{count}} 筆 →",
+    "unknownCategory": "未知類別",
+    "unknownCategoryBody": "找不到名為「{{slug}}」的類別。",
+    "backToBreakdown": "← 返回明細",
+    "filterMonth": "月份",
+    "filterAll": "全部",
+    "filterThisMonth": "本月",
+    "filterLastMonth": "上月",
+    "filterCard": "卡片",
+    "filterAllCards": "所有卡片",
+    "searchPlaceholder": "搜尋商家",
+    "clearSearch": "清除搜尋",
+    "deletingTapToUndo": "刪除中 · 點擊以復原",
+    "emptyFilters": "沒有符合篩選條件的項目。"
+  },
+  "oauth": {
+    "title": "允許連線",
+    "subtitle": "另一個應用程式正在請求讀取您的 tameru 資料。",
+    "loading": "正在確認請求…",
+    "allow": "允許",
+    "connecting": "連線中…",
+    "cancel": "取消",
+    "cancelling": "取消中…",
+    "requestingAccess": "請求存取",
+    "signedInAs": "目前登入為",
+    "readOnly": "唯讀。",
+    "readOnlyDetail": "{{clientName}} 可以查看您的交易、訂閱和卡片倍率 — 無法新增、編輯或刪除任何內容。",
+    "disconnectHint": "您可以隨時中斷連線，請前往",
+    "disconnectPath": "設定 → 已連線的應用程式",
+    "errorMissingId": "此頁面是由 claude.ai 在您連接 tameru 時開啟的。請從那裡開啟。",
+    "errorLoadFailed": "無法載入授權請求。",
+    "errorUnexpected": "意外的授權回應。",
+    "errorApproveFailed": "無法完成授權。",
+    "errorDenyFailed": "無法取消請求。",
+    "signIn": {
+      "title": "請登入以繼續",
+      "subtitle": "某個應用程式正在請求讀取您的 tameru 資料。請登入以核准。",
+      "checkEmail": "請查看您的電子郵件",
+      "sentLinkTo": "我們已傳送登入連結至",
+      "sentLinkHint": "請在此裝置上開啟 — 它會直接帶您回到這裡。",
+      "useDifferentEmail": "使用其他電子郵件",
+      "withGoogle": "使用 Google 登入",
+      "withEmail": "使用電子郵件登入",
+      "starting": "啟動中…",
+      "emailLabel": "電子郵件",
+      "emailPlaceholder": "you@example.com",
+      "sendLink": "傳送登入連結",
+      "sending": "傳送中…",
+      "back": "返回",
+      "errorGoogle": "無法啟動登入。",
+      "errorMagicLink": "無法傳送連結。"
+    }
+  },
+  "importCsv": {
+    "title": "匯入 CSV",
+    "subtitle": "將銀行或卡片 CSV 匯入 tameru。",
+    "detectingColumns": "正在讀取您的 CSV…",
+    "cancel": "取消",
+    "back": "返回",
+    "next": "下一步",
+    "import": "匯入",
+    "noRowsToPreview": "沒有可預覽的列。",
+    "select": {
+      "fileLabel": "CSV 檔案",
+      "removeFile": "移除檔案",
+      "chooseCsv": "選擇 CSV",
+      "fileHint": "從您的銀行匯出 — 通常在對帳單或交易記錄下。最多 5 MB 及 5,000 列。",
+      "whichCard": "選擇哪張卡？",
+      "noCards": "請先新增一張卡片 — 匯入會將所有交易附加到您的某張卡片。"
+    },
+    "confirm": {
+      "tameruThinks": "tameru 的推測",
+      "date": "日期",
+      "merchant": "商家",
+      "amount": "金額",
+      "currency": "幣別",
+      "rowsConfidence": "{{rows}} 列 · 信心度 {{pct}}%",
+      "firstRows": "前幾列",
+      "wrongMapThem": "這些看起來有誤 — 讓我手動對應",
+      "looksRight": "看起來正確"
+    },
+    "manual": {
+      "mapColumns": "對應欄位",
+      "dateColumn": "日期欄",
+      "merchantColumn": "商家欄",
+      "amountColumn": "金額欄",
+      "currencyColumn": "幣別欄（選填）",
+      "chargesNegativeLabel": "此 CSV 將消費顯示為負數",
+      "chargesNegativeHint": "Chase 交易記錄 / Citi 交易記錄匯出請勾選；Amex / 大多數月結單匯出請保持未勾選。",
+      "none": "（無）"
+    },
+    "committing": {
+      "importing": "匯入中…",
+      "progress": "{{processed}} / {{total}} 列",
+      "startingUp": "啟動中…",
+      "categorizingAs": "分類為"
+    },
+    "done": {
+      "allSet": "完成。",
+      "transactionsImported": "已匯入 {{count}} 筆交易。",
+      "imported": "已匯入",
+      "duplicatesSkipped": "已略過重複項目",
+      "refundsSkipped": "已略過退款",
+      "foreignSkipped": "已略過外幣項目",
+      "couldntRead": "無法讀取",
+      "done": "完成"
+    },
+    "error": {
+      "title": "匯入未能完成。",
+      "safeToRetry": "已匯入的資料是安全的 — 重新上傳將略過重複項目。",
+      "tryAgain": "再試一次"
+    }
+  },
+  "layout": {
+    "notFound": {
+      "title": "找不到頁面",
+      "body": "此頁面尚未建立 — 或從未存在。",
+      "goHome": "回首頁"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "nav": {
+      "account": "帳戶",
+      "connections": "claude 連線",
+      "import": "匯入",
+      "notifications": "通知",
+      "privacy": "隱私"
+    },
+    "account": {
+      "title": "帳戶",
+      "subtitle": "關於你的基本資料。",
+      "emailLabel": "電子郵件",
+      "currencyLabel": "主要貨幣",
+      "immutable": "無法變更",
+      "immutableNote": "這些資料基於設計考量目前無法變更。主要貨幣是所有比較的基準，電子郵件是資料的識別依據。"
+    },
+    "import": {
+      "title": "匯入",
+      "subtitle": "從其他工具匯入交易紀錄。",
+      "body": "上傳從銀行、ynab 或 copilot 匯出的 csv 檔案。",
+      "chooseCsv": "選擇 csv",
+      "hint": "tameru 會自動偵測欄位、批次分類，並跳過已存在的資料列。上限 5 MB 及 5,000 列。"
+    },
+    "notifications": {
+      "title": "通知",
+      "subtitle": "tameru 輕聲說話，由你決定頻率。",
+      "weeklyDigestLabel": "每週摘要郵件",
+      "weeklyDigestDesc": "每週一早上 9 點（你的時區）送出一份靜謐回顧。每封郵件均附取消訂閱連結。"
+    },
+    "privacy": {
+      "title": "隱私",
+      "subtitle": "tameru 如何使用你的資料，以及哪些事情不會做。"
+    },
+    "timezone": {
+      "label": "時區",
+      "desc": "決定摘要送達時間及日期計算基準，預設為此裝置的時區。",
+      "loading": "載入中…"
+    },
+    "language": {
+      "label": "語言",
+      "desc": "tameru 與你溝通的方式 — 介面、聊天回覆及每週摘要。預設為此裝置的語言。"
+    },
+    "theme": {
+      "switchToLight": "切換至淺色模式",
+      "switchToDark": "切換至深色模式"
+    }
+  },
+  "more": {
+    "identity": {
+      "youFallback": "你"
+    },
+    "primary": {
+      "cards": "我的卡片",
+      "subscriptions": "訂閱",
+      "goals": "目標",
+      "aiMemory": "AI 記憶",
+      "claudeConnections": "claude 連線",
+      "connected": "已連線",
+      "notConnected": "未連線"
+    },
+    "secondary": {
+      "heading": "帳戶與資料",
+      "importData": "匯入資料",
+      "notifications": "通知",
+      "privacy": "隱私",
+      "signOut": "登出"
+    },
+    "notifications": {
+      "ariaLabel": "通知",
+      "title": "通知",
+      "subtitle": "tameru 輕聲說話，由你決定頻率。",
+      "weeklyDigestLabel": "每週摘要",
+      "weeklyDigestDesc": "每週一早上送出一份靜謐回顧。每封郵件均附取消訂閱連結。",
+      "done": "完成"
+    },
+    "signOut": {
+      "closeAriaLabel": "關閉對話框",
+      "title": "確認登出？",
+      "body": "你的資料將完整保留，隨時可重新登入 — 不會刪除任何內容。",
+      "cancel": "取消",
+      "confirm": "登出"
+    }
+  },
+  "privacy": {
+    "title": "隱私",
+    "subtitle": "tameru 如何使用你的資料，以及哪些事情不會做。",
+    "analytics": {
+      "label": "暫停產品分析",
+      "desc": "立即停止功能使用事件的傳送。交易資料絕不會傳送至分析平台。"
+    },
+    "export": {
+      "label": "匯出我的資料",
+      "desc": "下載包含交易、卡片、訂閱、記憶事實、聊天記錄及偏好設定的 json 檔案。",
+      "button": "匯出",
+      "preparing": "準備中…",
+      "errorRetry": "無法準備匯出資料，請稍後再試。",
+      "errorGeneric": "發生錯誤，請稍後再試。"
+    },
+    "deleteAccount": {
+      "label": "刪除帳戶",
+      "desc": "寄信給我們，我們將在 7 天內清除所有資料。應用程式內的刪除按鈕將於後續版本推出。",
+      "button": "寄信給我們",
+      "emailSubject": "刪除我的帳戶",
+      "emailBodyLine1": "tameru 你好，",
+      "emailBodyLine2": "請刪除我的帳戶及所有相關資料。",
+      "emailBodyLine3": "我了解此操作為永久性，包含我的交易紀錄、卡片、訂閱、聊天記錄及記憶事實。",
+      "emailBodyLine4": "謝謝。"
+    },
+    "disclosure": {
+      "aiProvidersHeading": "AI 提供商",
+      "aiProvidersAnthropicParagraph": "當你與 tameru 聊天時 — 新增交易、提問或其他操作 — 你的訊息會傳送至 anthropic。卡片獎勵倍率查詢也會傳送至 anthropic，僅包含公開的卡片名稱及末四碼，絕不包含你的交易資料。anthropic 預設保留期限為 30 天（信任與安全審查），已針對 tameru 組織申請零資料保留，申請通過後將降為零。anthropic 在任何方案下均不使用 API 資料進行模型訓練。",
+      "aiProvidersGeminiParagraph": "我們也使用 google gemini 付費方案為每筆交易選擇分類 — 僅將商店名稱及金額傳送至 gemini，不包含其他資料。gemini 也用於解析 csv 匯入及收據照片。google 付費方案不使用 API 資料進行訓練；免費方案則會，因此我們從不使用免費方案。",
+      "analyticsHeading": "產品分析",
+      "analyticsParagraph1": "我們使用 posthog（美國雲端）僅計算結構性事件：聊天會話開始與結束、功能使用、上手步驟、每週摘要開啟及顯示的錯誤。我們絕不傳送交易金額、商店名稱、卡片詳情或你在聊天中詢問的文字內容。",
+      "analyticsParagraph2": "上方的切換開關可立即停止新事件的傳送。已計算的資料將保留在 posthog 中，直到你要求我們刪除為止。"
+    }
+  },
+  "connections": {
+    "title": "已連線應用程式",
+    "subtitle": {
+      "before": "你已允許讀取支出資料的應用程式 — 例如",
+      "accessIs": "存取權限為",
+      "readOnly": "唯讀",
+      "after": "：已連線的應用程式可以查看你的帳本，但無法新增、編輯或刪除任何內容。"
+    },
+    "setup": {
+      "heading": "在 claude.ai 新增 tameru",
+      "step1Before": "1. 在 claude.ai 中，開啟",
+      "step1SettingsConnectors": "設定 → 連接器",
+      "step1And": "並選擇",
+      "step1AddConnector": "新增自訂連接器",
+      "step2": "2. 貼上此伺服器網址：",
+      "copy": "複製",
+      "copied": "已複製",
+      "hint": "claude.ai 將開啟 tameru 授權頁面 — 核准後即完成設定，無需貼回任何內容。"
+    },
+    "list": {
+      "heading": "目前連線",
+      "refresh": "重新整理",
+      "refreshAriaLabel": "重新整理",
+      "loading": "載入連線中…",
+      "empty": "尚未連線任何應用程式。",
+      "connectedFallback": "已連線",
+      "disconnect": "中斷連線",
+      "errorDisconnect": "無法中斷該應用程式的連線。"
+    },
+    "disconnect": {
+      "ariaLabel": "中斷應用程式連線",
+      "title": "中斷 {{name}} 的連線？",
+      "warning": "該應用程式將在數分鐘內失去存取權限。進行中的工作階段可能在 token 到期前仍可讀取。",
+      "confirmButton": "中斷連線",
+      "disconnecting": "中斷連線中…",
+      "cancel": "取消"
+    }
+  },
+  "cards": {
+    "title": "我的卡片",
+    "subtitle": "點擊卡片以編輯。向左滑動以移除。",
+    "chatSeedAddCard": "新增卡片：",
+    "hintAddCard": "請 tameru 新增卡片",
+    "deletingTapToUndo": "刪除中 · 點擊以復原",
+    "afChip": {
+      "editAriaLabel": "編輯年費追蹤",
+      "next": "下次 {{date}}",
+      "trackAriaLabel": "追蹤年費",
+      "trackLabel": "追蹤 ${{amount}} 年費"
+    },
+    "empty": {
+      "heading": "尚無卡片",
+      "body": "新增一兩張卡片讓 tameru 更了解你的消費。",
+      "cta": "請 tameru AI 新增"
+    }
+  },
+  "subscriptions": {
+    "title": "訂閱",
+    "subtitle": "自動追蹤定期消費。",
+    "chatSeedAdd": "新增訂閱：",
+    "hintAdd": "請 tameru 新增訂閱",
+    "empty": "尚無訂閱記錄 — 請 tameru 新增。",
+    "needsNewCard": {
+      "heading": "需要新卡片",
+      "body_one": "你刪除了 {{count}} 筆訂閱綁定的卡片。請在下方選擇新卡片或取消訂閱。",
+      "body_other": "你刪除了 {{count}} 筆訂閱綁定的卡片。請在下方選擇新卡片或取消訂閱。"
+    },
+    "status": {
+      "paused": "已暫停",
+      "cancelled": "已取消"
+    },
+    "row": {
+      "pausedNote": "已暫停 · 無即將到來的扣款",
+      "nextBilling": "下次 {{date}} · {{frequency}}"
+    }
+  },
+  "editCard": {
+    "ariaLabel": "編輯卡片",
+    "title": "編輯卡片",
+    "fields": {
+      "name": "名稱",
+      "last4": "末四碼（身分識別 — 不可編輯）",
+      "last4Hint": "刪除後重新新增以變更",
+      "program": "點數方案",
+      "color": "顏色",
+      "colorAriaLabel": "卡片顏色",
+      "annualFee": "年費",
+      "amount": "金額"
+    },
+    "saveChanges": "儲存",
+    "saving": "儲存中…",
+    "deleteCard": "刪除卡片",
+    "programPicker": {
+      "ariaLabel": "選擇方案",
+      "title": "選擇方案"
+    },
+    "af": {
+      "ariaLabel": "編輯年費追蹤",
+      "titleEdit": "編輯年費",
+      "titleTrack": "追蹤年費",
+      "nextRenewal": "下次更新日",
+      "autoLogHint": "tameru 將在明年此日期自動記錄年費。",
+      "errorAmountInvalid": "金額必須為非負數。",
+      "errorDateInvalid": "更新日期必須為今天或之後。",
+      "stopTracking": "停止追蹤此年費"
+    }
+  },
+  "editSubscription": {
+    "ariaLabel": "編輯訂閱",
+    "title": "編輯訂閱",
+    "fields": {
+      "name": "名稱",
+      "amount": "金額",
+      "category": "類別",
+      "card": "卡片",
+      "cardClosed": "卡片（已停用 — 請選擇新卡片）",
+      "frequency": "頻率",
+      "nextBilling": "下次扣款",
+      "lastBilling": "最後扣款",
+      "started": "開始日期"
+    },
+    "cadenceHint": "帳單週期與開始日期固定不可更改 — 請取消後重新新增。",
+    "saveChanges": "儲存",
+    "card": {
+      "needsNewCard": "需要新卡片",
+      "bankAch": "銀行轉帳",
+      "bankAchSub": "無卡片（租金、水電費、房貸等）"
+    },
+    "actions": {
+      "pause": "暫停",
+      "resume": "恢復",
+      "resumeAsAch": "以銀行轉帳恢復",
+      "cancel": "取消訂閱"
+    },
+    "cardPicker": {
+      "ariaLabel": "選擇卡片",
+      "title": "選擇卡片"
+    },
+    "categoryPicker": {
+      "ariaLabel": "選擇類別",
+      "title": "選擇類別"
+    }
+  },
+  "editTransaction": {
+    "ariaLabel": "編輯交易",
+    "title": "編輯交易",
+    "fields": {
+      "merchant": "商家",
+      "amount": "金額",
+      "date": "日期",
+      "card": "卡片",
+      "category": "類別"
+    },
+    "card": {
+      "other": "其他",
+      "otherCash": "其他 / 現金",
+      "otherCashSub": "現金或未指定"
+    },
+    "saveChanges": "儲存",
+    "deleteTransaction": "刪除交易",
+    "cardPicker": {
+      "ariaLabel": "選擇卡片",
+      "title": "選擇卡片"
+    },
+    "categoryPicker": {
+      "ariaLabel": "選擇類別",
+      "title": "選擇類別"
+    }
+  },
+  "editGoal": {
+    "ariaLabel": "編輯目標",
+    "title": "編輯目標",
+    "fields": {
+      "category": "類別（不可編輯）",
+      "categoryHint": "刪除後重新新增以變更",
+      "amount": "金額",
+      "period": "週期"
+    },
+    "saveChanges": "儲存",
+    "saving": "儲存中…",
+    "deleteGoal": "刪除目標",
+    "errorConflict": "此類別與週期的目標已存在。請先刪除，或選擇不同的週期。",
+    "errorGeneric": "無法儲存變更，請再試一次。"
+  },
+  "multipliers": {
+    "label": "回饋",
+    "needsManual": "請在下方新增卡片的獎勵類別",
+    "empty": "尚無獎勵類別。",
+    "removeAriaLabel": "移除 {{cat}}",
+    "customOption": "自訂…",
+    "customPlaceholder": "例如：「超市」",
+    "cancel": "取消",
+    "add": "新增",
+    "addCategory": "新增類別"
+  }
+}

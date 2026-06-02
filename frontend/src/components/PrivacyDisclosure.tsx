@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 /**
  * User-facing privacy disclosure prose. Day 27 (DESIGN.md §9.4 + §9.5).
  *
@@ -16,46 +18,30 @@
  *     the privacy story, not a one-liner.
  */
 export function PrivacyDisclosure() {
+  const { t } = useTranslation();
   return (
     <div className="space-y-5 text-[0.86rem] leading-relaxed text-ink-secondary">
       <section>
         <h3 className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
-          ai providers
+          {t("privacy.disclosure.aiProvidersHeading")}
         </h3>
         <p className="mt-2">
-          when you chat with tameru — to add a transaction, to ask a
-          question, or anything else — your message goes to anthropic.
-          card multiplier lookups also go to anthropic and include only the
-          public card name and last 4 digits, never your transaction data.
-          anthropic's default retention is 30 days for trust &amp; safety
-          review; zero data retention has been requested for the tameru
-          org and brings that to zero. anthropic does not use api data for
-          training under any tier.
+          {t("privacy.disclosure.aiProvidersAnthropicParagraph")}
         </p>
         <p className="mt-2">
-          we also use google gemini on its paid tier to pick a category
-          for each transaction — the merchant name and amount go to
-          gemini, nothing else. gemini also parses csv imports and
-          receipt photos when you use those. google's paid tier does not
-          use api data for training; the free tier does, and we never use
-          it.
+          {t("privacy.disclosure.aiProvidersGeminiParagraph")}
         </p>
       </section>
 
       <section>
         <h3 className="text-[0.78rem] uppercase tracking-wider text-ink-tertiary">
-          product analytics
+          {t("privacy.disclosure.analyticsHeading")}
         </h3>
         <p className="mt-2">
-          we use posthog (us cloud) to count structural events only:
-          chat-session starts and ends, feature usage, onboarding steps, the
-          weekly digest opens, and shown errors. we never send transaction
-          amounts, merchant names, card details, or the text of what you
-          ask in chat.
+          {t("privacy.disclosure.analyticsParagraph1")}
         </p>
         <p className="mt-2">
-          the toggle above stops new events immediately. anything we
-          already counted stays in posthog until you ask us to remove it.
+          {t("privacy.disclosure.analyticsParagraph2")}
         </p>
       </section>
     </div>

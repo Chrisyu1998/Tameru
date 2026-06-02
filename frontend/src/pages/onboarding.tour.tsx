@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/Button";
 import { Dashboard } from "@/components/Dashboard";
 import { ChatThread } from "@/components/chat/ChatThread";
@@ -13,44 +14,47 @@ import { markOnboarded } from "@/lib/onboarding";
 import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
 
-interface TourScreen {
-  title: string;
-  callout: string;
-  illustration: React.ReactNode;
-}
+/**
+ * Screen title + callout keys — module-scope so they're not recreated on
+ * every render. Resolved inside the component with `t()`.
+ */
+const SCREEN_KEYS = [
+  {
+    titleKey: "tour.screen1.title",
+    calloutKey: "tour.screen1.callout",
+  },
+  {
+    titleKey: "tour.screen2.title",
+    calloutKey: "tour.screen2.callout",
+  },
+  {
+    titleKey: "tour.screen3.title",
+    calloutKey: "tour.screen3.callout",
+  },
+  {
+    titleKey: "tour.screen4.title",
+    calloutKey: "tour.screen4.callout",
+  },
+] as const;
 
-const SCREENS: TourScreen[] = [
-  {
-    title: "your week, at a glance",
-    callout: "spending is shown as deltas — never absolute totals.",
-    illustration: (
-      <div className="mx-auto w-full max-w-md">
-        <Dashboard data={tourFixtures.dashboard} inert />
-      </div>
-    ),
-  },
-  {
-    title: "a small ritual",
-    callout: "log it, confirm it, hear the quiet observation.",
-    illustration: <EntryNudgeAnimation />,
-  },
-  {
-    title: "ask in plain language",
-    callout: "your ledger talks back, kindly and in context.",
-    illustration: <ChatThread messages={tourFixtures.chat} />,
-  },
-  {
-    title: "the sunday digest",
-    callout: "one calm summary per week. nothing more.",
-    illustration: <DigestEmailPreview />,
-  },
+/** Illustrations are static and don't depend on i18n. */
+const ILLUSTRATIONS = [
+  (
+    <div className="mx-auto w-full max-w-md">
+      <Dashboard data={tourFixtures.dashboard} inert />
+    </div>
+  ),
+  <EntryNudgeAnimation />,
+  <ChatThread messages={tourFixtures.chat} />,
+  <DigestEmailPreview />,
 ];
 
 export default function TourPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [idx, setIdx] = useState(0);
-  const screen = SCREENS[idx];
-  const isLast = idx === SCREENS.length - 1;
+  const screenKeys = SCREEN_KEYS[idx];
+  const isLast = idx === SCREEN_KEYS.length - 1;
   const jwt = useAppStore((s) => s.jwt);
   const homeCurrency = useAppStore((s) => s.homeCurrency);
   const fullyOnboarded = !!jwt && typeof homeCurrency === "string";
@@ -87,22 +91,24 @@ export default function TourPage() {
     else setIdx((i) => i - 1);
   };
 
+  const totalScreens = SCREEN_KEYS.length;
+
   // Horizontal swipe gesture. Threshold of 50px is the conventional
   // sweet spot — large enough to ignore accidental drift, small enough
   // that an intentional flick clears it. Vertical-dominant motion is
   // ignored so the user can still scroll within a screen.
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const onTouchStart: React.TouchEventHandler = (e) => {
-    const t = e.touches[0];
-    touchStart.current = { x: t.clientX, y: t.clientY };
+    const touch = e.touches[0];
+    touchStart.current = { x: touch.clientX, y: touch.clientY };
   };
   const onTouchEnd: React.TouchEventHandler = (e) => {
     const start = touchStart.current;
     touchStart.current = null;
     if (!start) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
     if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
     if (dx < 0) next();
     else back();
@@ -118,29 +124,29 @@ export default function TourPage() {
         <button
           type="button"
           onClick={back}
-          aria-label="back"
+          aria-label={t("tour.back")}
           className="flex h-10 w-10 items-center justify-center rounded-full text-ink-secondary transition-colors hover:bg-sunken/60 hover:text-ink"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <Pill tone="warn">SAMPLE DATA</Pill>
+        <Pill tone="warn">{t("tour.sampleData")}</Pill>
         <div className="w-10" />
       </div>
 
       <div key={idx} className="mt-10 animate-fade-up">
         <h1 className="font-serif text-3xl text-ink lowercase-title">
-          {screen.title}
+          {t(screenKeys.titleKey)}
         </h1>
-        <p className="mt-2 text-sm text-ink-secondary">{screen.callout}</p>
+        <p className="mt-2 text-sm text-ink-secondary">{t(screenKeys.calloutKey)}</p>
 
-        <div className="mt-8">{screen.illustration}</div>
+        <div className="mt-8">{ILLUSTRATIONS[idx]}</div>
       </div>
 
       <div className="flex-1" />
 
       <div className="mt-10 flex flex-col items-center gap-5">
         <div className="flex items-center gap-2">
-          {SCREENS.map((_, i) => (
+          {Array.from({ length: totalScreens }, (_, i) => (
             <span
               key={i}
               className={cn(
@@ -154,14 +160,14 @@ export default function TourPage() {
         {!isLast && (
           <>
             <Button fullWidth size="lg" onClick={next}>
-              next
+              {t("tour.next")}
             </Button>
             <button
               type="button"
               onClick={logFirstCta}
               className="text-sm text-ink-tertiary underline-offset-4 hover:text-ink-secondary hover:underline"
             >
-              skip the tour
+              {t("tour.skipTour")}
             </button>
           </>
         )}
@@ -169,18 +175,17 @@ export default function TourPage() {
         {isLast && (
           <>
             <p className="max-w-[28ch] text-center text-xs text-ink-tertiary">
-              this is tameru with 3 months of data. log your first transaction
-              or import a csv to get there.
+              {t("tour.lastScreenHint")}
             </p>
             <Button fullWidth size="lg" onClick={importCsvCta}>
-              import a csv
+              {t("tour.importCsv")}
             </Button>
             <button
               type="button"
               onClick={logFirstCta}
               className="text-sm text-ink-secondary underline-offset-4 hover:text-ink hover:underline"
             >
-              log my first transaction
+              {t("tour.logFirstTransaction")}
             </button>
           </>
         )}

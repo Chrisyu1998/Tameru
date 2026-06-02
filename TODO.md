@@ -139,16 +139,25 @@ Captured here so the deferred-cards item has context. These are NOT deferred.
     the correct per-currency symbol + decimals (`¥1,500`, `NT$500.00`,
     `CHF 99.00`) for all nine `home_currency` currencies — JPY is zero-decimal.
 
-- **Tier 2b — UI chrome translation (planned, not built):**
-  - Add an i18n framework (react-i18next or similar); extract hardcoded English
-    JSX strings. (Scale signal: literal English lives in nearly every heading —
-    grep `lowercase-title` / `font-serif` across `frontend/src` for the spread;
-    onboarding steps + `components/` are the bulk.)
-  - Wire category labels into the remaining *interactive/edit* render sites left
-    out of 2a: the edit-sheet category pickers (`EditTransactionSheet`,
-    `EditSubscriptionSheet`), `ParseCard` / `SubscriptionParseCard`, and the
-    onboarding tour. Use the existing `useCategoryLabel()` hook; the option
-    *values* stay English. (All read-only category displays are done in 2a.)
+- **Tier 2b — UI chrome translation: SHIPPED.**
+  - ~~Add an i18n framework + extract hardcoded English JSX strings~~ — **DONE.**
+    `i18next` + `react-i18next`, initialized in `frontend/src/lib/i18n.ts`,
+    language driven by the store's `uiLanguage` (single source of truth — no
+    language-detector). ~600 keys per language in
+    `frontend/src/locales/{en,ja,zh-TW}.json` (one `translation` namespace,
+    nested by surface). `en` captured verbatim (English rendering unchanged);
+    `fallbackLng: 'en'`. Every page + component converted. Vitest setup
+    initializes i18n so assertions resolve English.
+  - ~~Wire category labels into the interactive/edit sites~~ — **DONE.** The
+    edit-sheet pickers (`EditTransactionSheet`, `EditSubscriptionSheet`) and the
+    chat parse cards display localized category via `useCategoryLabel()`; the
+    selected/stored value stays the English enum.
+  - **ja/zh-TW are DRAFTS** — generated for native-speaker (family) review; `en`
+    is final. Refining specific translations is a copy-edit pass, not code.
+
+  **Remaining (small, optional follow-ups, not blocking):**
   - Add `ui_language` selection to the mobile More → Notifications sheet if a
-    second mobile entry point is wanted (today it's reachable via Settings →
-    Account on both desktop and mobile).
+    second mobile entry point is wanted (today reachable via Settings → Account
+    on both desktop and mobile).
+  - `npm audit` flagged vulnerabilities in the dep tree when `react-i18next`
+    was added — review/triage separately.

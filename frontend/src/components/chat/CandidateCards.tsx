@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AutoLoggedBadge } from "@/components/AutoLoggedBadge";
 import { cardLabel } from "@/lib/chat";
 import { type Card, type Transaction } from "@/lib/fixtures";
@@ -21,6 +22,7 @@ export function CandidateCards({
   cards,
   onSelect,
 }: CandidateCardsProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const visible = expanded
     ? candidates
@@ -35,7 +37,7 @@ export function CandidateCards({
 
       {candidates.length === 0 ? (
         <p className="px-1 text-[0.85rem] italic text-ink-tertiary">
-          nothing matched.
+          {t("chat.candidateCards.nothingMatched")}
         </p>
       ) : (
         <ul className="overflow-hidden rounded-2xl border border-hairline bg-surface divide-y divide-hairline">
@@ -73,7 +75,7 @@ export function CandidateCards({
           onClick={() => setExpanded(true)}
           className="mt-2 inline-flex items-center rounded-full border border-hairline bg-surface px-3 py-1 text-[0.72rem] text-ink-secondary transition-colors hover:bg-elevated"
         >
-          +{hiddenCount} more
+          {t("chat.candidateCards.more", { count: hiddenCount })}
         </button>
       )}
     </div>
