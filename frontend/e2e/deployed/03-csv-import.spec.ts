@@ -86,13 +86,16 @@ test("csv import: add card via chat → pick file → preview → confirm → do
 
   // Preview: Gemini-driven `detect_columns` returns within a few
   // seconds; the confirm-step button is literally "looks right"
-  // (ImportCsvSheet.tsx:459 — same wording as the chat parse card,
+  // (ImportCsvSheet.tsx ConfirmStep — same wording as the chat parse card,
   // intentional UX consistency). Scoped to the sheet so it doesn't
   // collide with the chat card-add card if its DOM is still around.
+  // 90s (matching the card-lookup wait above): detect_columns is a real
+  // Gemini round-trip against prod and can be slow during a degraded
+  // window — a tighter 60s budget caused a false-alarm timeout here.
   const importConfirmBtn = sheet.getByRole("button", {
     name: /^looks right$/i,
   });
-  await expect(importConfirmBtn).toBeVisible({ timeout: 60_000 });
+  await expect(importConfirmBtn).toBeVisible({ timeout: 90_000 });
   await importConfirmBtn.click();
 
   // Commit phase streams per-row progress. The "all set." copy from
