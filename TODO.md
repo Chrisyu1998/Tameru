@@ -155,9 +155,13 @@ Captured here so the deferred-cards item has context. These are NOT deferred.
   - **ja/zh-TW are DRAFTS** — generated for native-speaker (family) review; `en`
     is final. Refining specific translations is a copy-edit pass, not code.
 
+  - ~~Mobile entry point for the language picker~~ — **DONE.** The mobile More
+    menu never links to `/settings`, so the desktop Settings → Account placement
+    was unreachable on the PWA. Added a "language" row in More → secondary that
+    opens a sheet wrapping the shared `LanguageRow` (`more.tsx::LanguageSheet`),
+    mirroring the Notifications-sheet pattern. Regression-pinned by
+    `tests/more.language.test.tsx`.
+
   **Remaining (small, optional follow-ups, not blocking):**
-  - Add `ui_language` selection to the mobile More → Notifications sheet if a
-    second mobile entry point is wanted (today reachable via Settings → Account
-    on both desktop and mobile).
   - `npm audit` flagged vulnerabilities in the dep tree when `react-i18next`
     was added — review/triage separately.

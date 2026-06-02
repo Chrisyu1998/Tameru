@@ -576,7 +576,8 @@
       "importData": "import data",
       "notifications": "notifications",
       "privacy": "privacy",
-      "signOut": "sign out"
+      "signOut": "sign out",
+      "language": "language"
     },
     "notifications": {
       "ariaLabel": "notifications",
@@ -592,6 +593,9 @@
       "body": "your data stays exactly where it is. you can sign back in anytime — nothing is deleted.",
       "cancel": "cancel",
       "confirm": "sign out"
+    },
+    "languageSheet": {
+      "done": "done"
     }
   },
   "privacy": {

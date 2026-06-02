@@ -576,7 +576,8 @@
       "importData": "データをインポート",
       "notifications": "通知",
       "privacy": "プライバシー",
-      "signOut": "サインアウト"
+      "signOut": "サインアウト",
+      "language": "言語"
     },
     "notifications": {
       "ariaLabel": "通知",
@@ -592,6 +593,9 @@
       "body": "データはそのまま保持されます。いつでもサインインし直せます — 何も削除されません。",
       "cancel": "キャンセル",
       "confirm": "サインアウト"
+    },
+    "languageSheet": {
+      "done": "完了"
     }
   },
   "privacy": {

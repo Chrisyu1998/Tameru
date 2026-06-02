@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Bell,
   ChevronRight,
+  Languages,
   Lock,
   LogOut,
   Plug,
@@ -14,6 +15,7 @@ import { BottomSheet } from "@/components/BottomSheet";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
 import { TimezoneRow } from "@/components/TimezoneRow";
+import { LanguageRow } from "@/components/LanguageRow";
 import { signOut } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
@@ -23,7 +25,7 @@ import {
   updatePreferences,
 } from "@/lib/preferencesApi";
 
-type SheetKey = "import" | "notifications" | "signout" | null;
+type SheetKey = "import" | "notifications" | "language" | "signout" | null;
 
 export default function MorePage() {
   const { t } = useTranslation();
@@ -113,6 +115,11 @@ export default function MorePage() {
           icon={<Bell className="h-4 w-4" />}
           onClick={() => setOpenSheet("notifications")}
         />
+        <RowButton
+          label={t("more.secondary.language")}
+          icon={<Languages className="h-4 w-4" />}
+          onClick={() => setOpenSheet("language")}
+        />
         <RowLink
           to="/privacy"
           label={t("more.secondary.privacy")}
@@ -132,6 +139,10 @@ export default function MorePage() {
       />
       <NotificationsSheet
         open={openSheet === "notifications"}
+        onClose={() => setOpenSheet(null)}
+      />
+      <LanguageSheet
+        open={openSheet === "language"}
         onClose={() => setOpenSheet(null)}
       />
       <SignOutDialog
@@ -296,6 +307,37 @@ function NotificationsSheet({
         className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
       >
         {t("more.notifications.done")}
+      </button>
+    </BottomSheet>
+  );
+}
+
+/* ─── Language sheet ──────────────────────────────────────────── */
+
+function LanguageSheet({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  // Mobile entry point for the UI-language picker (DESIGN.md §6.6 Tier 2).
+  // The shared LanguageRow owns its own label, description, and the
+  // optimistic write + store/i18n sync — so the sheet is just a container
+  // (no redundant title) plus a done button, mirroring the desktop
+  // Settings → Account placement.
+  const { t } = useTranslation();
+  return (
+    <BottomSheet open={open} onClose={onClose} ariaLabel={t("more.secondary.language")}>
+      <div className="rounded-2xl border border-hairline bg-surface px-4">
+        <LanguageRow />
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
+      >
+        {t("more.languageSheet.done")}
       </button>
     </BottomSheet>
   );

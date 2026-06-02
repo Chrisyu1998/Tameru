@@ -576,7 +576,8 @@
       "importData": "匯入資料",
       "notifications": "通知",
       "privacy": "隱私",
-      "signOut": "登出"
+      "signOut": "登出",
+      "language": "語言"
     },
     "notifications": {
       "ariaLabel": "通知",
@@ -592,6 +593,9 @@
       "body": "你的資料將完整保留，隨時可重新登入 — 不會刪除任何內容。",
       "cancel": "取消",
       "confirm": "登出"
+    },
+    "languageSheet": {
+      "done": "完成"
     }
   },
   "privacy": {
