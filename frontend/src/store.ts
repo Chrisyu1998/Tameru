@@ -26,6 +26,19 @@ export type User = {
 export type HomeCurrency = string | null | undefined;
 
 /**
+ * Day 29 Tier 2 (DESIGN.md §6.6): the user's chosen UI/display language.
+ *   undefined = not yet fetched (still booting / no session)
+ *   null = signed in but no explicit choice → displayLocale() falls back
+ *     to the browser's navigator.language
+ *   'en' | 'ja' | 'zh-TW' = an explicit choice
+ * Held here so format.ts's displayLocale() can resolve the formatting
+ * locale synchronously and the category-label helper can switch labels
+ * without a round trip. The third i18n axis — independent of currency
+ * and timezone.
+ */
+export type UiLanguage = 'en' | 'ja' | 'zh-TW' | null | undefined;
+
+/**
  * Day 26: opt-out is mirrored here so analytics.track() can decide
  * synchronously. `undefined` means "not yet resolved from /me" — the
  * PostHog SDK stays opted out until this flips to a concrete boolean.
@@ -39,6 +52,7 @@ type AppStore = {
   deviceId: string | null;
   displaced: boolean;
   homeCurrency: HomeCurrency;
+  uiLanguage: UiLanguage;
   analyticsOptedOut: AnalyticsOptOut;
   setSession: (next: {
     user: User | null;
@@ -48,6 +62,7 @@ type AppStore = {
   clearSession: () => void;
   setDisplaced: (next: boolean) => void;
   setHomeCurrency: (next: HomeCurrency) => void;
+  setUiLanguage: (next: UiLanguage) => void;
   setAnalyticsOptedOut: (next: AnalyticsOptOut) => void;
 };
 
@@ -57,6 +72,7 @@ export const useAppStore = create<AppStore>((set) => ({
   deviceId: null,
   displaced: false,
   homeCurrency: undefined,
+  uiLanguage: undefined,
   analyticsOptedOut: undefined,
   setSession: (next) => set(next),
   // clearSession keeps deviceId — it's a per-browser identifier, not a
@@ -83,10 +99,12 @@ export const useAppStore = create<AppStore>((set) => ({
       jwt: null,
       deviceId: s.deviceId,
       homeCurrency: undefined,
+      uiLanguage: undefined,
       analyticsOptedOut: undefined,
     }));
   },
   setDisplaced: (next) => set({ displaced: next }),
   setHomeCurrency: (next) => set({ homeCurrency: next }),
+  setUiLanguage: (next) => set({ uiLanguage: next }),
   setAnalyticsOptedOut: (next) => set({ analyticsOptedOut: next }),
 }));

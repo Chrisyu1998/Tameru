@@ -44,11 +44,13 @@ def test_bootstrap_creates_users_meta_row(client, user_unbootstrapped):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     # Day 29: timezone rides on the bootstrap response; null when the client
-    # didn't send one (DESIGN.md §6.6).
+    # didn't send one (DESIGN.md §6.6). Day 29 Tier 2: ui_language likewise —
+    # null here because this request omits it.
     assert body == {
         "home_currency": "EUR",
         "active_device_id": device_id,
         "timezone": None,
+        "ui_language": None,
     }
 
     # And the row really landed under the user's RLS scope.

@@ -5,6 +5,7 @@
  *   - weekly_digest_enabled  (Day 25, DESIGN.md §6.4)
  *   - analytics_opted_out    (Day 26, DESIGN.md §9.5)
  *   - timezone               (Day 29, DESIGN.md §6.6 — IANA zone, mutable)
+ *   - ui_language            (Day 29 Tier 2, DESIGN.md §6.6 — en/ja/zh-TW)
  *
  * The initial value of both columns now rides on /me (see lib/auth.ts
  * MeResponse), so first paint already knows the user's preference and
@@ -13,11 +14,13 @@
  */
 
 import { apiJson } from './api';
+import type { UiLanguage } from '../store';
 
 export interface Preferences {
   weekly_digest_enabled: boolean;
   analytics_opted_out: boolean;
   timezone: string | null;
+  ui_language: UiLanguage;
 }
 
 export type PreferencesPatch = Partial<Preferences>;

@@ -8,6 +8,7 @@ import { PendingDeleteProgress } from "@/components/PendingDeleteProgress";
 import { EditGoalSheet } from "@/components/EditGoalSheet";
 import { AIHintFooter } from "@/pages/cards";
 import { ledger, useLedger } from "@/lib/ledger";
+import { useCategoryLabel, type Category } from "@/lib/categories";
 import { setChatSeed } from "@/lib/chatSeed";
 import {
   GOAL_OVERALL_LABEL,
@@ -137,7 +138,12 @@ function GoalTile({
   goal: GoalWithSpend;
   pending: boolean;
 }) {
-  const categoryLabel = goal.goal.category ?? GOAL_OVERALL_LABEL;
+  const catLabel = useCategoryLabel();
+  // Localized category display label; the "overall" (null-category) goal keeps
+  // its chrome label until Tier 2b translates it (DESIGN.md §6.6).
+  const categoryLabel = goal.goal.category
+    ? catLabel(goal.goal.category as Category)
+    : GOAL_OVERALL_LABEL;
   const amount = parseFloat(goal.goal.amount);
   const spent = parseFloat(goal.spent_period_to_date);
   const ratio = goal.progress_ratio;

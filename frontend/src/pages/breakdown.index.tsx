@@ -8,7 +8,13 @@ import {
   totalCents,
   useLedger,
 } from "@/lib/ledger";
-import { CATEGORIES, CATEGORY_TINT, CATEGORY_SKETCH, type Category } from "@/lib/categories";
+import {
+  CATEGORIES,
+  CATEGORY_TINT,
+  CATEGORY_SKETCH,
+  useCategoryLabel,
+  type Category,
+} from "@/lib/categories";
 import { GOAL_OVERALL_LABEL, type GoalWithSpend } from "@/lib/goalsApi";
 import { formatMoney, formatMonth, formatShortDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -17,6 +23,7 @@ import { SketchIcon } from "@/components/SketchIcon";
 
 export default function BreakdownPage() {
   const { transactions, cards, goals } = useLedger();
+  const catLabel = useCategoryLabel();
   useEffect(() => {
     // Swallow refresh failures here — the strip is supplementary UX
     // and an error on /goals shouldn't keep the donut from rendering.
@@ -125,7 +132,7 @@ export default function BreakdownPage() {
                       <SketchIcon kind={CATEGORY_SKETCH[category]} size={16} seed={category.length * 7 + 3} />
                     </span>
                     <span className="font-serif text-[0.95rem] text-ink lowercase-title">
-                      {category.toLowerCase()}
+                      {catLabel(category).toLowerCase()}
                     </span>
                   </div>
                   <div className="flex items-center gap-3">
@@ -188,6 +195,7 @@ export default function BreakdownPage() {
  * CATEGORY_TINT as the donut slice for at-a-glance correlation.
  */
 function GoalProgressBar({ goal }: { goal: GoalWithSpend }) {
+  const catLabel = useCategoryLabel();
   const amount = parseFloat(goal.goal.amount);
   const spent = parseFloat(goal.spent_period_to_date);
   const fillPct = Math.min(100, Math.max(0, goal.progress_ratio * 100));
@@ -207,7 +215,9 @@ function GoalProgressBar({ goal }: { goal: GoalWithSpend }) {
     <div className="rounded-2xl border border-hairline bg-surface px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
         <span className="font-serif text-[0.95rem] text-ink lowercase-title">
-          {isOverall ? GOAL_OVERALL_LABEL : (goal.goal.category as string).toLowerCase()}
+          {isOverall
+            ? GOAL_OVERALL_LABEL
+            : catLabel(goal.goal.category as Category).toLowerCase()}
         </span>
         <span className="tabular text-[0.78rem] text-ink-tertiary">
           ${spent.toFixed(spent % 1 === 0 ? 0 : 2)} of $

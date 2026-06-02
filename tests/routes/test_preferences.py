@@ -146,6 +146,44 @@ def test_patch_rejects_invalid_timezone(client, user_a):
     assert resp.status_code == 422
 
 
+def test_patch_sets_valid_ui_language(client, user_a):
+    """A supported ui_language is persisted and round-trips (Day 29 Tier 2,
+    DESIGN.md §6.6). Mutable, like timezone; the third i18n axis."""
+    db = supabase_for_user(user_a.jwt)
+    resp = client.patch(
+        "/me/preferences",
+        headers=_headers(user_a),
+        json={"ui_language": "ja"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ui_language"] == "ja"
+
+    after = (
+        db.table("users_meta")
+        .select("ui_language")
+        .eq("user_id", user_a.id)
+        .execute()
+        .data[0]
+    )
+    assert after["ui_language"] == "ja"
+
+    # Cleanup: clear for downstream tests.
+    db.table("users_meta").update({"ui_language": None}).eq(
+        "user_id", user_a.id
+    ).execute()
+
+
+def test_patch_rejects_invalid_ui_language(client, user_a):
+    """An unsupported language code is rejected (422) before any write —
+    zh-CN (Simplified) is deliberately out of scope, so it must 422."""
+    resp = client.patch(
+        "/me/preferences",
+        headers=_headers(user_a),
+        json={"ui_language": "zh-CN"},
+    )
+    assert resp.status_code == 422
+
+
 def test_patch_unknown_field_rejected(client, user_a):
     """Unknown fields fail validation (extra='forbid' on the model)."""
     resp = client.patch(

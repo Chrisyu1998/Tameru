@@ -31,6 +31,10 @@ export function CurrencyStep({ onConfirm }: CurrencyStepProps) {
       const deviceId = getOrCreateDeviceId();
       const res = await bootstrap(deviceId, selected);
       useAppStore.getState().setHomeCurrency(res.home_currency);
+      // Day 29 Tier 2: bootstrap snapshotted the browser language; mirror it
+      // into the store so the rest of onboarding renders in that language
+      // without waiting on a /me round trip.
+      useAppStore.getState().setUiLanguage(res.ui_language);
       onConfirm(selected);
     } catch (e) {
       setError(e instanceof Error ? e.message : "could not set your currency.");

@@ -7,7 +7,7 @@ import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { PendingDeleteProgress } from "@/components/PendingDeleteProgress";
 import { SketchIllustration } from "@/components/SketchIllustration";
 import { ledger, useLedger } from "@/lib/ledger";
-import { CATEGORIES, CATEGORY_TINT, type Category } from "@/lib/categories";
+import { CATEGORIES, CATEGORY_TINT, useCategoryLabel, type Category } from "@/lib/categories";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Transaction } from "@/lib/fixtures";
@@ -45,6 +45,7 @@ export default function CategoryListPage() {
 
 function CategoryListBody({ category }: { category: Category }) {
   const { transactions, cards, pendingDeletes } = useLedger();
+  const catLabel = useCategoryLabel();
 
   const [monthFilter, setMonthFilter] = useState<MonthFilter>("all");
   const [cardFilter, setCardFilter] = useState<string>("all");
@@ -103,7 +104,7 @@ function CategoryListBody({ category }: { category: Category }) {
             style={{ backgroundColor: CATEGORY_TINT[category as Category] }}
           />
           <h1 className="font-serif text-lg text-ink lowercase-title">
-            {category.toLowerCase()}
+            {catLabel(category).toLowerCase()}
           </h1>
         </div>
         <div className="w-10" />

@@ -1,11 +1,31 @@
-/* Fonts: Fraunces (display serif) + Inter (UI sans). Must precede all @import
-   and rules per CSS spec, hence first. (index.html also preloads these so the
-   first paint isn't FOUT-y.) */
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Inter:wght@300;400;500;600;700&display=swap");
+/* Fonts: Fraunces (display serif) + Inter (UI sans) for Latin; Noto Sans
+   JP + TC supply the CJK glyphs neither Latin face has (DESIGN.md §6.6 Tier
+   2). Google Fonts scopes each CJK family with `unicode-range`, so non-CJK
+   users never download them — they load only when ja/zh-TW glyphs actually
+   render. Must precede all @import and rules per CSS spec, hence first.
+   (index.html also preloads the Latin faces so the first paint isn't FOUT-y.) */
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
+
+/* Region-appropriate CJK glyphs (DESIGN.md §6.6 Tier 2). <html lang> is set
+   from the user's ui_language (main.tsx). For Japanese, prefer Noto Sans JP;
+   for Traditional Chinese, prefer Noto Sans TC. Han characters are shared
+   under Han unification but render with subtly different shapes per region,
+   so the order of the two Noto faces is what makes 直/骨/etc. correct. These
+   override the @theme defaults on the html element, cascading to every
+   .font-serif / .font-sans descendant via the var() reference. */
+html:lang(ja) {
+  --font-serif: "Fraunces", "Noto Sans JP", "Noto Sans TC", ui-serif, Georgia, serif;
+  --font-sans: "Inter", "Noto Sans JP", "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
+}
+html:lang(zh-TW),
+html:lang(zh-Hant) {
+  --font-serif: "Fraunces", "Noto Sans TC", "Noto Sans JP", ui-serif, Georgia, serif;
+  --font-sans: "Inter", "Noto Sans TC", "Noto Sans JP", ui-sans-serif, system-ui, sans-serif;
+}
 
 /*
  * Tameru design system — wabi-sabi minimalism.
@@ -17,8 +37,13 @@
  */
 
 @theme inline {
-  --font-serif: "Fraunces", ui-serif, Georgia, serif;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  /* CJK families sit AFTER the Latin face: the browser resolves font-family
+     per-glyph, so Latin text uses Fraunces/Inter and CJK characters fall
+     through to Noto. The :lang() overrides below reorder the two Noto faces
+     so Han glyphs match the user's region (JP vs TC differ under Han
+     unification) — DESIGN.md §6.6 Tier 2. */
+  --font-serif: "Fraunces", "Noto Sans JP", "Noto Sans TC", ui-serif, Georgia, serif;
+  --font-sans: "Inter", "Noto Sans JP", "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
 
   --radius: 1rem;
   --radius-sm: calc(var(--radius) - 8px);

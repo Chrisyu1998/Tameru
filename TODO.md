@@ -70,8 +70,10 @@ Captured here so the deferred-cards item has context. These are NOT deferred.
     representation is value-safe for all 9 currencies (it stores major units
     ×100 as a precision trick, not a 100-minor-unit claim), so this was a
     display fix only: symbol + fraction digits via `Intl.NumberFormat`
-    (`frontend/src/lib/format.ts`, locale derived from currency: JPY→ja-JP,
-    TWD→zh-TW, else en-US).
+    (`frontend/src/lib/format.ts`). Formatting locale comes from
+    `displayLocale()` (browser language today, `ui_language` in Tier 2) —
+    decoupled from currency per the 2026-06-01 axis-independence reversal, so
+    an English-browser JPY user gets English dates with ¥ amounts.
   - ~~Fix `subscriptions.tsx` hardcoded `Intl.NumberFormat("en-US", USD)`~~ — DONE.
   - ~~Localize date helpers in `format.ts`~~ — DONE (`formatShortDate`,
     `formatMonth`, new shared `formatFullDate`).
@@ -94,18 +96,59 @@ Captured here so the deferred-cards item has context. These are NOT deferred.
     window straddles the UTC week boundary). Week bounds computed in the
     user's zone. **OPERATOR:** the Railway `digest-cron` schedule must be
     changed from `0 14 * * 1` to `0 * * * *`.
-  - **Still pending (deferred with Tier 2):** localize the digest **narrative**
-    prompt (`app/services/digest.py`) and the surrounding email template
-    together — don't ship a half-translated email. The template strings are
-    UI copy, so they belong with the Tier 2 i18n-framework work.
+  - ~~Localize the digest **narrative** + email template together~~ — **DONE**
+    in Tier 2a (see below): `digest_v2` writes the narrative in `ui_language`,
+    and the email chrome renders from a per-language string table.
 
-- **Tier 2 — translated UI:**
+  Supported language set: **`en`, `ja`, `zh-TW`** (Traditional Chinese only —
+  Simplified Chinese is out of scope for now).
+
+- **Tier 2a — i18n foundation: SHIPPED.** The `ui_language` axis and everything
+  that keys off it, *minus* the broad JSX chrome extraction (which is Tier 2b).
+  - ~~Add `ui_language` to `users_meta`~~ — **DONE.** Migration
+    `20260601140000`; nullable, mutable, `CHECK (ui_language IN
+    ('en','ja','zh-TW'))` (small fixed set, so a CHECK — unlike timezone's
+    app-layer validation); mirrored in `app/util/language.py`. Snapshotted
+    from `navigator.language` at `/auth/bootstrap`, on `/me`, editable via
+    `PATCH /me/preferences` + a Settings → Account selector (`LanguageRow`).
+  - ~~`displayLocale()` reads `ui_language`~~ — **DONE** (`format.ts`). Explicit
+    `en` keeps the browser's regional English; `ja`/`zh-TW` pin a CJK locale;
+    null falls back to the browser language.
+  - ~~CJK font stack~~ — **DONE.** Noto Sans **JP + TC** added as the CJK
+    fallback in `index.css`, region-ordered via `:lang()` (which keys off
+    `<html lang>`, set from `ui_language` in `main.tsx`). The `lowercase`
+    transforms stay (no-op on Han/Kana).
+  - ~~Category *display* labels~~ — **DONE (all read-only surfaces).** Reactive
+    `useCategoryLabel()` hook + `CATEGORY_LABELS` map in
+    `frontend/src/lib/categories.ts`; backend mirror in
+    `app/prompts/categories.py` for the digest. Stored enum stays English.
+    Wired on the breakdown index/category/goal surfaces, the **home dashboard
+    tiles** (`Dashboard.tsx`), and the **`/goals` page Pill**. The **edit-sheet
+    category pickers, chat parse cards, and onboarding tour are deferred to Tier
+    2b** (interactive/edit surfaces coupled to other English chrome strings).
+  - ~~Chat reply language → setting-driven~~ — **DONE** (`chat_v12`). Replies in
+    the user's `ui_language` regardless of input, via a directive in the
+    prompt's dynamic tail (block[1], not the hashed preamble); mirror-input
+    fallback (`chat_v11` behavior) only when `ui_language` is unset. Tool args
+    and category values stay canonical English. Chat history is **not**
+    retroactively translated (`chat_messages` is append-only).
+  - ~~Localize the digest narrative + email template~~ — **DONE** (the Tier 1.5
+    deferral above). Sonnet writes in `ui_language` (`digest_v2`); email
+    subject/body/CTA/unsubscribe + top-category label render from a per-
+    language string table in `app/services/digest.py`. `_format_money` renders
+    the correct per-currency symbol + decimals (`¥1,500`, `NT$500.00`,
+    `CHF 99.00`) for all nine `home_currency` currencies — JPY is zero-decimal.
+
+- **Tier 2b — UI chrome translation (planned, not built):**
   - Add an i18n framework (react-i18next or similar); extract hardcoded English
-    JSX strings.
-  - Add a CJK font stack (e.g. Noto Sans JP/TC) and **drop the `lowercase-title`
-    transform for CJK** — lowercasing is meaningless in Japanese/Chinese and the
-    current serif stack has no CJK glyphs.
-  - Localize category *display* labels (`frontend/src/lib/categories.ts`) while
-    keeping the stored category enum English (it's the join/glyph/contract-test
-    key — do not translate the stored value).
-  - Add `ui_language` to `users_meta`.
+    JSX strings. (Scale signal: literal English lives in nearly every heading —
+    grep `lowercase-title` / `font-serif` across `frontend/src` for the spread;
+    onboarding steps + `components/` are the bulk.)
+  - Wire category labels into the remaining *interactive/edit* render sites left
+    out of 2a: the edit-sheet category pickers (`EditTransactionSheet`,
+    `EditSubscriptionSheet`), `ParseCard` / `SubscriptionParseCard`, and the
+    onboarding tour. Use the existing `useCategoryLabel()` hook; the option
+    *values* stay English. (All read-only category displays are done in 2a.)
+  - Add `ui_language` selection to the mobile More → Notifications sheet if a
+    second mobile entry point is wanted (today it's reachable via Settings →
+    Account on both desktop and mobile).

@@ -78,6 +78,16 @@ Version log:
     values in canonical English, and to echo home-currency amounts
     verbatim without FX conversion. Haiku is natively multilingual, so
     no model change. Static-block edit, so it busts the prompt cache once.
+  * chat_v12 (Day 29 Tier 2) — reply language is now SETTING-driven, not
+    input-driven (DESIGN.md §6.6 Tier 2). The Style section tells the
+    agent to reply in the user's chosen interface language (from
+    `users_meta.ui_language`), echoed into the dynamic tail (block[1]) by
+    `render_user_language`, falling back to mirror-the-input only when no
+    language is set. Predictable beats reactive: short/neutral inputs
+    ("Netflix $15", "ok") made v11 guess the language each turn. The
+    per-user language lives in block[1] (NOT hashed) so every user still
+    shares one cached block[0] prefix. Static-block edit busts the cache
+    once.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -99,7 +109,7 @@ from typing import Any
 from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 
-PROMPT_VERSION = "chat_v11"
+PROMPT_VERSION = "chat_v12"
 
 
 SYSTEM_PROMPT = """\
@@ -227,13 +237,16 @@ partial scan and suggest narrower filters (a tighter date range or category).
 
 ## Style
 
-Reply in the same language the user wrote in. If they write in Japanese, \
-answer in Japanese; in Traditional Chinese, answer in Traditional Chinese; \
-otherwise answer in English. This applies only to your prose **to the user** — \
-tool arguments, category values (e.g. "Dining", "Groceries"), and card refs \
-stay in their canonical English form regardless of the conversation language. \
-Amounts you mention in prose carry the user's home-currency symbol exactly as \
-the tools return them; do not convert currencies.
+Reply in the user's chosen interface language, given in the context block \
+below as "The user's interface language is …". Always answer in that language \
+regardless of which language the user typed in — if their interface language \
+is Japanese, reply in Japanese even when they wrote to you in English. If no \
+interface language is given, fall back to replying in the same language the \
+user wrote in. This applies only to your prose **to the user** — tool \
+arguments, category values (e.g. "Dining", "Groceries"), and card refs stay \
+in their canonical English form regardless of the reply language. Amounts you \
+mention in prose carry the user's home-currency symbol exactly as the tools \
+return them; do not convert currencies.
 
 For questions that don't need a tool, answer in plain prose. Be brief — one \
 or two sentences is usually right. No markdown headers. No bullet lists \
@@ -317,6 +330,13 @@ def render_system_prompt(
     )
     if memory_block:
         dynamic_tail = dynamic_tail + "\n\n" + memory_block
+    # chat_v12 (Day 29 Tier 2): the per-user reply language lives in the
+    # dynamic tail, never block[0] — keeping it out of the hashed preamble
+    # so every user shares one cached prefix (§11.3). Empty string when the
+    # user has no explicit language → block[0]'s mirror-the-input fallback.
+    language_block = render_user_language(user_jwt)
+    if language_block:
+        dynamic_tail = dynamic_tail + "\n\n" + language_block
     return [
         {
             "type": "text",
@@ -393,6 +413,53 @@ def render_user_merchants(user_jwt: str) -> str:
         "fragmenting across spelling variants."
     )
     return "\n".join(lines)
+
+
+# chat_v12 reply-language directive. Maps the stored ui_language code to a
+# human language name for the prompt. Mirrors app/util/language.py's
+# supported set; an unknown/NULL value yields no directive (the block[0]
+# mirror-the-input fallback applies).
+_UI_LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "ja": "Japanese",
+    "zh-TW": "Traditional Chinese",
+}
+
+
+def render_user_language(user_jwt: str) -> str:
+    """Return the per-user reply-language directive for the prompt tail.
+
+    Reads `users_meta.ui_language` under the caller's JWT (RLS scopes it to
+    the user). Returns a one-line directive Claude follows for its prose
+    reply language (chat_v12, DESIGN.md §6.6 Tier 2), or "" when the user
+    has no explicit language set — in which case block[0]'s instruction to
+    mirror the user's input language applies.
+
+    Output shape, set case:
+        The user's interface language is Japanese (ja). Reply in Japanese.
+
+    Output shape, unset case:
+        "" (empty)
+
+    Defensive: any read error returns "" so a transient DB issue degrades to
+    the mirror-the-input fallback rather than failing the chat turn.
+    """
+    try:
+        client = supabase_for_user(user_jwt)
+        rows = (
+            client.table("users_meta")
+            .select("ui_language")
+            .execute()
+            .data
+            or []
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    code = rows[0].get("ui_language") if rows else None
+    name = _UI_LANGUAGE_NAMES.get(code or "")
+    if not name:
+        return ""
+    return f"The user's interface language is {name} ({code}). Reply in {name}."
 
 
 def system_prompt_hash(

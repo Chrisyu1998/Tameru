@@ -32,3 +32,58 @@ ALLOWED_CATEGORIES: tuple[str, ...] = (
     "Health",          # Doctor, dentist, vet, prescription copays, therapy
     "Other",           # Escape hatch — monitored as a signal in ai_call_log
 )
+
+
+# Localized *display* labels per category (DESIGN.md §6.6 Tier 2). The stored
+# value is always the English enum above — the join key / glyph key /
+# contract-test key. Only rendered text (e.g. the weekly digest's top-category
+# line) is translated. Mirrors frontend/src/lib/categories.ts CATEGORY_LABELS;
+# the two must stay in sync. `en` is the identity map so one lookup path covers
+# every language. Traditional Chinese only. Drafts — native speakers refine.
+CATEGORY_DISPLAY_LABELS: dict[str, dict[str, str]] = {
+    "en": {c: c for c in ALLOWED_CATEGORIES},
+    "ja": {
+        "Groceries": "食料品",
+        "Dining": "外食",
+        "Coffee Shops": "カフェ",
+        "Gas": "ガソリン",
+        "Transit": "交通",
+        "Travel": "旅行",
+        "Streaming": "ストリーミング",
+        "Memberships": "会員費",
+        "Entertainment": "娯楽",
+        "Shopping": "ショッピング",
+        "Drugstores": "ドラッグストア",
+        "Home": "住居",
+        "Utilities": "公共料金",
+        "Health": "健康",
+        "Other": "その他",
+    },
+    "zh-TW": {
+        "Groceries": "食品雜貨",
+        "Dining": "餐飲",
+        "Coffee Shops": "咖啡",
+        "Gas": "加油",
+        "Transit": "交通",
+        "Travel": "旅遊",
+        "Streaming": "串流",
+        "Memberships": "會員",
+        "Entertainment": "娛樂",
+        "Shopping": "購物",
+        "Drugstores": "藥妝店",
+        "Home": "居家",
+        "Utilities": "水電費",
+        "Health": "健康",
+        "Other": "其他",
+    },
+}
+
+
+def category_display_label(category: str, ui_language: str | None) -> str:
+    """Localized display label for `category` in `ui_language`.
+
+    Falls back to English (the identity map) for an unset/unknown language or
+    a category not in the enum, so the caller always gets a renderable string.
+    """
+    table = CATEGORY_DISPLAY_LABELS.get(ui_language or "en", CATEGORY_DISPLAY_LABELS["en"])
+    return table.get(category, category)

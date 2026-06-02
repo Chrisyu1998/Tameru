@@ -21,6 +21,7 @@ import { DeleteAccountRow } from "@/components/DeleteAccountRow";
 import { ExportDataButton } from "@/components/ExportDataButton";
 import { PrivacyDisclosure } from "@/components/PrivacyDisclosure";
 import { TimezoneRow } from "@/components/TimezoneRow";
+import { LanguageRow } from "@/components/LanguageRow";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -233,6 +234,9 @@ function AccountPanel() {
         these can't be changed yet — by design. your home currency anchors
         every comparison and your email anchors your data.
       </p>
+      <div className="mt-5 rounded-2xl border border-hairline bg-surface px-4">
+        <LanguageRow />
+      </div>
     </div>
   );
 }

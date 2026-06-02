@@ -163,7 +163,10 @@ def me(
     client = supabase_for_user(user.jwt)
     resp = (
         client.table("users_meta")
-        .select("home_currency, analytics_opted_out, weekly_digest_enabled, timezone")
+        .select(
+            "home_currency, analytics_opted_out, weekly_digest_enabled, "
+            "timezone, ui_language"
+        )
         .eq("user_id", str(user.user_id))
         .execute()
     )
@@ -175,6 +178,10 @@ def me(
         "analytics_opted_out": bool(row.get("analytics_opted_out", False)),
         "weekly_digest_enabled": bool(row.get("weekly_digest_enabled", True)),
         "timezone": row.get("timezone"),
+        # Day 29 Tier 2 (DESIGN.md §6.6): the UI/display language, or null
+        # when unset (frontend falls back to navigator.language). Rides on
+        # /me so first paint resolves the formatting locale in one round trip.
+        "ui_language": row.get("ui_language"),
     }
 
 

@@ -53,6 +53,17 @@ function RequireOnboarded() {
 
 function App() {
   const [authReady, setAuthReady] = useState(false);
+  const uiLanguage = useAppStore((s) => s.uiLanguage);
+
+  // Day 29 Tier 2: reflect the UI language onto <html lang> so CSS can pick
+  // region-appropriate CJK glyphs (Han characters differ between JP and TC
+  // fonts — see index.css `:lang()` font-stack overrides) and so the browser's
+  // own text rendering + a11y tree are correct. Defaults to "en" until an
+  // explicit choice resolves from /me.
+  useEffect(() => {
+    document.documentElement.lang =
+      uiLanguage === "ja" || uiLanguage === "zh-TW" ? uiLanguage : "en";
+  }, [uiLanguage]);
 
   useEffect(() => {
     let pollHandle: number | null = null;

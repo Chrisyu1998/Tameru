@@ -6,6 +6,7 @@ import type {
   DashboardSummaryWire,
 } from "@/lib/dashboardApi";
 import { formatMoney, formatMonth, formatPercent } from "@/lib/format";
+import { useCategoryLabel } from "@/lib/categories";
 
 interface DashboardProps {
   data: DashboardSummaryWire;
@@ -87,13 +88,17 @@ export function Dashboard({ data, inert = false }: DashboardProps) {
 /** Per-category tile. Falls back to the "still learning" empty state when
  * the user has < 3 months of history for the category. */
 function DashboardTile({ tile }: { tile: CategoryTileWire }) {
+  // `tile.name` is the canonical English enum; localize the *display* label
+  // (DESIGN.md §6.6 Tier 2). DeltaTile lowercases via CSS, so a localized
+  // CJK label is unaffected and English stays lowercased as before.
+  const catLabel = useCategoryLabel();
   if (!tile.baseline_ready || tile.delta_abs === null) {
     return (
       <DeltaTile
         layout="stacked"
         tone="neutral"
         direction="neutral"
-        category={tile.name.toLowerCase()}
+        category={catLabel(tile.name).toLowerCase()}
         delta={null}
         band="still learning"
       />
@@ -104,7 +109,7 @@ function DashboardTile({ tile }: { tile: CategoryTileWire }) {
     <DeltaTile
       layout="stacked"
       tone="neutral"
-      category={tile.name.toLowerCase()}
+      category={catLabel(tile.name).toLowerCase()}
       delta={deltaDollars}
     />
   );

@@ -26,16 +26,28 @@ function resolveCurrency(): string {
 /**
  * The display locale that drives number grouping and date formatting. It
  * follows the UI *language*, decoupled from currency and timezone (DESIGN.md
- * §6.6). Until Tier 2 adds an explicit `ui_language` preference, we use the
- * browser's language — so the sister-in-Japan case (English browser, JPY
- * currency, Tokyo timezone) renders English dates with ¥ amounts. Falls back
- * to en-US in non-browser contexts (SSR/tests).
+ * §6.6). The user's explicit `ui_language` (Tier 2) wins; until they choose
+ * one — or in non-browser contexts (SSR/tests) — we fall back to the
+ * browser's `navigator.language`. So the sister-in-Japan case (English UI,
+ * JPY currency, Tokyo timezone) renders English dates with ¥ amounts.
+ *
+ * For an explicit `en` choice we keep the browser's regional English
+ * (`en-GB`, `en-AU`, …) so date/number layout still matches where the user
+ * is; only `ja`/`zh-TW` pin a specific CJK locale.
  */
 function displayLocale(): string {
-  if (typeof navigator !== "undefined" && navigator.language) {
-    return navigator.language;
+  const lang = useAppStore.getState().uiLanguage;
+  if (lang === "ja") return "ja-JP";
+  if (lang === "zh-TW") return "zh-TW";
+  const browser =
+    typeof navigator !== "undefined" && navigator.language
+      ? navigator.language
+      : "en-US";
+  if (lang === "en") {
+    return browser.toLowerCase().startsWith("en") ? browser : "en-US";
   }
-  return "en-US";
+  // null / undefined — no explicit choice yet; track the browser language.
+  return browser;
 }
 
 /**

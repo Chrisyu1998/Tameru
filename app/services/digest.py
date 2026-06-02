@@ -30,6 +30,8 @@ from zoneinfo import ZoneInfo
 from anthropic import Anthropic
 from supabase import Client
 
+from app.prompts.categories import category_display_label
+
 # DESIGN.md §6.4 / §6.6 — the digest runs in each user's own timezone
 # (`users_meta.timezone`). This is the fallback when a user has no zone set
 # (NULL column) or a legacy/invalid value: the historical ET behavior, so
@@ -46,7 +48,20 @@ _BASELINE_WEEKS = 8
 # Haiku doesn't drag the digest down with it. v1 default is
 # claude-sonnet-4-6 per the same table in CLAUDE.md.
 _DEFAULT_DIGEST_MODEL = "claude-sonnet-4-6"
-_SONNET_PROMPT_VERSION = "digest_v1"
+# digest_v2 (Day 29 Tier 2) — the narrative is now written in the user's
+# ui_language (DESIGN.md §6.6). The static system prompt gained one
+# language-awareness sentence; the target language name is passed per-call in
+# the user message (kept out of the static prompt so the hash is language-
+# independent). Bumped from digest_v1 so ai_call_log.prompt_hash lines up.
+_SONNET_PROMPT_VERSION = "digest_v2"
+
+# Human language names for the supported ui_language codes, used in the Sonnet
+# user message and as a fallback-narrative key. NULL/unknown → English.
+_UI_LANGUAGE_NAMES: dict[str, str] = {
+    "en": "English",
+    "ja": "Japanese",
+    "zh-TW": "Traditional Chinese",
+}
 
 
 def digest_model() -> str:
@@ -69,7 +84,9 @@ _SONNET_SYSTEM_PROMPT = (
     "applies (most weeks). Never mention specific merchants or dollar amounts "
     "the user didn't already see in the digest. If spending is unremarkable, "
     'say so plainly (e.g. "spending was steady this week, in line with your '
-    'usual pattern").'
+    'usual pattern"). Write the observation and nudge in the language named '
+    "in the user message; the <=100-character limit still applies to that "
+    "language's text."
 )
 
 
@@ -114,8 +131,12 @@ class DigestPayload:
     baseline_avg: Decimal         # 8-week trailing avg, excludes the just-ended week
     top_category: CategoryRollup | None
     home_currency: str
-    observation: str              # Sonnet output
-    nudge: str | None             # Sonnet output
+    observation: str              # Sonnet output (in ui_language)
+    nudge: str | None             # Sonnet output (in ui_language)
+    # en | ja | zh-TW | None — drives the email chrome + narrative language.
+    # Last with a default so callers/tests predating Tier 2 still construct a
+    # valid (English) payload; compose_digest always passes it explicitly.
+    ui_language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,7 +169,7 @@ def compose_digest(
     exception, logs it via the JSON logger, writes an `email_log` row
     with success=False, and moves to the next user.
     """
-    home_currency, tz = _read_user_settings(client, user_id)
+    home_currency, tz, ui_language = _read_user_settings(client, user_id)
     week_start, week_end = _previous_week_bounds(tz)
     baseline_start = week_start - timedelta(weeks=_BASELINE_WEEKS)
 
@@ -164,6 +185,7 @@ def compose_digest(
         baseline_avg=baseline_avg,
         top_category=top_category,
         home_currency=home_currency,
+        ui_language=ui_language,
     )
 
     payload = DigestPayload(
@@ -174,6 +196,7 @@ def compose_digest(
         baseline_avg=baseline_avg,
         top_category=top_category,
         home_currency=home_currency,
+        ui_language=ui_language,
         observation=observation,
         nudge=nudge,
     )
@@ -198,33 +221,38 @@ def render_email(
     Vercel PWA host with `?source=digest` appended (Day 26b). Required
     kwarg: omitting it raises `TypeError`. The CTA is a navigation
     affordance, NOT one of the ≤5 prose content blocks.
+
+    All visible copy is localized to `payload.ui_language` (DESIGN.md §6.6
+    Tier 2); the Sonnet `observation`/`nudge` already arrive in that language.
+    NULL/unknown language → English (the pre-Tier-2 copy).
     """
-    week_label = payload.week_start.strftime("%b %-d") + "–" + payload.week_end.strftime("%-d")
+    s = _DIGEST_STRINGS.get(payload.ui_language or "en", _DIGEST_STRINGS["en"])
+    week_label = _week_label(payload.week_start, payload.week_end, payload.ui_language)
     delta = payload.week_total - payload.baseline_avg
-    delta_word = "above" if delta > 0 else ("below" if delta < 0 else "in line with")
     money = lambda d: _format_money(d, payload.home_currency)
 
     # Block 1: total vs baseline. Block 2: top category vs its baseline.
     # Block 3: observation. Block 4 (conditional): nudge. Block 5: unsub.
-    line_total = (
-        f"You spent {money(payload.week_total)} last week — "
-        f"{money(abs(delta))} {delta_word} your weekly average."
-    )
+    # Direction picks a full localized template so each language reads
+    # naturally (grammar differs — "above" isn't a drop-in across languages).
+    total_key = "total_above" if delta > 0 else ("total_below" if delta < 0 else "total_inline")
+    line_total = s[total_key].format(total=money(payload.week_total), delta=money(abs(delta)))
     if payload.top_category is not None:
         cat = payload.top_category
         cat_delta = cat.week_total - cat.baseline_avg
-        cat_word = "above" if cat_delta > 0 else ("below" if cat_delta < 0 else "in line with")
-        line_top = (
-            f"Top category: {cat.category} at {money(cat.week_total)} — "
-            f"{money(abs(cat_delta))} {cat_word} its 8-week baseline."
+        top_key = "top_above" if cat_delta > 0 else ("top_below" if cat_delta < 0 else "top_inline")
+        line_top = s[top_key].format(
+            cat=category_display_label(cat.category, payload.ui_language),
+            amt=money(cat.week_total),
+            delta=money(abs(cat_delta)),
         )
     else:
-        line_top = "No category stood out this week."
+        line_top = s["no_top"]
 
     line_observation = payload.observation
     line_nudge = payload.nudge  # may be None
 
-    subject = f"Tameru — week of {week_label}"
+    subject = s["subject"].format(week=week_label)
 
     # Plaintext: one block per line, blank lines between. The CTA line
     # sits above Unsubscribe — closer to the prose, separate from the
@@ -232,8 +260,8 @@ def render_email(
     text_blocks = [line_total, line_top, line_observation]
     if line_nudge:
         text_blocks.append(line_nudge)
-    text_blocks.append(f"View this week in Tameru: {app_cta_url}")
-    text_blocks.append(f"Unsubscribe: {unsubscribe_url}")
+    text_blocks.append(f"{s['cta']}: {app_cta_url}")
+    text_blocks.append(f"{s['unsub']}: {unsubscribe_url}")
     text = "\n\n".join(text_blocks) + "\n"
 
     # HTML: tight inline-styled paragraphs. No <style> block, no class
@@ -268,13 +296,14 @@ def render_email(
     parts.append(
         f'<p style="{cta_wrap_style}">'
         f'<a href="{_html_escape(app_cta_url)}" style="{cta_link_style}">'
-        f"View this week in Tameru"
+        f"{_html_escape(s['cta'])}"
         f"</a>"
         f"</p>"
     )
     parts.append(
         f'<p style="{unsub_style}">'
-        f'<a href="{_html_escape(unsubscribe_url)}" style="color:#888;">Unsubscribe</a>'
+        f'<a href="{_html_escape(unsubscribe_url)}" style="color:#888;">'
+        f"{_html_escape(s['unsub'])}</a>"
         f"</p>"
     )
     html = (
@@ -309,26 +338,29 @@ def _previous_week_bounds(tz: ZoneInfo) -> tuple[datetime, datetime]:
     return week_start, week_end
 
 
-def _read_user_settings(client: Client, user_id: UUID) -> tuple[str, ZoneInfo]:
-    """Read `(home_currency, timezone)` for `user_id`.
+def _read_user_settings(
+    client: Client, user_id: UUID
+) -> tuple[str, ZoneInfo, str | None]:
+    """Read `(home_currency, timezone, ui_language)` for `user_id`.
 
-    Response shape: `(currency, ZoneInfo)`. Defaults to `("USD",
-    DEFAULT_DIGEST_TZ)` when no row exists; an absent or unresolvable
-    `timezone` (NULL column, or a legacy value not in this Python's tz
-    database) falls back to the default zone so the digest never crashes
-    on a bad zone.
+    Response shape: `(currency, ZoneInfo, ui_language)`. Defaults to
+    `("USD", DEFAULT_DIGEST_TZ, None)` when no row exists; an absent or
+    unresolvable `timezone` (NULL column, or a legacy value not in this
+    Python's tz database) falls back to the default zone, and a NULL
+    `ui_language` falls back to English in the renderer — so the digest
+    never crashes on a missing value.
     """
     resp = (
         client.table("users_meta")
-        .select("home_currency, timezone")
+        .select("home_currency, timezone, ui_language")
         .eq("user_id", str(user_id))
         .execute()
     )
     if not resp.data:
-        return "USD", _DEFAULT_DIGEST_TZ
+        return "USD", _DEFAULT_DIGEST_TZ, None
     row = resp.data[0]
     home_currency = row.get("home_currency") or "USD"
-    return home_currency, _resolve_tz(row.get("timezone"))
+    return home_currency, _resolve_tz(row.get("timezone")), row.get("ui_language")
 
 
 def _resolve_tz(name: str | None) -> ZoneInfo:
@@ -445,13 +477,16 @@ def _call_sonnet(
     baseline_avg: Decimal,
     top_category: CategoryRollup | None,
     home_currency: str,
+    ui_language: str | None,
 ) -> tuple[str, str | None, SonnetCallLog]:
     """Ask Sonnet for {observation, nudge}. Send aggregates only.
 
     Returns (observation, nudge, call_log) — the call_log is what the
-    cron caller passes into its admin `ai_call_log` write.
+    cron caller passes into its admin `ai_call_log` write. `ui_language`
+    selects the prose language (DESIGN.md §6.6 Tier 2); NULL/unknown → English.
     """
     client = anthropic_client or Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    language_name = _UI_LANGUAGE_NAMES.get(ui_language or "en", "English")
 
     user_payload = {
         "week_total": str(week_total),
@@ -468,6 +503,7 @@ def _call_sonnet(
         ),
     }
     user_message = (
+        f"Write the observation and nudge in {language_name}.\n\n"
         "Here are this week's spending aggregates (no merchant names, "
         "no transaction list — aggregates only):\n"
         + json.dumps(user_payload, indent=2)
@@ -491,7 +527,7 @@ def _call_sonnet(
             error_code=type(exc).__name__,
         )
         # Fallback narrative so the email still ships if Sonnet 5xx's.
-        return _fallback_narrative(week_total, baseline_avg), None, call_log
+        return _fallback_narrative(week_total, baseline_avg, ui_language), None, call_log
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     text_block = next(
@@ -505,11 +541,11 @@ def _call_sonnet(
         nudge = str(nudge_value).strip()[:100] if nudge_value else None
     except (json.JSONDecodeError, AttributeError, TypeError):
         # Sonnet returned non-JSON; fall back rather than ship the raw blob.
-        observation = _fallback_narrative(week_total, baseline_avg)
+        observation = _fallback_narrative(week_total, baseline_avg, ui_language)
         nudge = None
 
     if not observation:
-        observation = _fallback_narrative(week_total, baseline_avg)
+        observation = _fallback_narrative(week_total, baseline_avg, ui_language)
 
     call_log = SonnetCallLog(
         input_tokens=response.usage.input_tokens,
@@ -521,28 +557,148 @@ def _call_sonnet(
     return observation, nudge, call_log
 
 
-def _fallback_narrative(week_total: Decimal, baseline_avg: Decimal) -> str:
+def _fallback_narrative(
+    week_total: Decimal, baseline_avg: Decimal, ui_language: str | None = None
+) -> str:
     """Deterministic, ungenerated observation when Sonnet fails or misbehaves.
 
     The digest is more valuable than the narrative — shipping a quiet
     factual line beats burying the user's actual numbers behind a
-    silent abort.
+    silent abort. Localized to `ui_language` (DESIGN.md §6.6 Tier 2) so a
+    Sonnet outage still ships a same-language digest; NULL/unknown → English.
     """
+    strings = _FALLBACK_STRINGS.get(ui_language or "en", _FALLBACK_STRINGS["en"])
     if baseline_avg == 0:
-        return "First week of tracked spending — your baseline starts here."
+        return strings["first_week"]
     delta = week_total - baseline_avg
     if abs(delta) < baseline_avg * Decimal("0.10"):
-        return "Spending was steady this week, in line with your usual pattern."
-    direction = "higher" if delta > 0 else "lower"
-    return f"Spending ran {direction} than your 8-week average this week."
+        return strings["steady"]
+    return strings["higher"] if delta > 0 else strings["lower"]
+
+
+# Localized fallback observations (DESIGN.md §6.6 Tier 2). Keys mirror the
+# branches in `_fallback_narrative`. `en` preserves the pre-Tier-2 copy.
+_FALLBACK_STRINGS: dict[str, dict[str, str]] = {
+    "en": {
+        "first_week": "First week of tracked spending — your baseline starts here.",
+        "steady": "Spending was steady this week, in line with your usual pattern.",
+        "higher": "Spending ran higher than your 8-week average this week.",
+        "lower": "Spending ran lower than your 8-week average this week.",
+    },
+    "ja": {
+        "first_week": "支出トラッキングの最初の週です。ここから基準ができていきます。",
+        "steady": "今週の支出はいつものパターンとほぼ同じで、安定していました。",
+        "higher": "今週の支出は8週間の平均を上回りました。",
+        "lower": "今週の支出は8週間の平均を下回りました。",
+    },
+    "zh-TW": {
+        "first_week": "這是開始記錄支出的第一週，基準從這裡建立。",
+        "steady": "本週支出穩定，與平常的模式相當。",
+        "higher": "本週支出高於 8 週平均。",
+        "lower": "本週支出低於 8 週平均。",
+    },
+}
+
+
+# Localized email chrome (DESIGN.md §6.6 Tier 2). One full template per delta
+# direction so each language reads naturally — "above"/"below" are not drop-in
+# swappable across grammars. `{total}`/`{delta}`/`{amt}` are pre-formatted
+# money strings; `{cat}` is a localized category label; `{week}` is the week
+# label. `en` preserves the pre-Tier-2 copy verbatim. Drafts — native speakers
+# refine. Mirrors frontend digest-adjacent copy conventions (§6.4).
+_DIGEST_STRINGS: dict[str, dict[str, str]] = {
+    "en": {
+        "subject": "Tameru — week of {week}",
+        "total_above": "You spent {total} last week — {delta} above your weekly average.",
+        "total_below": "You spent {total} last week — {delta} below your weekly average.",
+        "total_inline": "You spent {total} last week — in line with your weekly average.",
+        "top_above": "Top category: {cat} at {amt} — {delta} above its 8-week baseline.",
+        "top_below": "Top category: {cat} at {amt} — {delta} below its 8-week baseline.",
+        "top_inline": "Top category: {cat} at {amt} — in line with its 8-week baseline.",
+        "no_top": "No category stood out this week.",
+        "cta": "View this week in Tameru",
+        "unsub": "Unsubscribe",
+    },
+    "ja": {
+        "subject": "Tameru — {week} の振り返り",
+        "total_above": "先週の支出は {total} でした。週平均を {delta} 上回っています。",
+        "total_below": "先週の支出は {total} でした。週平均を {delta} 下回っています。",
+        "total_inline": "先週の支出は {total} でした。週平均とほぼ同じです。",
+        "top_above": "最も多かったカテゴリー：{cat}（{amt}）。8週間の平均を {delta} 上回っています。",
+        "top_below": "最も多かったカテゴリー：{cat}（{amt}）。8週間の平均を {delta} 下回っています。",
+        "top_inline": "最も多かったカテゴリー：{cat}（{amt}）。8週間の平均とほぼ同じです。",
+        "no_top": "今週は特に目立ったカテゴリーはありませんでした。",
+        "cta": "Tameru で今週を見る",
+        "unsub": "配信停止",
+    },
+    "zh-TW": {
+        "subject": "Tameru — {week} 週回顧",
+        "total_above": "上週支出 {total}，比每週平均多 {delta}。",
+        "total_below": "上週支出 {total}，比每週平均少 {delta}。",
+        "total_inline": "上週支出 {total}，與每週平均相當。",
+        "top_above": "最高類別：{cat}，{amt}，比 8 週平均多 {delta}。",
+        "top_below": "最高類別：{cat}，{amt}，比 8 週平均少 {delta}。",
+        "top_inline": "最高類別：{cat}，{amt}，與 8 週平均相當。",
+        "no_top": "本週沒有特別突出的類別。",
+        "cta": "在 Tameru 查看本週",
+        "unsub": "取消訂閱",
+    },
+}
+
+
+def _week_label(week_start: datetime, week_end: datetime, ui_language: str | None) -> str:
+    """Localized week-range label for the subject/body.
+
+    en preserves the pre-Tier-2 "Apr 7–13" shape; ja/zh-TW use the
+    month-day form natural to those locales and always name both months so a
+    week spanning a month boundary stays unambiguous. NULL/unknown → English.
+    """
+    if ui_language == "ja":
+        return (
+            f"{week_start.month}月{week_start.day}日"
+            f"〜{week_end.month}月{week_end.day}日"
+        )
+    if ui_language == "zh-TW":
+        return (
+            f"{week_start.month}月{week_start.day}日"
+            f"–{week_end.month}月{week_end.day}日"
+        )
+    return week_start.strftime("%b %-d") + "–" + week_end.strftime("%-d")
+
+
+# Per-currency symbol + fraction digits for the digest email (DESIGN.md §6.6).
+# The email is rendered server-side in Python, which has no `Intl`, so the
+# frontend's `Intl.NumberFormat(..., currencyDisplay:'narrowSymbol')` can't be
+# reused — this map mirrors its intent for the nine `home_currency` CHECK-set
+# currencies. JPY is the only zero-decimal currency in that set, so it's the
+# only entry that drops the fractional part (¥1,500, not ¥1,500.00).
+_CURRENCY_SYMBOLS: dict[str, str] = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "CAD": "CA$",
+    "AUD": "A$",
+    "JPY": "¥",
+    "CHF": "CHF ",
+    "SGD": "S$",
+    "TWD": "NT$",
+}
+_ZERO_DECIMAL_CURRENCIES: frozenset[str] = frozenset({"JPY"})
 
 
 def _format_money(value: Decimal, currency: str) -> str:
-    """Render `value` in `currency` as `$1,234.56` (or the currency-coded form)."""
-    quantized = value.quantize(Decimal("0.01"))
-    if currency == "USD":
-        return f"${quantized:,.2f}"
-    return f"{currency} {quantized:,.2f}"
+    """Render `value` in `currency` with the right symbol and decimal places.
+
+    `¥1,500` for JPY (zero-decimal), `$1,234.56` for USD, `NT$500.00` for TWD,
+    `CHF 1,234.56` for Swiss francs. An unknown currency (defensive — the
+    `home_currency` CHECK set is fixed) falls back to a `CODE 1,234.56` prefix.
+    """
+    decimals = 0 if currency in _ZERO_DECIMAL_CURRENCIES else 2
+    quantized = value.quantize(Decimal(1) if decimals == 0 else Decimal("0.01"))
+    symbol = _CURRENCY_SYMBOLS.get(currency)
+    if symbol is None:
+        return f"{currency} {quantized:,.{decimals}f}"
+    return f"{symbol}{quantized:,.{decimals}f}"
 
 
 def _html_escape(text: str) -> str:

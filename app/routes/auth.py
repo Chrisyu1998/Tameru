@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import AuthedUser, get_current_user_jwt
 from app.db import supabase_for_user
+from app.util.language import is_valid_ui_language
 from app.util.timezone import is_valid_timezone
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -61,10 +62,17 @@ class BootstrapRequest(BaseModel):
     (`Intl.DateTimeFormat().resolvedOptions().timeZone`), optional and
     decoupled from `home_currency` (DESIGN.md §6.6). When omitted or
     invalid it stays NULL and the digest falls back to its default zone.
+
+    `ui_language` is the third independent i18n axis (DESIGN.md §6.6 Tier 2),
+    snapshotted from the browser's `navigator.language` mapped to the
+    supported set (en | ja | zh-TW). Optional; NULL when omitted/unmapped, in
+    which case the frontend's displayLocale() keeps falling back to the live
+    browser language.
     """
     device_id: str = Field(min_length=1, max_length=_DEVICE_ID_MAX_LEN)
     home_currency: str
     timezone: str | None = None
+    ui_language: str | None = None
 
     @field_validator("timezone")
     @classmethod
@@ -76,12 +84,23 @@ class BootstrapRequest(BaseModel):
             raise ValueError("timezone is not a valid IANA zone")
         return value
 
+    @field_validator("ui_language")
+    @classmethod
+    def _v_ui_language(cls, value: str | None) -> str | None:
+        """Reject a non-null ui_language outside the supported set (→ 422)."""
+        if value is None:
+            return None
+        if not is_valid_ui_language(value):
+            raise ValueError("ui_language is not in the supported set")
+        return value
+
 
 class BootstrapResponse(BaseModel):
     """Represent BootstrapResponse."""
     home_currency: str
     active_device_id: str
     timezone: str | None = None
+    ui_language: str | None = None
 
 
 class ClaimDeviceRequest(BaseModel):
@@ -133,6 +152,10 @@ def bootstrap(
     # the digest fall back to its default zone (DESIGN.md §6.4).
     if body.timezone is not None:
         insert_row["timezone"] = body.timezone
+    # Same one-shot semantics for ui_language; NULL lets displayLocale()
+    # fall back to the browser language (DESIGN.md §6.6 Tier 2).
+    if body.ui_language is not None:
+        insert_row["ui_language"] = body.ui_language
     try:
         ins = client.table("users_meta").insert(insert_row).execute()
     except PostgrestAPIError as exc:
@@ -155,6 +178,7 @@ def bootstrap(
         home_currency=row["home_currency"],
         active_device_id=row["active_device_id"],
         timezone=row.get("timezone"),
+        ui_language=row.get("ui_language"),
     )
 
 

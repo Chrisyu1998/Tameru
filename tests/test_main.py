@@ -47,6 +47,8 @@ def test_me_returns_claims(client, user_a):
         # Day 29: per-user timezone rides on /me. The fixture bootstraps
         # with no zone, so it's null here (DESIGN.md §6.6).
         "timezone": None,
+        # Day 29 Tier 2: per-user UI language rides on /me; null when unset.
+        "ui_language": None,
     }
 
 

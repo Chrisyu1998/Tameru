@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { apiJson } from './api';
-import { useAppStore } from '../store';
+import { useAppStore, type UiLanguage } from '../store';
 import { identifyUser, setOptOut, track } from './analytics';
 import { chatStore } from './chatStore';
 
@@ -48,6 +48,10 @@ export type MeResponse = {
   // Decoupled from home_currency — drives the weekly digest's local send
   // time and week-boundary math. Editable in Settings.
   timezone: string | null;
+  // Day 29 Tier 2 (DESIGN.md §6.6): the UI/display language, or null when
+  // the user hasn't made an explicit choice. Drives displayLocale(), the
+  // chat reply language (chat_v12), and the digest language.
+  ui_language: UiLanguage;
 };
 
 /**
@@ -60,6 +64,35 @@ export function detectTimezone(): string | null {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Best-effort map of the browser's `navigator.language` onto the supported
+ * UI-language set (DESIGN.md §6.6 Tier 2). Snapshotted at bootstrap as the
+ * user's initial choice; they override it in Settings. Defaults to 'en' for
+ * any unsupported language (the UI is English-only outside ja/zh-TW). Note
+ * Simplified Chinese (zh-CN / zh-Hans) maps to 'en' — only Traditional
+ * (zh-TW / zh-Hant / zh-HK / zh-MO) is in scope.
+ */
+export function detectUiLanguage(): 'en' | 'ja' | 'zh-TW' {
+  try {
+    const lang = (navigator.language || 'en').toLowerCase();
+    if (lang.startsWith('ja')) return 'ja';
+    if (lang.startsWith('zh')) {
+      if (
+        lang.includes('tw') ||
+        lang.includes('hant') ||
+        lang.includes('hk') ||
+        lang.includes('mo')
+      ) {
+        return 'zh-TW';
+      }
+      return 'en';
+    }
+    return 'en';
+  } catch {
+    return 'en';
   }
 }
 
@@ -87,7 +120,12 @@ export async function fetchMe(): Promise<MeResponse> {
 export async function bootstrap(
   deviceId: string,
   homeCurrency: AllowedCurrency,
-): Promise<{ home_currency: AllowedCurrency; active_device_id: string; timezone: string | null }> {
+): Promise<{
+  home_currency: AllowedCurrency;
+  active_device_id: string;
+  timezone: string | null;
+  ui_language: UiLanguage;
+}> {
   return apiJson('/auth/bootstrap', {
     method: 'POST',
     body: {
@@ -95,6 +133,9 @@ export async function bootstrap(
       home_currency: homeCurrency,
       // Best-effort: the backend validates and stores NULL if absent/invalid.
       timezone: detectTimezone(),
+      // Snapshot the browser language onto the supported set (DESIGN.md §6.6
+      // Tier 2). Always one of en/ja/zh-TW; the user changes it in Settings.
+      ui_language: detectUiLanguage(),
     },
   });
 }
@@ -285,6 +326,9 @@ export async function refreshHomeCurrency(
       return;
     }
     useAppStore.getState().setHomeCurrency(me.home_currency);
+    // Day 29 Tier 2: mirror the UI language from /me so displayLocale() and
+    // the category-label helper resolve the right locale on first paint.
+    useAppStore.getState().setUiLanguage(me.ui_language);
     // Day 26: mirror analytics opt-out from /me into the store and flip
     // the PostHog SDK to match. This is the leak-free-init invariant's
     // commit point — before this resolves, the SDK is opted out via
