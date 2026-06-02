@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import i18n from "@/lib/i18n";
-import { resolveUiLanguage } from "@/lib/auth";
+import { resolveUiLanguage } from "@/lib/uiLanguage";
 import { categoryLabel } from "@/lib/categories";
 import { formatMonth } from "@/lib/format";
 import { useAppStore } from "@/store";

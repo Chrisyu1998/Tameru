@@ -22,39 +22,22 @@ import { initReactI18next } from "react-i18next";
 import en from "../locales/en.json";
 import ja from "../locales/ja.json";
 import zhTW from "../locales/zh-TW.json";
+import { detectUiLanguage } from "./uiLanguage";
 
 export const SUPPORTED_UI_LANGUAGES = ["en", "ja", "zh-TW"] as const;
 export type SupportedUiLanguage = (typeof SUPPORTED_UI_LANGUAGES)[number];
 
-/**
- * Best-effort initial language from the browser, mapped to the supported set
- * (same logic as auth.ts `detectUiLanguage`, inlined to avoid an import cycle
- * through the store). The store's `uiLanguage`, once hydrated from `/me`,
- * overrides this via `i18n.changeLanguage` in main.tsx.
- */
-function initialLanguage(): SupportedUiLanguage {
-  try {
-    const lang = (navigator.language || "en").toLowerCase();
-    if (lang.startsWith("ja")) return "ja";
-    if (
-      lang.startsWith("zh") &&
-      (lang.includes("tw") || lang.includes("hant") || lang.includes("hk") || lang.includes("mo"))
-    ) {
-      return "zh-TW";
-    }
-  } catch {
-    // Non-browser context — fall through to English.
-  }
-  return "en";
-}
-
+// Initial language = the browser's best-guess (via the dependency-free
+// `detectUiLanguage`). The store's `uiLanguage`, once hydrated from `/me`,
+// overrides this through `i18n.changeLanguage` in main.tsx. `uiLanguage.ts`
+// has no supabase/store imports, so there's no cycle and no env coupling.
 void i18n.use(initReactI18next).init({
   resources: {
     en: { translation: en },
     ja: { translation: ja },
     "zh-TW": { translation: zhTW },
   },
-  lng: initialLanguage(),
+  lng: detectUiLanguage(),
   fallbackLng: "en",
   interpolation: { escapeValue: false }, // React already escapes.
   returnNull: false,
