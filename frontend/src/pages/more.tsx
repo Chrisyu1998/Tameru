@@ -12,6 +12,7 @@ import { SketchIcon } from "@/components/SketchIcon";
 import { BottomSheet } from "@/components/BottomSheet";
 import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
+import { TimezoneRow } from "@/components/TimezoneRow";
 import { signOut } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
@@ -283,6 +284,7 @@ function NotificationsSheet({
           onChange={handleDigestChange}
           disabled={savingDigest}
         />
+        <TimezoneRow />
       </div>
 
       <button
