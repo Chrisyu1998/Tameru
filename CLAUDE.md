@@ -30,6 +30,10 @@ The codebase is being scaffolded. If a tool, command, or directory you need does
 - **Typed boundaries use Pydantic models.** Requests, responses, agent tool inputs, and agent tool results should have explicit Pydantic models where practical. Follow Stripe-style API documentation: describe what the function/endpoint does, list the request shape, list the response shape, and include a compact example when the contract is not obvious.
 - **Agent tools document request and response examples.** A tool like `calculate_total` should make it clear what Claude supplies (for example, optional filters) and what the loop returns (for example, `{total, count, truncated}`). The user's auth context is injected by the server-side loop, never supplied by the model.
 
+## Verifying user-facing changes
+
+When verifying a feature by driving the running app, reach it by navigating the real UI from a cold start — **never deep-link to the screen under test** (e.g. `playwright-cli goto .../settings`). Deep-linking proves the control *works*, not that a user can *reach* it, so it hides discoverability/navigation bugs — the exact class manual verification exists to catch. The PWA is responsive with two distinct nav models (desktop sidebar vs mobile BottomNav + More-menu sheets), so "verify on web and mobile" means walking *each surface's own nav path* to the feature, not rendering one component at two viewport widths. (Day 29 Tier 2: the language picker worked at a 390px viewport but was unreachable on mobile because the More menu never linked to `/settings` — a deep-link to `/settings` masked it. Fix: a More → language sheet.) Deep-linking is fine only when probing a single component in isolation, never as the end-to-end path.
+
 ## Architectural invariants (do not violate without explicit user approval)
 
 These are load-bearing decisions from the design review. Each one was chosen over a tempting alternative for a specific reason — re-deriving the choice without context will produce the wrong answer.
