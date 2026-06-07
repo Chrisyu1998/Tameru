@@ -38,6 +38,7 @@ import {
   type CardNetwork,
   type CardProgram,
   type CardProposal,
+  type CardRegion,
 } from "./cardsApi";
 import type { Category } from "./categories";
 import type { Transaction } from "./fixtures";
@@ -536,6 +537,11 @@ export const chatStore = {
       issuer: draft.issuer,
       program: draft.program,
       multipliers: draft.multipliers,
+      base_reward_rate: draft.baseRewardRate ?? null,
+      rewards_currency: draft.rewardsCurrency ?? null,
+      // Send the lookup region so an `other`-issuer card keeps it (confirm
+      // pins a known issuer's region server-side and ignores this).
+      region: draft.region ?? null,
       annual_fee: draft.annualFee,
       // Day 19b — when present alongside a non-zero annual_fee, the
       // confirm route's `insert_card_with_af` RPC creates a companion
@@ -1513,6 +1519,9 @@ interface CardProposalWire {
   issuer: CardIssuer | null;
   program: CardProgram;
   multipliers: Record<string, number>;
+  base_reward_rate?: string | number | null;
+  rewards_currency?: string | null;
+  region?: CardRegion | null;
   client_request_id?: string;
   annual_fee: string | number | null;
   next_annual_fee_date?: string | null;
@@ -1566,6 +1575,16 @@ function _proposalToCardDraft(
     program: r.program ?? "Other",
     multipliers:
       r.multipliers && typeof r.multipliers === "object" ? r.multipliers : {},
+    baseRewardRate:
+      r.base_reward_rate === null || r.base_reward_rate === undefined
+        ? null
+        : String(r.base_reward_rate),
+    rewardsCurrency:
+      typeof r.rewards_currency === "string" ? r.rewards_currency : null,
+    region:
+      r.region === "US" || r.region === "JP" || r.region === "TW"
+        ? r.region
+        : null,
     annualFee,
     sourceUrls: Array.isArray(r.source_urls) ? r.source_urls : [],
     lastFour: typeof r.last_four === "string" ? r.last_four : "",
@@ -1762,6 +1781,9 @@ function _cardRowToDraft(card: CardRow): CardParseDraft {
     network: card.network,
     program: card.program,
     multipliers: card.multipliers,
+    baseRewardRate: card.base_reward_rate,
+    rewardsCurrency: card.rewards_currency,
+    region: card.region,
     annualFee: card.annual_fee,
     sourceUrls: card.source_urls,
     lastFour: card.last_four ?? "",

@@ -66,8 +66,17 @@ def stub_lookup(monkeypatch):
         )
     }
 
-    def fake_lookup(card_name: str, user) -> CardLookupResult:  # noqa: ARG001
-        """Return the canned CardLookupResult; ignore the user arg."""
+    def fake_lookup(
+        card_name: str,
+        user,
+        region: str = "US",
+        home_currency: str = "USD",
+    ) -> CardLookupResult:  # noqa: ARG001
+        """Return the canned CardLookupResult; ignore the args.
+
+        Accepts the Tier 3 `region` / `home_currency` kwargs the real
+        `lookup_card` gained so the route's region-aware call still binds.
+        """
         return state["result"]
 
     monkeypatch.setattr(cards_route, "lookup_card", fake_lookup)
@@ -192,12 +201,17 @@ def test_confirm_rejects_non_four_digit_last_four(client, user_a):
 
 
 def test_confirm_rejects_unknown_network(client, user_a):
-    """Verify that /cards/confirm rejects networks outside the closed enum."""
+    """Verify that /cards/confirm rejects networks outside the closed enum.
+
+    `unionpay` is a real network Tameru does not (yet) support — a value
+    safely outside the `CardNetwork` Literal even after Tier 3 widened it
+    with `jcb` and `diners`.
+    """
     resp = client.post(
         "/cards/confirm",
         headers=_auth(user_a),
         json=_proposal(
-            network="diners",
+            network="unionpay",
             last_four="1234",
             name="X",
             issuer="chase",

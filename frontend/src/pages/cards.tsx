@@ -213,12 +213,22 @@ function CardTile({
           <>
             {(card.issuer ||
               card.program ||
+              card.baseRewardRate ||
+              card.rewardsCurrency ||
               (card.multipliers && card.multipliers.length > 0)) && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {card.issuer && (
                   <Pill tone="ink">{ISSUER_LABELS[card.issuer]}</Pill>
                 )}
                 {card.program && <Pill tone="ink">{card.program}</Pill>}
+                {/* Tier 3 (DESIGN.md §6.6) — JP/TW cards show base rate +
+                    rewards label instead of category multipliers. */}
+                {card.baseRewardRate && (
+                  <Pill tone="moss">{card.baseRewardRate}% base</Pill>
+                )}
+                {card.rewardsCurrency && (
+                  <Pill tone="moss">{card.rewardsCurrency}</Pill>
+                )}
                 {card.multipliers?.map((m) => (
                   <Pill key={`${m.label}-${m.factor}`} tone="moss">
                     {m.factor}× {m.label}

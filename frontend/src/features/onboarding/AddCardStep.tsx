@@ -7,15 +7,19 @@ import { StepDots } from "./StepDots";
 import {
   ISSUER_LABELS,
   ISSUERS,
+  ISSUER_REGION,
   confirmCard,
   isActiveCardExistsError,
   lookupCard,
+  regionForCurrency,
   type CardIssuer,
   type CardLookupResult,
   type CardNetwork,
   type CardProgram,
+  type CardRegion,
 } from "@/lib/cardsApi";
 import { track } from "@/lib/analytics";
+import { useAppStore } from "@/store";
 
 /*
  * Day 14 onboarding step — UX frame 4 "Add First Card."
@@ -41,7 +45,15 @@ const NETWORKS: { value: CardNetwork; label: string }[] = [
   { value: "mastercard", label: "Mastercard" },
   { value: "amex", label: "Amex" },
   { value: "discover", label: "Discover" },
+  { value: "jcb", label: "JCB" },
+  { value: "diners", label: "Diners Club" },
   { value: "other", label: "Other" },
+];
+
+const REGIONS: { value: CardRegion; label: string }[] = [
+  { value: "US", label: "US" },
+  { value: "JP", label: "Japan" },
+  { value: "TW", label: "Taiwan" },
 ];
 
 interface AddCardStepProps {
@@ -51,11 +63,18 @@ interface AddCardStepProps {
 
 export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
   const { t } = useTranslation();
+  const homeCurrency = useAppStore((s) => s.homeCurrency);
   const [name, setName] = useState("");
   const [submittedName, setSubmittedName] = useState<string | null>(null);
   const [lookup, setLookup] = useState<CardLookupResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Tier 3 (DESIGN.md §6.6) — the card's region, defaulted from the user's
+  // home currency but overridable (the "US expat in Taiwan adding an old US
+  // card" case). Drives which sources + reward model the lookup uses.
+  const [region, setRegion] = useState<CardRegion>(
+    regionForCurrency(typeof homeCurrency === "string" ? homeCurrency : null),
+  );
 
   // Editable preview-tile state — populated when a lookup completes.
   // `network` and `issuer` are NULLABLE on purpose: silently defaulting
@@ -69,8 +88,13 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
   const [lastFour, setLastFour] = useState("");
   const [program, setProgram] = useState<CardProgram>("Other");
   const [multipliers, setMultipliers] = useState<Record<string, number>>({});
+  // Tier 3 base-rate shape (used on JP/TW cards instead of multipliers).
+  const [baseRewardRate, setBaseRewardRate] = useState<string>("");
+  const [rewardsCurrency, setRewardsCurrency] = useState<string>("");
   const [annualFee, setAnnualFee] = useState<string>("");
   const [confirming, setConfirming] = useState(false);
+
+  const isIntl = region !== "US";
 
   useEffect(() => {
     if (!submittedName) return;
@@ -78,7 +102,7 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
     setLoading(true);
     setError(null);
     setLookup(null);
-    lookupCard(submittedName)
+    lookupCard(submittedName, region)
       .then((resp) => {
         if (cancelled) return;
         setLookup(resp.lookup);
@@ -91,6 +115,8 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         setIssuer(resp.lookup.issuer);
         setProgram(resp.lookup.program ?? "Other");
         setMultipliers(resp.lookup.multipliers);
+        setBaseRewardRate(resp.lookup.base_reward_rate ?? "");
+        setRewardsCurrency(resp.lookup.rewards_currency ?? "");
         setAnnualFee(resp.lookup.annual_fee ?? "");
         // Don't pre-fill last 4 — the user must enter it explicitly. Empty
         // forces them to look at their card and type the right digits
@@ -109,6 +135,8 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
           program: null,
           network: null,
           multipliers: {},
+          base_reward_rate: null,
+          rewards_currency: null,
           annual_fee: null,
           issuer: null,
           source_urls: [],
@@ -119,6 +147,10 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
     return () => {
       cancelled = true;
     };
+    // `region` is intentionally NOT a dep: it's read at lookup time via the
+    // `submittedName` trigger. Changing region alone shouldn't re-fire a
+    // lookup the user hasn't re-submitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [submittedName]);
 
   // Codex P2: if the user edits the card name post-lookup, the preview's
@@ -166,7 +198,14 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         name: submittedName,
         issuer,
         program,
-        multipliers,
+        multipliers: isIntl ? {} : multipliers,
+        base_reward_rate:
+          isIntl && baseRewardRate.trim() !== "" ? baseRewardRate.trim() : null,
+        rewards_currency:
+          isIntl && rewardsCurrency.trim() !== "" ? rewardsCurrency.trim() : null,
+        // Pass the user's region pick so an `other`-issuer card keeps it
+        // (the confirm route pins a known issuer's region server-side).
+        region,
         annual_fee: annualFee.trim() === "" ? null : annualFee.trim(),
         source_urls: effectiveLookup.source_urls,
         needs_manual: effectiveLookup.needs_manual,
@@ -231,6 +270,29 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
         ))}
       </div>
 
+      {/* Tier 3 (DESIGN.md §6.6) — region routing. Defaulted from the user's
+          home currency; overridable for the mixed-wallet case. */}
+      <div className="mt-3 flex items-center gap-2">
+        <span className="text-xs text-ink-tertiary">
+          {t("onboarding.addCard.region", "Card region")}
+        </span>
+        {REGIONS.map((r) => (
+          <button
+            key={r.value}
+            type="button"
+            onClick={() => setRegion(r.value)}
+            className={
+              "rounded-full border px-3 py-1 text-xs transition-colors " +
+              (region === r.value
+                ? "border-ink bg-ink text-surface"
+                : "border-hairline bg-surface text-ink-secondary hover:bg-sunken/60 hover:text-ink")
+            }
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
       {submittedName && (
         <div className="mt-6">
           {loading ? (
@@ -245,6 +307,8 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
           ) : effectiveLookup ? (
             <PreviewTile
               name={submittedName}
+              region={region}
+              isIntl={isIntl}
               network={network}
               onNetwork={setNetwork}
               issuer={issuer}
@@ -257,6 +321,10 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
               onAnnualFee={setAnnualFee}
               multipliers={multipliers}
               onMultipliers={setMultipliers}
+              baseRewardRate={baseRewardRate}
+              onBaseRewardRate={setBaseRewardRate}
+              rewardsCurrency={rewardsCurrency}
+              onRewardsCurrency={setRewardsCurrency}
               needsManual={effectiveLookup.needs_manual}
               sourceUrls={effectiveLookup.source_urls}
             />
@@ -310,6 +378,8 @@ export function AddCardStep({ onSaved, onSkip }: AddCardStepProps) {
 
 interface PreviewTileProps {
   name: string;
+  region: CardRegion;
+  isIntl: boolean;
   network: CardNetwork | null;
   onNetwork: (v: CardNetwork) => void;
   issuer: CardIssuer | null;
@@ -322,6 +392,10 @@ interface PreviewTileProps {
   onAnnualFee: (v: string) => void;
   multipliers: Record<string, number>;
   onMultipliers: (v: Record<string, number>) => void;
+  baseRewardRate: string;
+  onBaseRewardRate: (v: string) => void;
+  rewardsCurrency: string;
+  onRewardsCurrency: (v: string) => void;
   needsManual: boolean;
   sourceUrls: string[];
 }
@@ -343,6 +417,13 @@ function PreviewTile(props: PreviewTileProps) {
     : issuerUnresolved
       ? t("onboarding.addCard.preview.unresolvedIssuer")
       : t("onboarding.addCard.preview.unresolvedNetwork");
+
+  // Tier 3 — scope the issuer picker to the selected region (+ the
+  // region-agnostic `other` escape hatch) so a JP card add doesn't list
+  // US banks.
+  const regionIssuers = ISSUERS.filter(
+    (i) => i === "other" || ISSUER_REGION[i] === props.region,
+  );
 
   return (
     <div className="rounded-3xl border border-hairline bg-elevated px-4 py-4">
@@ -384,7 +465,7 @@ function PreviewTile(props: PreviewTileProps) {
                 {t("onboarding.addCard.preview.selectPlaceholder")}
               </option>
             )}
-            {ISSUERS.map((i) => (
+            {regionIssuers.map((i) => (
               <option key={i} value={i}>
                 {ISSUER_LABELS[i]}
               </option>
@@ -447,26 +528,61 @@ function PreviewTile(props: PreviewTileProps) {
         </label>
       </div>
 
-      <label className="mt-3 flex flex-col text-xs text-ink-tertiary">
-        {t("onboarding.addCard.preview.program")}
-        <select
-          value={props.program}
-          onChange={(e) => props.onProgram(e.target.value as CardProgram)}
-          className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink focus:outline-none"
-        >
-          <option value="UR">UR — Chase Ultimate Rewards</option>
-          <option value="MR">MR — Amex Membership Rewards</option>
-          <option value="TYP">TYP — Citi ThankYou Points</option>
-          <option value="Bilt">Bilt</option>
-          <option value="Other">Other / cashback</option>
-        </select>
-      </label>
+      {props.isIntl ? (
+        /* Tier 3 (DESIGN.md §6.6) — JP/TW cards capture a base earn rate +
+           a rewards-currency label instead of program + category
+           multipliers. */
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <label className="flex flex-col text-xs text-ink-tertiary">
+            {t("onboarding.addCard.preview.baseRate", "Base reward %")}
+            <input
+              inputMode="decimal"
+              value={props.baseRewardRate}
+              onChange={(e) =>
+                props.onBaseRewardRate(e.target.value.replace(/[^\d.]/g, ""))
+              }
+              placeholder="1.0"
+              className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink placeholder:text-ink-quaternary focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col text-xs text-ink-tertiary">
+            {t("onboarding.addCard.preview.rewardsCurrency", "Rewards")}
+            <input
+              type="text"
+              value={props.rewardsCurrency}
+              onChange={(e) => props.onRewardsCurrency(e.target.value)}
+              placeholder={t(
+                "onboarding.addCard.preview.rewardsCurrencyPlaceholder",
+                "e.g. Rakuten Points",
+              )}
+              className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink placeholder:text-ink-quaternary focus:outline-none"
+            />
+          </label>
+        </div>
+      ) : (
+        <>
+          <label className="mt-3 flex flex-col text-xs text-ink-tertiary">
+            {t("onboarding.addCard.preview.program")}
+            <select
+              value={props.program}
+              onChange={(e) => props.onProgram(e.target.value as CardProgram)}
+              className="mt-1 rounded-lg border border-hairline bg-surface px-2 py-1 text-sm text-ink focus:outline-none"
+            >
+              <option value="UR">UR — Chase Ultimate Rewards</option>
+              <option value="MR">MR — Amex Membership Rewards</option>
+              <option value="TYP">TYP — Citi ThankYou Points</option>
+              <option value="Bilt">Bilt</option>
+              <option value="Other">Other / cashback</option>
+            </select>
+          </label>
 
-      <MultipliersEditor
-        multipliers={props.multipliers}
-        onMultipliers={props.onMultipliers}
-        needsManual={props.needsManual}
-      />
+          <MultipliersEditor
+            multipliers={props.multipliers}
+            onMultipliers={props.onMultipliers}
+            needsManual={props.needsManual}
+          />
+        </>
+      )}
 
       {props.sourceUrls.length > 0 && (
         <div className="mt-3 border-t border-hairline pt-2 text-[0.7rem] text-ink-quaternary">

@@ -791,11 +791,45 @@ def test_execute_tool_dispatches_each_registered_tool(authed_user_a, card_a):
         mp.setattr(
             tools_module,
             "lookup_card",
-            lambda name, user: _LookupResult(needs_manual=True, raw_text="stub"),
+            lambda name, user, region="US", home_currency="USD": _LookupResult(
+                needs_manual=True, raw_text="stub"
+            ),
         )
         for name in TOOL_REGISTRY:
             result = execute_tool(name, minimal_inputs.get(name, {}), authed_user_a)
             assert isinstance(result, dict)
+    finally:
+        mp.undo()
+
+
+def test_propose_card_passes_explicit_region_to_lookup(authed_user_a):
+    """An explicit `region` arg routes the lookup to that region — the
+    mixed-wallet fix (Tier 3, DESIGN.md §6.6).
+
+    Without this, a non-US-home user adding a US card by chat would have the
+    lookup wrongly use their home region. Claude infers the region from the
+    issuer/card name and passes it; we assert it reaches `lookup_card`.
+    """
+    from app.models.cards import CardLookupResult as _LookupResult
+    import pytest as _pytest
+
+    captured: dict[str, object] = {}
+
+    def _spy(name, user, region="US", home_currency="USD"):  # noqa: ARG001
+        """Capture the region `propose_card` routes the lookup with."""
+        captured["region"] = region
+        return _LookupResult(needs_manual=True, raw_text="stub")
+
+    mp = _pytest.MonkeyPatch()
+    try:
+        mp.setattr(tools_module, "lookup_card", _spy)
+        result = execute_tool(
+            "propose_card",
+            {"program": "Chase Sapphire Reserve", "region": "US"},
+            authed_user_a,
+        )
+        assert isinstance(result, dict)
+        assert captured["region"] == "US"
     finally:
         mp.undo()
 

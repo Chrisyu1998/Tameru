@@ -8,6 +8,7 @@ import type {
   CardIssuer,
   CardNetwork,
   CardProgram,
+  CardRegion,
 } from "./cardsApi";
 import { CATEGORIES, type Category } from "./categories";
 import { FIXTURE_CARDS, type Card, type Transaction } from "./fixtures";
@@ -169,6 +170,20 @@ export interface CardParseDraft {
   network: CardNetwork | null;
   program: CardProgram;
   multipliers: Record<string, number>;
+  /**
+   * Tier 3 (DESIGN.md §6.6) — JP/TW base-rate reward shape, present on
+   * non-US card proposals instead of `multipliers`.
+   */
+  baseRewardRate?: string | null;
+  rewardsCurrency?: string | null;
+  /**
+   * The region the lookup used (Tier 3). Carried from the proposal so the
+   * chat confirm body can send it back — `/cards/confirm` honors it for an
+   * unenumerated (`other`) issuer, the one case it can't re-derive from the
+   * issuer server-side. Dropping it would mislabel an `other`-issuer card's
+   * region on the chat path (a TWD-home user adding a US card → stored TW).
+   */
+  region?: CardRegion | null;
   annualFee: string | null;
   sourceUrls: string[];
   lastFour: string;

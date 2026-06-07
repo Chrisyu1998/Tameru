@@ -847,6 +847,8 @@ export function cardRowToFixture(row: CardRow): Card {
     program,
     issuer: row.issuer,
     multipliers: multipliers.length > 0 ? multipliers : undefined,
+    baseRewardRate: row.base_reward_rate,
+    rewardsCurrency: row.rewards_currency,
     annualFee: row.annual_fee,
   };
 }

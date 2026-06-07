@@ -29,6 +29,13 @@ export interface Card {
   /** Earn rate chips like "4× dining". */
   multipliers?: CardMultiplier[];
   /**
+   * Tier 3 (DESIGN.md §6.6) — JP/TW base-rate reward shape, shown instead
+   * of `multipliers` on non-US cards. `baseRewardRate` is a percent string
+   * (e.g. "1.0"); `rewardsCurrency` is a free-text label ("Rakuten Points").
+   */
+  baseRewardRate?: string | null;
+  rewardsCurrency?: string | null;
+  /**
    * Annual fee as a string decimal (matches the wire shape). The edit
    * sheet reads/writes it; the cards-list tile doesn't render it.
    */

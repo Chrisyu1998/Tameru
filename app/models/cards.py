@@ -23,15 +23,31 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-CardNetwork = Literal["visa", "mastercard", "amex", "discover", "other"]
+# Network is a closed enum. `jcb` and `diners` were added for Tier 3
+# (international cards — DESIGN.md §6.6): JCB is dominant in Japan and
+# common in Taiwan. Mirrors the `cards_network_check` CHECK (migration
+# 20260602120000) — both layers must agree.
+CardNetwork = Literal[
+    "visa", "mastercard", "amex", "discover", "jcb", "diners", "other"
+]
 CardProgram = Literal["UR", "MR", "TYP", "Bilt", "Other"]
-# Closed-enum issuer (DESIGN.md §8.1, migration
-# 20260516140000_cards_uniqueness_by_issuer.sql). Eliminates the
+# Per-card region — drives reward-lookup routing (US sources + category
+# multipliers vs. JP/TW base-rate path). A property of the *card*, not the
+# user, so a wallet can hold a US card and a TW card at once and each
+# routes independently. DESIGN.md §6.6 Tier 3.
+CardRegion = Literal["US", "JP", "TW"]
+# Closed-enum issuer (DESIGN.md §8.1, §6.6, migrations
+# 20260516140000_cards_uniqueness_by_issuer.sql and
+# 20260602120000_cards_intl_enums_and_columns.sql). Eliminates the
 # case-sensitivity and variant collisions ("Chase" vs "chase" vs
 # "Chase Bank") that would defeat the (user_id, issuer, last_four)
-# partial unique index. `other` is the escape hatch for issuers we
-# haven't enumerated yet; the user can patch later.
+# partial unique index. Tier 3 widened it with the top ~6 JP and ~6 TW
+# issuers; the `card_issuers` reference table carries each key's
+# region/domain/display metadata. Keys are hyphen-free so the chat
+# `card_ref` handle ({issuer}-{last_four}) splits unambiguously. `other`
+# is the escape hatch for issuers we haven't enumerated yet.
 CardIssuer = Literal[
+    # US
     "chase",
     "amex",
     "citi",
@@ -44,6 +60,20 @@ CardIssuer = Literal[
     "barclays",
     "us_bank",
     "synchrony",
+    # JP
+    "rakuten",
+    "smbc",
+    "jcb",
+    "aeon",
+    "epos",
+    "saison",
+    # TW
+    "cathay",
+    "esun",
+    "ctbc",
+    "taishin",
+    "fubon",
+    "union",
     "other",
 ]
 
@@ -110,6 +140,15 @@ class CardLookupResult(BaseModel):
     # falls back to "other" on the CardProposal and flags needs_manual.
     issuer: CardIssuer | None = None
     multipliers: dict[str, float] = Field(default_factory=dict)
+    # Tier 3 (DESIGN.md §6.6) — the JP/TW reward shape. Outside the US the
+    # lookup captures a base earn rate (percent, e.g. 1.0 for 1%) and a
+    # free-text rewards label ("Rakuten Points", "現金回饋") instead of
+    # `multipliers`. None on US cards (which use `multipliers`). Category
+    # multipliers and promos are deliberately NOT captured for JP/TW — they
+    # are partner-economy / user-selected / mobile-pay driven and a
+    # one-shot, no-refresh lookup can't represent them stably.
+    base_reward_rate: Decimal | None = None
+    rewards_currency: str | None = None
     annual_fee: Decimal | None = None
     source_urls: list[str] = Field(default_factory=list)
     needs_manual: bool = False
@@ -158,6 +197,21 @@ class CardProposal(BaseModel):
     issuer: CardIssuer
     program: CardProgram = "Other"
     multipliers: dict[str, float] = Field(default_factory=dict)
+    # Tier 3 (DESIGN.md §6.6) — JP/TW base-rate reward shape, carried from
+    # the lookup through to `/cards/confirm`. Mutually-exclusive-in-practice
+    # with `multipliers`: US cards fill multipliers, JP/TW cards fill these.
+    # `region` is NOT on the proposal wire — the confirm route recomputes it
+    # server-side from the issuer (falling back to home_currency) so a forged
+    # client can't mislabel a card's region.
+    base_reward_rate: Decimal | None = None
+    rewards_currency: str | None = None
+    # Tier 3 (DESIGN.md §6.6) — the region the user picked / the lookup used.
+    # `/cards/confirm` only honors it when the issuer is unenumerated
+    # (`other`) — a known issuer's region is server-pinned and a forged value
+    # is ignored. None means "no explicit pick"; confirm then falls back to
+    # the home-currency guess. This is what makes the add-card region selector
+    # stick for an `other`-issuer card (e.g. a TWD user adding a small US bank).
+    region: CardRegion | None = None
     annual_fee: Decimal | None = None
     # Day 19b — optional renewal date for card annual-fee tracking. When
     # set alongside `annual_fee > 0`, `POST /cards/confirm` creates a
@@ -232,11 +286,18 @@ class CardLookupRequest(BaseModel):
     the rewards program data attached to the name.
 
     Example: `{"name": "Chase Sapphire Reserve"}`.
+    Example (Tier 3): `{"name": "Rakuten Card", "region": "JP"}`.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
+    # Tier 3 (DESIGN.md §6.6) — which region's sources / reward model the
+    # lookup uses. Optional: when omitted, the route derives it from the
+    # user's `home_currency` (JPY→JP, TWD→TW, else US). The add-card form
+    # defaults the selector from home_currency but lets the user override
+    # (the "US expat in Taiwan adding an old US card" case).
+    region: CardRegion | None = None
 
     @field_validator("name")
     @classmethod
@@ -294,6 +355,11 @@ class CardRow(BaseModel):
     issuer: CardIssuer
     network: CardNetwork
     program: CardProgram
+    # Tier 3 (DESIGN.md §6.6). `region` is NOT NULL on the table (default
+    # 'US'); base-rate fields are null on US cards.
+    region: CardRegion = "US"
+    base_reward_rate: Decimal | None = None
+    rewards_currency: str | None = None
     multipliers: dict[str, float] = Field(default_factory=dict)
     annual_fee: Decimal | None = None
     last_four: str | None = None

@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.integrations.card_lookup import lookup_card
+from app.integrations.card_regions import region_for_currency
 from app.integrations.gemini import GeminiError, categorize
 from app.models.cards import (
     CardIssuer,
@@ -46,6 +47,7 @@ from app.models.cards import (
     CardNetwork,
     CardProgram,
     CardProposal,
+    CardRegion,
 )
 from app.models.goals import Goal, GoalPeriod, SetGoalRequest
 from app.models.subscriptions import (
@@ -716,7 +718,15 @@ PROPOSE_CARD_TOOL: dict[str, Any] = {
         "`network` only if the user explicitly named it ('my Visa "
         "Sapphire'). Pass `last_four` if the user said it ('ending 4321'); "
         "otherwise omit and the parse-card UI will collect it before "
-        "the user confirms. Do not say 'I added it' after calling this "
+        "the user confirms. "
+        "Pass `region` ('US'/'JP'/'TW') when the card clearly belongs to a "
+        "region — infer it from the issuer or card name (Chase, Amex, Citi, "
+        "Capital One, Bilt -> US; Rakuten, JCB, SMBC, AEON, Epos, Saison -> "
+        "JP; Cathay, E.SUN, CTBC, Taishin, Fubon -> TW). This routes the "
+        "lookup to the right sources and reward model; omit it only when the "
+        "card's region is genuinely unclear (it then defaults to the user's "
+        "home region). "
+        "Do not say 'I added it' after calling this "
         "tool — the row does not exist yet."
     ),
     "input_schema": {
@@ -724,9 +734,34 @@ PROPOSE_CARD_TOOL: dict[str, Any] = {
         "additionalProperties": False,
         "required": ["program"],
         "properties": {
+            "region": {
+                "type": "string",
+                # Keep in sync with `CardRegion` in app/models/cards.py.
+                "enum": ["US", "JP", "TW"],
+                "description": (
+                    "Card region — which country's sources + reward model "
+                    "the lookup uses. Infer from the issuer/card name "
+                    "(US banks -> US; Rakuten/JCB/SMBC/etc. -> JP; "
+                    "Cathay/E.SUN/etc. -> TW). OPTIONAL — omit when unclear "
+                    "and it defaults to the user's home region. Crucial for "
+                    "the mixed-wallet case (e.g. a Japan-based user adding a "
+                    "US card): without it the lookup wrongly uses the home "
+                    "region."
+                ),
+            },
             "network": {
                 "type": "string",
-                "enum": ["visa", "mastercard", "amex", "discover", "other"],
+                # Keep in sync with `CardNetwork` in app/models/cards.py +
+                # the `cards_network_check` CHECK. Tier 3 added jcb/diners.
+                "enum": [
+                    "visa",
+                    "mastercard",
+                    "amex",
+                    "discover",
+                    "jcb",
+                    "diners",
+                    "other",
+                ],
                 "description": (
                     "Card network. OPTIONAL. Only pass when the user "
                     "explicitly named it ('my Visa Sapphire'). For nearly "
@@ -1251,6 +1286,13 @@ class ProposeCardRequest(BaseModel):
     )
     program: str
     alias: str | None = None
+    # Tier 3 (DESIGN.md §6.6) — the card's region, which Claude infers from
+    # the issuer/card name and passes so the lookup uses the right sources +
+    # reward model. The chat path has no region selector, so this is the only
+    # per-card region signal; when omitted, `propose_card` falls back to the
+    # user's home-currency region. This is what makes a Japan-based user able
+    # to add a US card by chat (region="US" → US lookup → issuer pins US).
+    region: CardRegion | None = None
     # Day 19b — optional AF renewal date. Validated at the CardProposal
     # layer (must be >= today). When set alongside a non-zero annual_fee,
     # the confirm endpoint creates a companion subscription.
@@ -1301,16 +1343,29 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         card can render the manual path.
     """
     request = ProposeCardRequest.model_validate(kwargs)
+    client = supabase_for_user(user.jwt)
+    # Region routing (Tier 3, DESIGN.md §6.6). Claude infers the card's
+    # region from the issuer/card name and passes it (`request.region`); this
+    # routes the lookup to the right sources + reward model and is what lets a
+    # Japan-based user add a US card by chat. When Claude can't tell, we fall
+    # back to the user's home-currency region (JPY→JP, TWD→TW, else US) — the
+    # best remaining signal before the issuer is resolved.
+    home_currency = _home_currency(client, user.user_id)
+    region = request.region or region_for_currency(home_currency)
     # Adding a second copy of an existing card (same product, different
     # last_four) shouldn't surface different multipliers — Claude's
     # web_search lookup isn't deterministic across calls, and the user
     # has already seen the first card's numbers. If we already have an
     # active row with the same name, reuse its lookup-derived fields
     # instead of burning a redundant Claude+web_search call.
-    reused = _existing_card_template(
-        supabase_for_user(user.jwt), request.program
+    reused = _existing_card_template(client, request.program)
+    result = (
+        reused
+        if reused is not None
+        else lookup_card(
+            request.program, user, region=region, home_currency=home_currency
+        )
     )
-    result = reused if reused is not None else lookup_card(request.program, user)
 
     network: CardNetwork = request.network or result.network or "other"
     issuer: CardIssuer = result.issuer or "other"
@@ -1330,6 +1385,13 @@ def propose_card(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         issuer=issuer,
         program=program_enum,
         multipliers=result.multipliers,
+        base_reward_rate=result.base_reward_rate,
+        rewards_currency=result.rewards_currency,
+        # Record the region the lookup used so an `other`-issuer card lands
+        # with a region matching its reward shape (confirm ignores this for
+        # known issuers, which it pins server-side). The chat path has no
+        # region picker, so this is the home-currency-derived region.
+        region=region,
         annual_fee=result.annual_fee,
         next_annual_fee_date=request.next_annual_fee_date,
         source_urls=result.source_urls,
@@ -1623,6 +1685,25 @@ def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {k: v for k, v in row.items() if k not in keys}
 
 
+def _home_currency(client: Any, user_id: Any) -> str:
+    """Read the user's immutable home_currency for Tier 3 region routing.
+
+    `home_currency` is fixed at signup (invariant 13). Falls back to "USD"
+    (US routing) when no `users_meta` row exists yet — a card proposal
+    before onboarding completes shouldn't error. Mirrors the same-named
+    helper in `app/routes/cards.py`. RLS scopes the read to the caller.
+    """
+    resp = (
+        client.table("users_meta")
+        .select("home_currency")
+        .eq("user_id", str(user_id))
+        .execute()
+    )
+    if resp.data and resp.data[0].get("home_currency"):
+        return resp.data[0]["home_currency"]
+    return "USD"
+
+
 def _existing_card_template(client: Any, program: str) -> CardLookupResult | None:
     """Reuse a same-name active card's lookup so a second copy matches.
 
@@ -1644,7 +1725,10 @@ def _existing_card_template(client: Any, program: str) -> CardLookupResult | Non
         return None
     resp = (
         client.table("cards")
-        .select("name, issuer, network, program, multipliers, annual_fee, source_urls")
+        .select(
+            "name, issuer, network, program, multipliers, annual_fee, "
+            "source_urls, base_reward_rate, rewards_currency"
+        )
         .eq("status", "active")
         .execute()
     )
@@ -1658,6 +1742,8 @@ def _existing_card_template(client: Any, program: str) -> CardLookupResult | Non
             multipliers=row.get("multipliers") or {},
             annual_fee=row.get("annual_fee"),
             source_urls=row.get("source_urls") or [],
+            base_reward_rate=row.get("base_reward_rate"),
+            rewards_currency=row.get("rewards_currency"),
             needs_manual=False,
         )
     return None

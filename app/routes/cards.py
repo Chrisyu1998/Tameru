@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
 from app.integrations.card_lookup import lookup_card
+from app.integrations.card_regions import region_for_currency, resolve_card_region
 from app.models.cards import (
     ActiveCardExistsDetail,
     CardConfirmRequest,
@@ -57,8 +58,19 @@ def post_card_lookup(
     on the result so the UI can render the manual-fill form. ai_call_log
     captures the outcome (provider="anthropic", task_type="card_lookup",
     invariant 14) regardless of success.
+
+    Region routing (Tier 3, DESIGN.md §6.6): `body.region` wins when the
+    client supplies it (the add-card form's region selector); otherwise the
+    region is derived from the user's `home_currency` (JPY→JP, TWD→TW, else
+    US). US routes to the category-multiplier lookup; JP/TW route to the
+    base-rate lookup against local sources.
     """
-    result = lookup_card(body.name, user)
+    client = supabase_for_user(user.jwt)
+    home_currency = _home_currency(client, user.user_id)
+    region = body.region or region_for_currency(home_currency)
+    result = lookup_card(
+        body.name, user, region=region, home_currency=home_currency
+    )
     return CardLookupResponse(name=body.name, lookup=result)
 
 
@@ -149,6 +161,17 @@ def post_card_confirm(
     # neither does. Same pattern as Day 19's `soft_delete_card`. Even
     # the no-AF case goes through the RPC for a single code path —
     # `p_af = NULL` makes it a single-table insert under the hood.
+    # Per-card region (Tier 3, DESIGN.md §6.6): a known issuer pins the
+    # region server-side (forge-resistant); an `other`/unknown issuer honors
+    # the user's explicit add-card selection (`proposal.region`) and only
+    # falls back to the home_currency guess when no selection was made. This
+    # keeps the mixed-wallet override working for unenumerated issuers — e.g.
+    # a TWD-home user adding a small US-bank card they marked `US`.
+    home_currency = _home_currency(client, user.user_id)
+    region = resolve_card_region(
+        proposal.issuer, home_currency, proposal.region
+    )
+
     p_card: dict[str, object] = {
         "user_id": str(user.user_id),
         "name": proposal.name,
@@ -159,11 +182,16 @@ def post_card_confirm(
         "last_four": proposal.last_four,
         "source_urls": proposal.source_urls,
         "client_request_id": str(proposal.client_request_id),
+        "region": region,
     }
     if proposal.annual_fee is not None:
         p_card["annual_fee"] = str(proposal.annual_fee)
     if proposal.color is not None:
         p_card["color"] = proposal.color
+    if proposal.base_reward_rate is not None:
+        p_card["base_reward_rate"] = str(proposal.base_reward_rate)
+    if proposal.rewards_currency is not None:
+        p_card["rewards_currency"] = proposal.rewards_currency
 
     p_af: dict[str, object] | None = None
     if (
@@ -433,6 +461,26 @@ def delete_card(
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
+
+
+def _home_currency(client, user_id) -> str:
+    """Read the user's immutable home_currency for region routing (Tier 3).
+
+    `home_currency` is set once at signup and never changes (invariant 13),
+    so this read is cheap and stable. RLS scopes it to the caller's row.
+    Falls back to "USD" when no `users_meta` row exists yet (a card add
+    before onboarding completes shouldn't 500 — US routing is the safe
+    default).
+    """
+    resp = (
+        client.table("users_meta")
+        .select("home_currency")
+        .eq("user_id", str(user_id))
+        .execute()
+    )
+    if resp.data and resp.data[0].get("home_currency"):
+        return resp.data[0]["home_currency"]
+    return "USD"
 
 
 def _collision_409(

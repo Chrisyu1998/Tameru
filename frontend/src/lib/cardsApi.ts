@@ -9,14 +9,28 @@ import { apiFetch, apiJson, ApiError } from './api';
  * '@/lib/cardsApi'` to avoid duplicating the field set.
  */
 
-export type CardNetwork = 'visa' | 'mastercard' | 'amex' | 'discover' | 'other';
+// Tier 3 (DESIGN.md §6.6) added `jcb` + `diners`. Mirrors `CardNetwork`
+// in app/models/cards.py + the `cards_network_check` CHECK.
+export type CardNetwork =
+  | 'visa'
+  | 'mastercard'
+  | 'amex'
+  | 'discover'
+  | 'jcb'
+  | 'diners'
+  | 'other';
 export type CardProgram = 'UR' | 'MR' | 'TYP' | 'Bilt' | 'Other';
 
-// Closed-enum issuer. Mirrors `app/models/cards.py::CardIssuer` and the
-// DB CHECK constraint installed by migration
-// 20260516140000_cards_uniqueness_by_issuer.sql. If you add a value here,
-// update the backend Literal + DB CHECK in the same change.
+// Per-card region — drives reward-lookup routing. Mirrors `CardRegion` in
+// app/models/cards.py + the `cards_region_check` CHECK (Tier 3).
+export type CardRegion = 'US' | 'JP' | 'TW';
+
+// Closed-enum issuer. Mirrors `app/models/cards.py::CardIssuer`, the DB
+// CHECK constraint (migrations 20260516140000 + 20260602120000), and the
+// `card_issuers` reference table. If you add a value here, update the
+// backend Literal + DB CHECK + card_issuers seed in the same change.
 export type CardIssuer =
+  // US
   | 'chase'
   | 'amex'
   | 'citi'
@@ -29,12 +43,28 @@ export type CardIssuer =
   | 'barclays'
   | 'us_bank'
   | 'synchrony'
+  // JP
+  | 'rakuten'
+  | 'smbc'
+  | 'jcb'
+  | 'aeon'
+  | 'epos'
+  | 'saison'
+  // TW
+  | 'cathay'
+  | 'esun'
+  | 'ctbc'
+  | 'taishin'
+  | 'fubon'
+  | 'union'
   | 'other';
 
 // Friendly labels for the UI — the enum stays canonical snake_case for the
 // wire / DB; the display map exists so chips and selects show titlecase
-// without sprinkling lookup code through components.
+// without sprinkling lookup code through components. Mirrors
+// `card_issuers.display_name`.
 export const ISSUER_LABELS: Record<CardIssuer, string> = {
+  // US
   chase: 'Chase',
   amex: 'Amex',
   citi: 'Citi',
@@ -47,6 +77,20 @@ export const ISSUER_LABELS: Record<CardIssuer, string> = {
   barclays: 'Barclays',
   us_bank: 'US Bank',
   synchrony: 'Synchrony',
+  // JP
+  rakuten: 'Rakuten',
+  smbc: 'SMBC',
+  jcb: 'JCB',
+  aeon: 'AEON',
+  epos: 'Epos',
+  saison: 'Saison',
+  // TW
+  cathay: 'Cathay United',
+  esun: 'E.SUN',
+  ctbc: 'CTBC',
+  taishin: 'Taishin',
+  fubon: 'Fubon',
+  union: 'Union Bank',
   other: 'Other',
 };
 
@@ -54,10 +98,53 @@ export const ISSUERS: readonly CardIssuer[] = Object.keys(
   ISSUER_LABELS,
 ) as CardIssuer[];
 
+// Which issuers belong to which region — mirrors `card_issuers.region`.
+// Used by the add-card UI to filter the issuer picker to the selected
+// region. `other` is intentionally absent (no fixed region).
+export const ISSUER_REGION: Partial<Record<CardIssuer, CardRegion>> = {
+  chase: 'US',
+  amex: 'US',
+  citi: 'US',
+  capital_one: 'US',
+  discover: 'US',
+  bank_of_america: 'US',
+  wells_fargo: 'US',
+  usaa: 'US',
+  bilt: 'US',
+  barclays: 'US',
+  us_bank: 'US',
+  synchrony: 'US',
+  rakuten: 'JP',
+  smbc: 'JP',
+  jcb: 'JP',
+  aeon: 'JP',
+  epos: 'JP',
+  saison: 'JP',
+  cathay: 'TW',
+  esun: 'TW',
+  ctbc: 'TW',
+  taishin: 'TW',
+  fubon: 'TW',
+  union: 'TW',
+};
+
+// home_currency → default region for the add-card region selector.
+// Only the two non-US currencies that map to a supported region need
+// entries; everything else defaults to US.
+export function regionForCurrency(homeCurrency: string | null): CardRegion {
+  if (homeCurrency === 'JPY') return 'JP';
+  if (homeCurrency === 'TWD') return 'TW';
+  return 'US';
+}
+
 export interface CardLookupResult {
   program: CardProgram | null;
   network: CardNetwork | null;
   multipliers: Record<string, number>;
+  // Tier 3 (DESIGN.md §6.6) — the JP/TW base-rate shape. Filled instead of
+  // `multipliers` on non-US cards.
+  base_reward_rate?: string | null;
+  rewards_currency?: string | null;
   annual_fee: string | null;
   issuer: CardIssuer | null;
   source_urls: string[];
@@ -80,6 +167,15 @@ export interface CardProposal {
   issuer: CardIssuer;
   program: CardProgram;
   multipliers: Record<string, number>;
+  // Tier 3 (DESIGN.md §6.6) — JP/TW base-rate reward shape, carried from
+  // the lookup to `/cards/confirm`.
+  base_reward_rate?: string | null;
+  rewards_currency?: string | null;
+  // The region the user picked on the add-card form. The confirm route only
+  // honors it for an unenumerated (`other`) issuer — a known issuer's region
+  // is server-pinned. Omit/null on the chat path (no picker); confirm then
+  // falls back to the home-currency guess.
+  region?: CardRegion | null;
   annual_fee?: string | null;
   /**
    * Day 19b — optional renewal date for AF tracking. When set alongside
@@ -114,6 +210,11 @@ export interface CardRow {
   issuer: CardIssuer;
   network: CardNetwork;
   program: CardProgram;
+  // Tier 3 (DESIGN.md §6.6). `region` is NOT NULL (default 'US' on the DB);
+  // base-rate fields are null on US cards.
+  region: CardRegion;
+  base_reward_rate: string | null;
+  rewards_currency: string | null;
   multipliers: Record<string, number>;
   annual_fee: string | null;
   last_four: string | null;
@@ -150,10 +251,16 @@ export function isActiveCardExistsError(err: unknown): err is ApiError & {
   );
 }
 
-export async function lookupCard(name: string): Promise<CardLookupResponse> {
+export async function lookupCard(
+  name: string,
+  region?: CardRegion,
+): Promise<CardLookupResponse> {
+  // `region` is optional — when omitted the backend derives it from the
+  // user's home_currency. The add-card UI passes the selector value so a
+  // US-card-in-a-TWD-wallet add can be routed to US sources (Tier 3).
   return apiJson<CardLookupResponse>('/cards/lookup', {
     method: 'POST',
-    body: { name },
+    body: region ? { name, region } : { name },
   });
 }
 

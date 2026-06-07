@@ -36,6 +36,8 @@ const NETWORKS: { value: CardNetwork; label: string }[] = [
   { value: "mastercard", label: "Mastercard" },
   { value: "amex", label: "Amex" },
   { value: "discover", label: "Discover" },
+  { value: "jcb", label: "JCB" },
+  { value: "diners", label: "Diners Club" },
   { value: "other", label: "Other" },
 ];
 
@@ -289,19 +291,36 @@ export function CardParseCard({
           </>
         )}
 
-        {/* Multipliers preview — read-only here; the cards page is where
-            the user fine-tunes them after the card lands. */}
-        {Object.keys(local.multipliers).length > 0 && (
+        {/* Reward preview — read-only here; the cards page is where the
+            user fine-tunes after the card lands. US cards show category
+            multipliers; JP/TW cards (Tier 3, DESIGN.md §6.6) show the base
+            earn rate + rewards-currency label. */}
+        {(local.baseRewardRate || local.rewardsCurrency) ? (
           <div className="mt-3 flex flex-wrap gap-1.5 border-t border-hairline pt-3">
-            {Object.entries(local.multipliers).map(([cat, mult]) => (
-              <span
-                key={cat}
-                className="rounded-full bg-sunken px-2 py-0.5 text-[0.72rem] text-ink-secondary"
-              >
-                {mult}× {cat.toLowerCase()}
+            {local.baseRewardRate && (
+              <span className="rounded-full bg-sunken px-2 py-0.5 text-[0.72rem] text-ink-secondary">
+                {local.baseRewardRate}% base
               </span>
-            ))}
+            )}
+            {local.rewardsCurrency && (
+              <span className="rounded-full bg-sunken px-2 py-0.5 text-[0.72rem] text-ink-secondary">
+                {local.rewardsCurrency}
+              </span>
+            )}
           </div>
+        ) : (
+          Object.keys(local.multipliers).length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5 border-t border-hairline pt-3">
+              {Object.entries(local.multipliers).map(([cat, mult]) => (
+                <span
+                  key={cat}
+                  className="rounded-full bg-sunken px-2 py-0.5 text-[0.72rem] text-ink-secondary"
+                >
+                  {mult}× {cat.toLowerCase()}
+                </span>
+              ))}
+            </div>
+          )
         )}
 
         {local.sourceUrls.length > 0 && !committed && !frozen && !pendingSync && (
