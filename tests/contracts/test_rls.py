@@ -67,6 +67,15 @@ def test_user_b_cannot_read_user_a_rows(
 
     payload = factory(user_a.id, card_id=card_a)
     if table == "users_meta":
+        # Preserve user_a's real device id. The row already exists from
+        # conftest bootstrap; the factory hands back a random `dev-<tag>`
+        # active_device_id, and upserting that would overwrite the bootstrap
+        # value for the whole session (user_a is session-scoped). That breaks
+        # the single-active-device invariant (active_device_id == device_id),
+        # so every later device-gated request 401s with DEVICE_DISPLACED —
+        # an order-dependent cross-file flake. Writing the real device id back
+        # keeps the upsert idempotent w.r.t. the device gate.
+        payload = {**payload, "active_device_id": user_a.device_id}
         ins = client_a.table(table).upsert(payload, on_conflict=pk).execute()
     else:
         ins = client_a.table(table).insert(payload).execute()
