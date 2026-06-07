@@ -5,7 +5,9 @@ Two concerns:
   * `assert_within_usage_cap(user)` — hard daily token cap per user.
     Checked once at turn entry (lenient mid-turn — once a turn starts
     it finishes, bounding overshoot to one turn). Per DESIGN.md §11.2
-    / §7.3.
+    / §7.3. When the cap is hit it also emits a Sentry alert so the
+    operator learns about it without polling `ai_call_log` (see
+    `_alert_daily_cap_reached`).
 
   * `ProviderRateLimited` — the structured error the loop raises when
     Anthropic 429s on two consecutive attempts. The retry logic itself
@@ -21,14 +23,27 @@ CLAUDE.md invariants:
     Never the service role.
   * #14: the cap query is a SELECT on `ai_call_log` via the user JWT;
     the table's RLS SELECT policy scopes it to `auth.uid()`.
+  * #15: the cap-hit Sentry alert is a deliberate operational signal
+    via `capture_message`, NOT an exception, and NOT an AI-provider
+    failure — so it does not contradict "do not route AI provider
+    failures to Sentry." It also ships cleanly past `before_send`:
+    `app.agent.middleware` is not in the AI-integration drop-list, and
+    a `capture_message` carries no exception frames for that rule to
+    match on.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
+import logging
 import os
+
+import sentry_sdk
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+
+logger = logging.getLogger(__name__)
 
 # Default cap per DESIGN.md §11.2. At ~19K tokens/turn that's roughly 10
 # chat turns/day — enough for normal use, bounded enough that one user
@@ -75,6 +90,7 @@ def assert_within_usage_cap(user: AuthedUser) -> None:
     cap = _daily_cap_tokens()
     used = _today_chat_tokens_used(user)
     if used >= cap:
+        _alert_daily_cap_reached(user, used=used, cap=cap)
         raise UsageCapExceeded(used=used, cap=cap)
 
 
@@ -94,6 +110,40 @@ def _daily_cap_tokens() -> int:
         return int(raw)
     except ValueError:
         return DEFAULT_DAILY_CAP_TOKENS
+
+def _alert_daily_cap_reached(user: AuthedUser, *, used: int, cap: int) -> None:
+    """Emit a Sentry alert that this user just hit the daily token cap.
+
+    Why this exists: a cap hit is otherwise invisible — the user sees
+    the quota message, but the operator only learns about it by querying
+    `ai_call_log`. At ~10 users a blocked user is a real signal worth a
+    push notification (DESIGN.md §14.5; a lighter v1 cousin of the
+    §17.6 aggregate "cost alert", which is scaling-plan scope).
+
+    Dedup is delegated to Sentry's fingerprint grouping rather than any
+    app-side state: every blocked attempt by one user on one UTC day
+    shares `fingerprint=[..., user_id, utc_date]`, so Sentry collapses
+    them into a single issue (one alert per user per day; the next day's
+    date opens a fresh issue). No counter table, no per-attempt spam.
+
+    The token counts (`used`, `cap`) are not financial PII, so they ride
+    in `extra`; `user_id` is already on the Sentry user scope via
+    `app/auth.py`'s `set_user`. Wrapped in a broad `except` because the
+    request is already failing closed — an alerting hiccup must never
+    turn a clean 429-style cap response into a 500.
+    """
+    try:
+        utc_date = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+        with sentry_sdk.new_scope() as scope:
+            scope.level = "warning"
+            scope.fingerprint = ["chat-daily-cap", str(user.user_id), utc_date]
+            scope.set_extra("used_tokens", used)
+            scope.set_extra("cap_tokens", cap)
+            scope.set_extra("utc_date", utc_date)
+            sentry_sdk.capture_message("Daily chat token cap reached")
+    except Exception:  # noqa: BLE001 — alerting must not break the request path
+        logger.warning("failed to emit daily-cap Sentry alert", exc_info=True)
+
 
 def _today_chat_tokens_used(user: AuthedUser) -> int:
     """Sum today's `chat_turn` input+output tokens for this user.
@@ -129,8 +179,6 @@ def _utc_midnight_iso() -> str:
     Explicit UTC matches the user-facing copy. Don't fall back to
     `CURRENT_DATE` server-side; that uses the database server's
     timezone, which would silently drift if Postgres is ever moved."""
-    import datetime as _dt
-
     midnight = _dt.datetime.combine(
         _dt.datetime.now(_dt.timezone.utc).date(),
         _dt.time.min,

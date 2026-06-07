@@ -41,13 +41,22 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 class AICallSummaryRow(BaseModel):
-    """One (provider, model, task_type) aggregate row.
+    """One aggregate row.
+
+    Grouped by (provider, model, task_type) by default; when the caller
+    passes `group_by_user=true`, `user_id` is also part of the key and
+    is populated here. In the un-grouped view it is `None` and the route
+    omits it from the response (`response_model_exclude_none`), so that
+    response stays byte-identical to its pre-`user_id` shape. `user_id`
+    answers the operational "who is heavy?" question that the un-grouped
+    totals cannot.
 
     `count`: number of `ai_call_log` rows in the window.
     `error_count`: subset where `success = false`.
     Token sums are post-aggregation totals for the window.
     """
 
+    user_id: str | None = None
     provider: str
     model: str
     task_type: str
@@ -93,9 +102,28 @@ def require_admin(user: AuthedUser = Depends(get_current_user_jwt)) -> AuthedUse
     return user
 
 
-@router.get("/aicalls/summary", response_model=AICallSummaryResponse)
+# PostgREST caps every SELECT at `max-rows` (1000 on Supabase by default),
+# silently — no error when truncated. The per-user "who is heavy?" view is
+# only correct if it sees every row, so the fetch pages explicitly until a
+# short page signals the end. Page size matches the server cap.
+_PAGE_SIZE = 1000
+
+
+@router.get(
+    "/aicalls/summary",
+    response_model=AICallSummaryResponse,
+    # Keep the un-grouped response byte-identical to its pre-`user_id` shape:
+    # with `exclude_none`, the new optional `user_id` key is omitted entirely
+    # when null (the un-grouped path) and present only in the grouped view
+    # (where it is always a non-null string). No other field is ever None.
+    response_model_exclude_none=True,
+)
 def get_aicalls_summary(
     days: int = Query(7, ge=1, le=90, description="Window size in days (1-90)."),
+    group_by_user: bool = Query(
+        False,
+        description="Also break the totals down per user_id (answers 'who is heavy?').",
+    ),
     user: AuthedUser = Depends(require_admin),
 ) -> AICallSummaryResponse:
     """Return token usage by (provider, model, task_type) for the window.
@@ -103,20 +131,19 @@ def get_aicalls_summary(
     Window is `[now - days, now]`. Always inside the 90-day hot retention
     window for `ai_call_log` (§14.1), so the rollup table is never
     consulted. Aggregation runs in Python because PostgREST GROUP BY
-    requires a database view (§8.8 has no admin view) and the row count
-    is bounded — ~10 users × ~3 task types × 7 days ≈ a few hundred rows.
+    requires a database view (§8.8 has no admin view).
+
+    With `group_by_user=true` the key gains `user_id` and the rows sort by
+    total tokens descending (so the heaviest user surfaces first); without
+    it the shape is unchanged and rows sort by `count` descending. The
+    cross-user rows come from the admin SELECT policy on `ai_call_log`
+    (migration `20260522130300`).
     """
     window_end = datetime.now(timezone.utc)
     window_start = window_end - timedelta(days=days)
     client = supabase_for_user(user.jwt)
-    resp = (
-        client.table("ai_call_log")
-        .select("provider, model, task_type, input_tokens, output_tokens, success")
-        .gte("timestamp", window_start.isoformat())
-        .lte("timestamp", window_end.isoformat())
-        .execute()
-    )
-    rows = _aggregate(resp.data or [])
+    raw = _fetch_window_rows(client, window_start, window_end, by_user=group_by_user)
+    rows = _aggregate(raw, by_user=group_by_user)
     return AICallSummaryResponse(
         window_start=window_start,
         window_end=window_end,
@@ -129,15 +156,49 @@ def get_aicalls_summary(
 # ---------------------------------------------------------------------------
 
 
-def _aggregate(rows: list[dict]) -> list[AICallSummaryRow]:
-    """Group raw `ai_call_log` rows by (provider, model, task_type).
+def _fetch_window_rows(
+    client, window_start: datetime, window_end: datetime, *, by_user: bool
+) -> list[dict]:
+    """Page through `ai_call_log` for the window, returning every row.
 
-    Returns `AICallSummaryRow` instances sorted by `count` descending so
-    the most-used model surfaces first in a dashboard tail.
+    `user_id` is selected only when needed for grouping — keeping the
+    un-grouped path's payload identical to before. Paginates via `.range()`
+    because a single SELECT is silently capped at `_PAGE_SIZE`; without
+    paging a busy week would under-count and the per-user totals would lie.
     """
-    buckets: dict[tuple[str, str, str], dict[str, int]] = {}
+    columns = "provider, model, task_type, input_tokens, output_tokens, success"
+    if by_user:
+        columns = "user_id, " + columns
+    out: list[dict] = []
+    offset = 0
+    while True:
+        resp = (
+            client.table("ai_call_log")
+            .select(columns)
+            .gte("timestamp", window_start.isoformat())
+            .lte("timestamp", window_end.isoformat())
+            .range(offset, offset + _PAGE_SIZE - 1)
+            .execute()
+        )
+        page = resp.data or []
+        out.extend(page)
+        if len(page) < _PAGE_SIZE:
+            return out
+        offset += _PAGE_SIZE
+
+
+def _aggregate(rows: list[dict], *, by_user: bool) -> list[AICallSummaryRow]:
+    """Group raw `ai_call_log` rows into `AICallSummaryRow` instances.
+
+    Key is (provider, model, task_type), plus `user_id` when `by_user`.
+    Sorts by total tokens descending in the per-user view (the heaviest
+    user is the point of the breakdown) and by `count` descending
+    otherwise (preserving the pre-existing un-grouped contract).
+    """
+    buckets: dict[tuple, dict] = {}
     for row in rows:
-        key = (row["provider"], row["model"], row["task_type"])
+        uid = row.get("user_id") if by_user else None
+        key = (uid, row["provider"], row["model"], row["task_type"])
         bucket = buckets.setdefault(
             key,
             {"count": 0, "sum_input_tokens": 0, "sum_output_tokens": 0, "error_count": 0},
@@ -149,12 +210,16 @@ def _aggregate(rows: list[dict]) -> list[AICallSummaryRow]:
             bucket["error_count"] += 1
     out = [
         AICallSummaryRow(
+            user_id=str(uid) if uid is not None else None,
             provider=provider,
             model=model,
             task_type=task_type,
             **bucket,
         )
-        for (provider, model, task_type), bucket in buckets.items()
+        for (uid, provider, model, task_type), bucket in buckets.items()
     ]
-    out.sort(key=lambda r: r.count, reverse=True)
+    if by_user:
+        out.sort(key=lambda r: r.sum_input_tokens + r.sum_output_tokens, reverse=True)
+    else:
+        out.sort(key=lambda r: r.count, reverse=True)
     return out

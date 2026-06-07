@@ -1430,6 +1430,8 @@ Chat is the only cost that can run away. To bound it, FastAPI middleware enforce
 
 Worst-case per-user chat spend is therefore **~$6/month** (200K tokens × $1/M input and $5/M output blend), even if the user spams the chat until they hit the cap every day. Gemini and the Claude `web_search` card-lookup path aren't capped — they're too cheap per call to matter.
 
+When a user hits the cap, the middleware also emits a `warning`-level Sentry alert (`capture_message`, fingerprinted by user + UTC date so a user's repeated same-day blocked attempts collapse into a single issue) so the operator learns of a blocked user without polling `ai_call_log`. This is a deliberately lightweight v1 operational signal and is **distinct from** the aggregate daily-spend "cost alert" in §17.6, which remains scaling-plan scope (not built in v1).
+
 ### 11.3 Cost table — invite-only (~10 users)
 
 Tameru is planned as invite-only. No Pro tier, no Stripe, no scaling beyond close friends and family.
@@ -1609,6 +1611,8 @@ Conflating these is the canonical failure mode — e.g., routing AI failures to 
 1. Drop `fastapi.HTTPException` (4xx are expected; 5xx HTTPExceptions are surfaced by the `internal_error` handler in `app/main.py`).
 2. Drop events whose originating module starts with `app.integrations.gemini`, `app.integrations.card_lookup`, `app.agent.loop`, or `app.agent.memory` — those failures already write `ai_call_log` rows with `success = false` (§14.2 "don't double-log").
 3. **Exception to rule 2:** if the exception class is `AICallLogError`, the event ships. `AICallLogError` means the AI call succeeded but the audit INSERT failed — the audit pipeline itself is broken, which is exactly what Sentry exists to catch.
+
+**Operator alerts via `capture_message`.** Not every Sentry event is an exception. The per-user daily-cap gate (§11.2) emits a `warning`-level `capture_message` from `app.agent.middleware` when a user is blocked — a sanctioned *operational* signal, not an AI-provider failure, so it does not contradict rule 2 / "don't double-log." It passes `before_send` cleanly: `app.agent.middleware` is outside the rule-2 module list, and a message event carries no exception frames for that rule to match. The companion *read* surface is the admins-table-gated `GET /admin/aicalls/summary`; passing `?group_by_user=true` breaks the window's token totals down per `user_id` (heaviest first) to answer "who is heavy?" — the lightweight v1 cousin of the §17.6 per-user cost dashboard.
 
 **Log-level convention.**
 
