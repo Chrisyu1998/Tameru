@@ -133,6 +133,9 @@ def _create() -> None:
     print(f"✓ minted E2E user (id={user_id})", file=sys.stderr)
 
 
+_DELETE_MAX_ATTEMPTS = 3
+
+
 def _delete(user_id: str) -> None:
     """Best-effort delete; never fails the build on a missing user.
 
@@ -140,21 +143,46 @@ def _delete(user_id: str) -> None:
     so a Playwright failure still triggers teardown. A second teardown
     pass (e.g. on a retried job) would otherwise 404 and surface as a
     confusing red step.
+
+    The deployed-E2E teardown hits the *live* Supabase admin API, which
+    occasionally times out ("read operation timed out") — a transient
+    blip that would otherwise leak the ephemeral user and red the build.
+    So non-404 failures retry with backoff up to `_DELETE_MAX_ATTEMPTS`;
+    a 404/not-found short-circuits to success. If every attempt fails we
+    still exit non-zero so the step is visibly annotated, but the CI
+    teardown step is `continue-on-error`, so a passing test run is not
+    failed by a cleanup hiccup.
     """
     admin = _admin_client()
-    try:
-        admin.auth.admin.delete_user(user_id)
-        print(f"✓ deleted E2E user {user_id}", file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001 — script-level catch-all is fine.
-        msg = str(exc).lower()
-        if "not found" in msg or "404" in msg:
-            print(
-                f"· E2E user {user_id} already gone; skipping",
-                file=sys.stderr,
-            )
+    last_exc: Exception | None = None
+    for attempt in range(1, _DELETE_MAX_ATTEMPTS + 1):
+        try:
+            admin.auth.admin.delete_user(user_id)
+            print(f"✓ deleted E2E user {user_id}", file=sys.stderr)
             return
-        print(f"✗ delete_user({user_id}) failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+        except Exception as exc:  # noqa: BLE001 — script-level catch-all is fine.
+            msg = str(exc).lower()
+            if "not found" in msg or "404" in msg:
+                print(
+                    f"· E2E user {user_id} already gone; skipping",
+                    file=sys.stderr,
+                )
+                return
+            last_exc = exc
+            if attempt < _DELETE_MAX_ATTEMPTS:
+                backoff = 2.0 * attempt
+                print(
+                    f"· delete_user({user_id}) attempt {attempt} failed "
+                    f"({exc}); retrying in {backoff:.0f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(backoff)
+    print(
+        f"✗ delete_user({user_id}) failed after {_DELETE_MAX_ATTEMPTS} "
+        f"attempts: {last_exc}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _admin_client():

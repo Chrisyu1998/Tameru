@@ -154,9 +154,13 @@ jobs:
           if-no-files-found: ignore
 
       # Always-run teardown — a Playwright failure must not leak the E2E
-      # user. Best-effort (404 on already-deleted is not an error).
+      # user. Best-effort (404 on already-deleted is not an error;
+      # transient admin-API timeouts retry with backoff). continue-on-error
+      # so a cleanup hiccup doesn't fire the failure-notify job (and open
+      # a spurious prod-health issue) when the health check itself passed.
       - name: Delete E2E user
         if: always() && steps.mint.outputs.user_id != ''
+        continue-on-error: true
         run: python scripts/e2e_user.py delete --user-id="${{ steps.mint.outputs.user_id }}"
 
   notify:
