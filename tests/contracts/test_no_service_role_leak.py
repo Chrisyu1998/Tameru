@@ -32,7 +32,7 @@ ALLOWED_SUBDIRS = {"cron", "scripts"}  # scripts lives at repo root, kept here f
 # scope (one-click unsubscribe per RFC 8058, Resend webhook). Paths are
 # relative to APP_DIR.
 ALLOWED_FILES = {
-    Path("routes/unsubscribe.py"),       # invariant 1 caller #3 surface
+    Path("routes/unsubscribe.py"),       # invariant 1 caller #5 (RFC 8058, HMAC-token auth)
     Path("routes/webhooks_resend.py"),   # invariant 1 caller #4
     # main.py is the web-process boot-validation surface. It lists the
     # service-role env var name in _REQUIRED_ENV_VARS so a deploy that
