@@ -1,7 +1,7 @@
 -- autolog_subscriptions() — Day 19 (DESIGN.md §6.5, §14.3)
 --
 -- Runs daily via pg_cron in production (scheduled separately in
--- supabase/seed/production_cron.sql so dev doesn't auto-run it). Inserts
+-- supabase/snippets/production_cron.sql so dev doesn't auto-run it). Inserts
 -- a transaction for every active subscription whose next_billing_date has
 -- come due, then advances next_billing_date by one period.
 --

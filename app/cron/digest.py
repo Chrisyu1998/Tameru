@@ -5,8 +5,8 @@ Each run sends only to eligible users for whom it is *currently* Monday in
 the [09:00, 12:00) local hours of their own `users_meta.timezone` (DESIGN.md
 §6.6 — per-user local delivery, decoupled from currency). The three-hour
 window is a retry budget: a failed 09:00 send releases its reservation slot
-so the 10:00 fire re-attempts, and the UTC-week unique index makes every
-fire after the first success a no-op (so no duplicates). An outage lasting
+so the 10:00 fire re-attempts, and the local-week `dedup_week` unique index
+makes every fire after the first success a no-op (so no duplicates). An outage lasting
 past noon local means the user misses this week — the documented bounded
 false-negative. Users with no zone set fall back to America/New_York, so
 pre-Day-29 behavior (Monday morning ET) is preserved. Running hourly +
@@ -20,10 +20,12 @@ exit 0 cleanly; the cost is ~168 sub-second container spin-ups per week,
 negligible at v1 scale.
 
 Iterates eligible users, composes + renders + sends the digest, writes
-`email_log` (idempotent via the partial unique index — still keyed on the
-UTC week, which remains a correct once-per-week guard because each user is
-attempted only at their single local-09:00 hour), and logs the Sonnet call
-to `ai_call_log` under `task_type='digest'`.
+`email_log` (idempotent via the partial unique index on the recipient's
+local Monday date, `dedup_week` — migration `20260601130000`; the key is
+invariant across all three retry fires and across mid-week timezone
+changes, including zones like Australia/Sydney where Monday 09:00 local is
+still Sunday in UTC), and logs the Sonnet call to `ai_call_log` under
+`task_type='digest'`.
 
 Service-role posture (CLAUDE.md invariant 1, third sanctioned caller):
 this module is the only place that imports `supabase_admin` for the
@@ -68,7 +70,8 @@ _DIGEST_KIND = "digest"
 # [09:00, 12:00) — i.e. 09:00, 10:00, 11:00. The cron fires at minute 0 each
 # hour, so the user gets up to three attempts across Monday morning. The
 # reserve-then-release pattern makes the first *successful* send claim the
-# week's slot (so 10:00/11:00 then no-op via the UTC-week unique index),
+# week's slot (so 10:00/11:00 then no-op via the local-week `dedup_week`
+# unique index),
 # while a *failed* 09:00 send releases its slot so the 10:00 fire retries.
 # Capped at noon so a Monday-morning outage retries but the digest never
 # arrives as a "good morning" recap in the afternoon/evening; a >3h outage
@@ -422,8 +425,8 @@ def _is_within_send_window(tz_name: str | None, now_utc: datetime) -> bool:
 
     The three-hour window (09:00 / 10:00 / 11:00 fires) is the retry budget:
     a failed 09:00 send releases its reservation slot and the 10:00 fire
-    re-attempts; once a send succeeds, the UTC-week unique index makes the
-    remaining fires no-op. `tz_name` None or unresolvable → the default
+    re-attempts; once a send succeeds, the local-week `dedup_week` unique
+    index makes the remaining fires no-op. `tz_name` None or unresolvable → the default
     digest zone, so users with no zone set keep getting the digest Monday
     morning ET (the historical time). DESIGN.md §6.6.
     """

@@ -200,9 +200,8 @@ class CardProposal(BaseModel):
     # Tier 3 (DESIGN.md §6.6) — JP/TW base-rate reward shape, carried from
     # the lookup through to `/cards/confirm`. Mutually-exclusive-in-practice
     # with `multipliers`: US cards fill multipliers, JP/TW cards fill these.
-    # `region` is NOT on the proposal wire — the confirm route recomputes it
-    # server-side from the issuer (falling back to home_currency) so a forged
-    # client can't mislabel a card's region.
+    # (`region` IS on the proposal wire — see its own comment below for the
+    # honored-only-for-`other`-issuers contract.)
     base_reward_rate: Decimal | None = None
     rewards_currency: str | None = None
     # Tier 3 (DESIGN.md §6.6) — the region the user picked / the lookup used.

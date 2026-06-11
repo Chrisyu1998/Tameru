@@ -11,9 +11,14 @@ Soft bounces are not surfaced — Resend retries internally. Suppressing
 a user on a transient blip is exactly wrong.
 
 NO AUTH on this route; Svix signature verification IS the
-authorization. A missing/invalid signature returns 400; everything
-else returns 200 even on internal error so Resend doesn't retry-storm
-us into noise.
+authorization. A missing/invalid signature returns 400. An *internal*
+failure inside the suppression writes propagates as a 500 — and that is
+the intended behavior, not an oversight: Resend redelivers on 5xx, both
+suppression UPDATEs are idempotent, and the retry heals a partial
+suppression (e.g. digest flag flipped but bounce row not stamped). A
+catch-all 200 would silently drop the event and leave the partial state
+permanent. Unrecognized-but-valid events still return 200 so Resend
+doesn't retry-storm event types we deliberately ignore.
 
 SERVICE ROLE in this file. The webhook has no user JWT in scope
 (Resend doesn't know about our auth). CLAUDE.md invariant 1 lists
