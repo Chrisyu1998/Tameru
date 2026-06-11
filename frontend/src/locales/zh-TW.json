@@ -827,5 +827,18 @@
     "cancel": "取消",
     "add": "新增",
     "addCategory": "新增類別"
+  },
+  "unsubscribe": {
+    "title": "要取消訂閱每週摘要嗎？",
+    "body": "Tameru 將停止寄送每週一的摘要郵件。您隨時可以在設定 → 通知中重新開啟。",
+    "confirm": "取消訂閱",
+    "working": "取消訂閱中…",
+    "doneTitle": "已取消訂閱。",
+    "doneBody": "Tameru 不會再寄送每週摘要郵件。您隨時可以在應用程式的設定 → 通知中重新開啟。",
+    "invalidTitle": "此連結無效。",
+    "invalidBody": "取消訂閱連結缺少權杖。請使用最新摘要郵件中的連結。",
+    "errorTitle": "無法取消訂閱。",
+    "errorBody": "發生問題。請再試一次，或在設定 → 通知中關閉摘要。",
+    "retry": "再試一次"
   }
 }

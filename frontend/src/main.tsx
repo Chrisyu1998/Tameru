@@ -21,6 +21,7 @@ import MorePage from './pages/more';
 import SettingsPage from './pages/settings';
 import ConnectionsPage from './pages/connections';
 import OauthConsentPage from './pages/oauth.consent';
+import UnsubscribePage from './pages/unsubscribe';
 import PrivacyPage from './pages/privacy';
 import BreakdownPage from './pages/breakdown.index';
 import CategoryListPage from './pages/breakdown.category';
@@ -126,6 +127,12 @@ function App() {
               completed Tameru onboarding is an edge case the consent page
               handles directly (Day 23b). */}
           <Route path="/oauth/consent" element={<OauthConsentPage />} />
+          {/* Unsubscribe confirm — the backend GET /unsubscribe 302s here
+              with the HMAC token; the page's button POSTs it back (audit
+              P3-10: scanners GET email links, so GET never mutates). Not
+              behind RequireOnboarded: the recipient may have no session
+              on the device that opens the email link. */}
+          <Route path="/unsubscribe" element={<UnsubscribePage />} />
           <Route path="*" element={<NotFoundPage />} />
           {/* Gated: require a JWT and a confirmed home_currency. */}
           <Route element={<RequireOnboarded />}>
