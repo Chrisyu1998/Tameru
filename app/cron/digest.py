@@ -42,13 +42,13 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from app.db import supabase_admin
+from app.logging_config import configure_logging
 from app.integrations.resend import send_digest_email
 from app.services.digest import (
     DEFAULT_DIGEST_TZ_NAME,
@@ -328,13 +328,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Configure logging — when running as `python -m`, the FastAPI
-    # lifespan that wires JSON logging doesn't fire. Use a simple
-    # stdout handler so cron logs land in Railway's log viewer.
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout,
-    )
+    # lifespan that wires JSON logging doesn't fire. Use the same
+    # configure_logging() as the web process so the cron's records pass
+    # through the PiiRedactionFilter + JSON formatter too: the previous
+    # bare basicConfig emitted exception text to Railway stdout with no
+    # redaction (audit P3-20). Output still lands on stdout.
+    configure_logging()
 
     report = send_weekly_digests(only_user_id=args.user, dry_run=args.dry_run)
     logger.info(
