@@ -63,6 +63,7 @@ from app.models.transactions import (
 )
 from app.prompts.categories import ALLOWED_CATEGORIES
 from app.services.transactions import apply_transaction_filters, list_transactions
+from app.util.timezone import user_local_today
 
 # Hard cap on rows fetched for an aggregation. Above this we still return
 # the partial sum but flag the result as truncated so Claude can ask the
@@ -1086,7 +1087,11 @@ def get_spending_summary(
         {"months": months, "date_from": date_from, "date_to": date_to}
     )
 
-    today = _dt.date.today()
+    # User-local "today" (users_meta.timezone, UTC fallback). A server-UTC
+    # anchor excludes east-of-UTC users' local-today rows from "this month
+    # so far" every local morning — the end-clamp below would cut them off
+    # (audit P2-7).
+    today = user_local_today(user.jwt)
     if request.date_from is not None or request.date_to is not None:
         # Explicit window. A lone date_from runs through today; a lone
         # date_to runs from the first of its month. Both supplied → the
@@ -1513,7 +1518,11 @@ def propose_subscription(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     card_id = _resolve_proposal_card(client, request.card_id, request.card_ref)
 
     next_billing_date = compute_next_billing_date(
-        request.start_date, request.frequency
+        request.start_date,
+        request.frequency,
+        # User-local today: a JST user's "starting today" must hit the
+        # forward-only clamp, not the future-start branch (audit P3-29).
+        today=user_local_today(user.jwt),
     )
 
     proposal = SubscriptionProposal(

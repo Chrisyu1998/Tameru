@@ -200,7 +200,11 @@ class SubscriptionListResponse(BaseModel):
     items: list[SubscriptionRow]
 
 
-def compute_next_billing_date(start_date: _dt.date, frequency: Frequency) -> _dt.date:
+def compute_next_billing_date(
+    start_date: _dt.date,
+    frequency: Frequency,
+    today: _dt.date | None = None,
+) -> _dt.date:
     """Forward-only next-billing-date computation (§8.3).
 
     At create time:
@@ -211,8 +215,16 @@ def compute_next_billing_date(start_date: _dt.date, frequency: Frequency) -> _dt
     escape hatch for historical charges. Matches the YNAB / Copilot /
     Rocket Money / Monarch pattern (none of them backfill on a backdated
     start_date).
+
+    `today` should be the *user's* local date (`user_local_today`) —
+    against server-UTC, a JST user creating a sub "starting today
+    (local)" lands in the start_date > today branch, skips the
+    forward-only clamp, and the start date itself auto-logs: exactly the
+    doubling the clamp prevents (audit P3-29). UTC fallback when omitted
+    keeps direct/test callers working.
     """
-    today = _dt.date.today()
+    if today is None:
+        today = _dt.date.today()
     anchor = today if start_date <= today else start_date
     return _advance_period(anchor, frequency) if start_date <= today else start_date
 

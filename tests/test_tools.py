@@ -618,11 +618,20 @@ def test_get_spending_summary_window_span_grows_with_months(authed_user_a):
     assert start_one == today.replace(day=1)
 
 
-def test_get_spending_summary_excludes_future_dated_transactions(authed_user_a, user_a, card_a):
+def test_get_spending_summary_excludes_future_dated_transactions(
+    authed_user_a, user_a, card_a, monkeypatch
+):
     """`/transactions/confirm` allows `date.today() + 1 day` for client-
     side TZ slack, so future-dated rows can legitimately exist. The
     summary's window is "spent so far" — future rows must not be
-    aggregated, or "this month" overstates spend until midnight UTC."""
+    aggregated, or "this month" overstates spend until midnight UTC.
+
+    `user_local_today` is pinned to the machine-local date the seeds use:
+    the production path resolves "today" in the user's timezone (UTC
+    fallback), which diverges from this test's `date.today()` anchor on
+    an evening run west of UTC.
+    """
+    monkeypatch.setattr(tools_module, "user_local_today", lambda _jwt: date.today())
     tag = _tag()
     # Baseline Dining total before this test seeds anything.
     before = get_spending_summary(authed_user_a, months=1)

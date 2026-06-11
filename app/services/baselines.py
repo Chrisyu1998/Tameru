@@ -21,6 +21,7 @@ from typing import Any
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+from app.util.timezone import user_local_today
 from app.models.dashboard import CategoryTile, DashboardSummary, TileColor
 
 MIN_TX_COUNT_FOR_BASELINE = 6
@@ -38,8 +39,11 @@ def compute_dashboard_summary(
     """Build the dashboard payload for one user.
 
     Request: caller's `AuthedUser` (JWT-scoped) plus an optional `today`
-    override for tests. Production passes `None` and the RPC uses the
-    server's current date.
+    override for tests. Production passes `None` and `p_today` resolves
+    to the user's local date via `users_meta.timezone` (UTC fallback) —
+    a server-UTC anchor would drop east-of-UTC users' local-today rows
+    from "this month" every morning, and show the previous month as
+    "this month" for the first local hours of the 1st (audit P2-7).
 
     Response: `DashboardSummary` — top-level `this_month`/`baseline`/
     `delta_pct`, `baseline_ready`, an `observation` sentence (or null),
@@ -48,7 +52,7 @@ def compute_dashboard_summary(
     are omitted; the truly-empty user gets `categories=[]` and
     `baseline_ready=false`.
     """
-    today = today or date.today()
+    today = today or user_local_today(user.jwt)
     client = supabase_for_user(user.jwt)
     resp = client.rpc(
         "dashboard_summary", {"p_today": today.isoformat()}

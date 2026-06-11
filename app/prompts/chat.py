@@ -88,6 +88,15 @@ Version log:
     per-user language lives in block[1] (NOT hashed) so every user still
     shares one cached block[0] prefix. Static-block edit busts the cache
     once.
+  * chat_v13 (2026-06 audit P2-6) — the block[1] "Today is …" anchor now
+    resolves in the user's `users_meta.timezone` (UTC fallback) via
+    `user_local_today`, not server-UTC. For a JST/TWT user between 00:00
+    and ~09:00 local the UTC date is their *yesterday*, and block[0]
+    tells the agent to default missing transaction dates to "today" — so
+    the default path proposed wrong-dated ledger rows every local
+    morning. Dynamic-tail-only change (block[0] untouched, cache
+    intact); version bumped so ai_call_log rows distinguish the date
+    semantics.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -108,8 +117,12 @@ from typing import Any
 
 from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
+from app.util.timezone import user_local_today
 
-PROMPT_VERSION = "chat_v12"
+# chat_v13: the block[1] "Today is …" anchor resolves in the user's
+# users_meta.timezone (UTC fallback) instead of server-UTC, so east-of-UTC
+# users stop getting yesterday's date proposed every local morning.
+PROMPT_VERSION = "chat_v13"
 
 
 SYSTEM_PROMPT = """\
@@ -280,7 +293,8 @@ def render_system_prompt(
     Request:
         user_jwt: caller's JWT — used by render_user_merchants() to read
             the `top_user_merchants` view under RLS. Required.
-        today:    test seam. Production callers omit it.
+        today:    test seam. Production callers omit it; the date then
+            resolves in the user's `users_meta.timezone` (UTC fallback).
 
     Response:
         [
@@ -311,7 +325,14 @@ def render_system_prompt(
     through unchanged.
     """
     if today is None:
-        today = _dt.date.today()
+        # chat_v13: "today" is the user's local calendar date, read from
+        # users_meta.timezone under RLS (UTC fallback). A server-UTC date
+        # is the user's *yesterday* for the first 8-9 local hours of every
+        # JST/TWT day, and block[0] tells Claude to default missing
+        # transaction dates to "today" — so the UTC anchor wrote
+        # wrong-dated ledger rows by default (audit P2-6). Per-user state
+        # stays in block[1]; the cached block[0] prefix is unaffected.
+        today = user_local_today(user_jwt)
     # Day 16: memory block lands AFTER the merchants block, both inside
     # block[1]. Keeping it in the dynamic tail is load-bearing — per-
     # user memory inside the cached preamble (block[0]) would invalidate

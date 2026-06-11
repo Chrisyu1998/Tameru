@@ -31,6 +31,7 @@ from postgrest.exceptions import APIError
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+from app.util.timezone import user_local_today
 from app.models.goals import (
     Goal,
     GoalPatchRequest,
@@ -66,7 +67,7 @@ def list_goals_with_spend(
         returned in (category NULLS FIRST, category ASC) order so the
         frontend can pin the overall-budget row to the top.
     """
-    today = today or _dt.date.today()
+    today = today or user_local_today(user.jwt)
     client = supabase_for_user(user.jwt)
 
     goals_resp = (
