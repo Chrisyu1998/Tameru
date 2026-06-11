@@ -65,14 +65,21 @@ from app.mcp_server import (
 
 
 def test_all_four_read_tools_are_registered():
-    """The MCP surface is exactly the four read-only tools of DESIGN.md §7.9."""
+    """The MCP surface is EXACTLY the four read-only tools of DESIGN.md §7.9.
+
+    Equality, not subset (audit P3-17): a subset match would stay green if
+    a fifth (write) tool were registered — and the write-invariant guard
+    only walks the chat TOOL_REGISTRY, so an MCP-only mutation tool would
+    pass both tests. CLAUDE.md invariant 3 makes adding an MCP write tool
+    an explicit-approval event; this assertion is its mechanical hook.
+    """
     names = {tool.name for tool in asyncio.run(mcp_server.list_tools())}
-    assert {
+    assert names == {
         "get_spending_summary",
         "get_recent_transactions",
         "get_subscriptions",
         "get_card_multipliers",
-    } <= names
+    }
 
 
 # ===========================================================================

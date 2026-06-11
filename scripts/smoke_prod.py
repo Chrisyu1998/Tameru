@@ -41,7 +41,7 @@ import httpx
 from supabase import create_client
 
 
-def _load_dotenv() -> None:
+def load_dotenv() -> None:
     """Read SMOKE_* keys from a repo-root .env into os.environ if unset.
 
     No python-dotenv dep — we only need KEY=VALUE lines with optional
@@ -67,7 +67,7 @@ def _load_dotenv() -> None:
         os.environ[key] = value
 
 
-_load_dotenv()
+load_dotenv()
 
 
 @dataclass(frozen=True)
