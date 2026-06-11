@@ -22,7 +22,8 @@
     "closeSheet": "close sheet",
     "displaced": {
       "title": "you signed in on another device.",
-      "body": "this session has ended.",
+      "body": "tameru is active there now. take over on this device, or sign in again.",
+      "useHere": "use tameru here",
       "signInAgain": "sign in again"
     },
     "updateToast": {

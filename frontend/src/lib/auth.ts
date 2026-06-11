@@ -205,7 +205,18 @@ export function initAuth(): Promise<void> {
         // Skipped on TOKEN_REFRESHED / USER_UPDATED / INITIAL_SESSION
         // (those are passive). The signin path also catches re-sign-in
         // from the device-displaced modal. (Codex 2026-05-23 P2/P3.)
-        void refreshHomeCurrency({ fireSigninMilestone: event === 'SIGNED_IN' });
+        //
+        // claimThisDevice is gated to SIGNED_IN for the same reason
+        // (audit P2-2): claiming on TOKEN_REFRESHED meant a displaced
+        // device silently stole active status back every ~4-5 min (300s
+        // JWT TTL), ping-ponging active_device_id between two devices
+        // forever. A claim is an act of user intent — explicit sign-in,
+        // bootstrap, or the displaced modal's "use here" button — never
+        // a side effect of a background refresh.
+        void refreshHomeCurrency({
+          fireSigninMilestone: event === 'SIGNED_IN',
+          claimThisDevice: event === 'SIGNED_IN',
+        });
       } else {
         // Sign-out / token-refresh-failed — end any in-flight chat
         // session for analytics (Codex 2026-05-23 P2) then clear the
@@ -230,6 +241,10 @@ export function initAuth(): Promise<void> {
       // home redirect already knows whether home_currency is set. If /me
       // fails we leave homeCurrency=undefined and the gate falls through
       // to a signed-in-but-unknown state — the user can still navigate.
+      // No claimThisDevice: a page reload is not user intent to take
+      // over the device slot (audit P2-2). If this browser was displaced,
+      // the first device-gated API call 401s and latches the modal; if
+      // it's still the active device, no claim is needed.
       await refreshHomeCurrency();
     } else {
       // No persisted session — preseed deviceId so api.ts has it ready.
@@ -244,23 +259,33 @@ export function initAuth(): Promise<void> {
 }
 
 /**
- * Fetch /me, stash home_currency, and — if the user has already bootstrapped
- * — claim this browser as the active device.
+ * Fetch /me, stash home_currency, and — only on an explicit sign-in —
+ * claim this browser as the active device.
  *
- * Called from initAuth on boot and from onAuthStateChange after any sign-in.
- * After a successful /auth/bootstrap, callers should set home_currency in the
- * store directly (we already have the value) rather than round-tripping /me.
+ * Called from initAuth on boot and from onAuthStateChange on every
+ * session-bearing event. After a successful /auth/bootstrap, callers should
+ * set home_currency in the store directly (we already have the value)
+ * rather than round-tripping /me.
  *
- * The claim_device call here is what makes "sign in on a second browser"
- * actually work: without it, /me succeeds (auth is JWT-only), but the next
- * authenticated request 401s with DEVICE_DISPLACED because the server's
- * active_device_id still points at the previous browser. claimDevice tells
- * the server "this browser is the new active one" — the previous browser's
- * next /auth/check_device poll will then see it's been displaced.
+ * The claim_device call (claimThisDevice: true, SIGNED_IN only) is what
+ * makes "sign in on a second browser" actually work: without it, /me
+ * succeeds (auth is JWT-only), but the next authenticated request 401s
+ * with DEVICE_DISPLACED because the server's active_device_id still points
+ * at the previous browser. The claim is deliberately NOT made on
+ * TOKEN_REFRESHED / INITIAL_SESSION / page reload — an unconditional claim
+ * meant a displaced device re-took the slot on its next silent token
+ * refresh (~every 4-5 min at the 300s JWT TTL) and two open devices
+ * flip-flopped active_device_id forever, defeating the single-active-
+ * device invariant (audit P2-2). Claims happen only on acts of user
+ * intent: explicit sign-in (here), /auth/bootstrap (server-side, same
+ * transaction), and the displaced modal's "use here" button.
  *
  * Skipped when home_currency is null — that means the user hasn't completed
  * /auth/bootstrap yet, and bootstrap itself sets active_device_id in the
- * same transaction. Calling claim_device first would fail.
+ * same transaction. Calling claim_device first would fail. Also skipped
+ * while the displacement latch is set — a latched device must never
+ * re-claim as a side effect; only the modal's explicit buttons exit that
+ * state.
  */
 interface RefreshHomeCurrencyOptions {
   /**
@@ -274,6 +299,14 @@ interface RefreshHomeCurrencyOptions {
    * point silently drops the event (Codex 2026-05-23 P2).
    */
   fireSigninMilestone?: boolean;
+  /**
+   * When true, claim this browser as the user's active device after /me
+   * resolves. Set only from the `SIGNED_IN` event path — claiming on
+   * passive events is what produced the two-device ping-pong (audit
+   * P2-2). The displaced-modal "use here" button calls claimDevice
+   * directly instead of going through here.
+   */
+  claimThisDevice?: boolean;
 }
 
 export async function refreshHomeCurrency(
@@ -322,9 +355,9 @@ export async function refreshHomeCurrency(
         track('onboarding_step_completed', { step: 'signin' });
       }
     }
-    if (me.home_currency !== null) {
-      const { deviceId } = useAppStore.getState();
-      if (deviceId) {
+    if (options.claimThisDevice && me.home_currency !== null) {
+      const { deviceId, displaced } = useAppStore.getState();
+      if (deviceId && !displaced) {
         try {
           await claimDevice(deviceId);
           // Successful claim invalidates any latched displacement state

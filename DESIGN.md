@@ -1260,7 +1260,7 @@ The **service role key** is reserved for callers with no user JWT in scope:
 
 Application **request handlers triggered by a user** never use the service role. This is enforced by code review and by `tests/contracts/test_no_service_role_leak.py` — a directory rule excludes `app/cron/` and `app/scripts/` plus a per-file allowlist (with rationale comments) for the webhook and unsubscribe routes above. Widening either requires the same rationale-comment discipline as `ALLOWED_DIRECT_WRITE_TOOLS`.
 
-**Single active device:** `users_meta.active_device_id` is set on each successful sign-in. If a different device signs in, the previous device's session is revoked (user sees: "You signed in on iPhone — this session has ended"). Eliminates multi-device offline sync conflicts.
+**Single active device:** `users_meta.active_device_id` is claimed on explicit sign-in (`SIGNED_IN`), at `/auth/bootstrap`, or via the displaced modal's "use here" button — never as a side effect of a token refresh or page reload (2026-06 audit P2-2: the unconditional claim produced a two-device ping-pong every JWT refresh). When a different device claims the slot, the previous device is *displaced, not revoked*: its Supabase session stays valid but every device-gated API call 401s with `DEVICE_DISPLACED`, latching a full-screen modal whose two exits are "use tameru here" (explicit re-claim) and "sign in again". The API-level gate is what eliminates multi-device offline sync conflicts — one writer at a time.
 
 ### 9.2 API Key Management
 

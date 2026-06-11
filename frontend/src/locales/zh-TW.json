@@ -22,7 +22,8 @@
     "closeSheet": "關閉面板",
     "displaced": {
       "title": "您已在其他裝置登入。",
-      "body": "此工作階段已結束。",
+      "body": "Tameru 目前在其他裝置上使用中。您可以改在此裝置使用，或重新登入。",
+      "useHere": "在此裝置使用",
       "signInAgain": "重新登入"
     },
     "updateToast": {
