@@ -24,6 +24,7 @@ from asgi_correlation_id import correlation_id
 from pythonjsonlogger.json import JsonFormatter
 
 from app.context import user_id_var
+from app.util.env import app_env
 from app.logging_redaction import PiiRedactionFilter
 
 _CONFIGURED = False
@@ -125,7 +126,7 @@ def _resolve_level() -> int:
     explicit = os.environ.get("LOG_LEVEL", "").upper()
     if explicit in logging.getLevelNamesMapping():
         return logging.getLevelNamesMapping()[explicit]
-    if os.environ.get("APP_ENV", "").lower() == "dev":
+    if app_env() in ("dev", "development"):
         return logging.DEBUG
     return logging.INFO
 

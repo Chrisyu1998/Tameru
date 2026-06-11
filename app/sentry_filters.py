@@ -31,6 +31,7 @@ from typing import Any
 from asgi_correlation_id import correlation_id
 
 from app.logging_redaction import redact_mapping, redact_string
+from app.util.env import app_env
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,10 @@ def init_sentry() -> None:
 
     sentry_sdk.init(
         dsn=dsn,
-        environment=os.environ.get("APP_ENV", "production"),
+        # Shared APP_ENV normalization (audit P3-7). Sentry only runs
+        # when SENTRY_DSN is set — in practice production — so an unset
+        # APP_ENV keeps the historical "production" label.
+        environment=app_env() or "production",
         send_default_pii=False,
         traces_sample_rate=0.0,
         integrations=[
