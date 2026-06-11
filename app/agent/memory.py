@@ -416,7 +416,14 @@ def _call_haiku(
         try:
             facts.append(_DistilledFact.model_validate(item))
         except ValidationError as exc:
-            logger.warning("memory_distill: skipped invalid fact: %s", exc)
+            # errors(include_input=False) — the default str(exc) embeds
+            # `input_value=`, which here is distilled chat-derived fact
+            # text (user content; audit P3-21). loc/msg/type carry the
+            # diagnostic value without the content.
+            logger.warning(
+                "memory_distill: skipped invalid fact: %s",
+                exc.errors(include_input=False, include_url=False),
+            )
     return (facts, usage, latency_ms, True, None)
 
 

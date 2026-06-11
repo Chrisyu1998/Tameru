@@ -195,6 +195,41 @@ def test_filter_redacts_extra_fields_by_name() -> None:
     assert "50.00" not in out
 
 
+def test_filter_redacts_object_args_that_stringify_to_pii() -> None:
+    """A live exception object passed as a %-arg is stringified AFTER the
+    filter runs, so a pass-through defeats redaction — e.g. a pydantic
+    ValidationError whose str() embeds `input_value=<user content>`
+    (audit P3-21). The filter must coerce such objects to a redacted
+    string before the formatter sees them."""
+
+    class _ExplodingDetail(Exception):
+        """Stand-in for an exception whose str() embeds user PII."""
+
+        def __str__(self) -> str:
+            """Embed PII in the str() the formatter would emit."""
+            return "invalid fact: input_value='email leaked@example.com'"
+
+    record = logging.LogRecord(
+        name="test", level=logging.WARNING, pathname=__file__, lineno=1,
+        msg="memory_distill: skipped invalid fact: %s",
+        args=(_ExplodingDetail(),), exc_info=None,
+    )
+    PiiRedactionFilter().filter(record)
+    formatted = record.getMessage()
+    assert "leaked@example.com" not in formatted
+    assert "<redacted:email>" in formatted
+
+
+def test_filter_keeps_numeric_args_formattable() -> None:
+    """Coercion must not break %d/%f formatting of numeric args."""
+    record = logging.LogRecord(
+        name="test", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="retried %d times in %.1fs", args=(3, 1.5), exc_info=None,
+    )
+    PiiRedactionFilter().filter(record)
+    assert record.getMessage() == "retried 3 times in 1.5s"
+
+
 def test_filter_returns_true_so_record_is_not_dropped() -> None:
     """The filter must redact, not drop. Silent drops hide bugs."""
     record = logging.LogRecord(
