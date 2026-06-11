@@ -487,7 +487,7 @@ Subscriptions are auto-logged on their billing schedule by a `pg_cron` job — f
 
 1. User adds subscription via chat: name, amount, frequency (monthly/quarterly/annual/weekly), start_date, category, **optional** card (omit for bank-ACH bills like rent or utilities — §8.3 `card_id` is nullable). `propose_subscription` returns a proposal; `POST /subscriptions/confirm` commits.
 2. Backend computes `next_billing_date` at confirm time using the **forward-only rule** (§8.3): if `start_date <= today`, `next_billing_date = today + 1 period`; if `start_date > today`, `next_billing_date = start_date`. Past billing cycles are never backfilled — manual transaction entry covers historical charges.
-3. `pg_cron` runs daily; SQL function inserts a Transaction for any active subscription with `next_billing_date <= today` and advances `next_billing_date` by one period. Cardless subscriptions auto-log with `transactions.card_id = NULL` (already supported — §8.2). Auto-logged transactions use `source = 'auto_logged'`.
+3. `pg_cron` runs daily; SQL function inserts a Transaction for any active subscription with `next_billing_date <= today` and advances `next_billing_date` by one period. The month/quarter/year advance is anchored to `start_date`'s day-of-month — after a short-month clamp (Jan 31 → Feb 28) the next advance restores the anchor (`LEAST(anchor_day, days_in_month)`: Feb 28 → Mar 31), rather than compounding from the clamped date and drifting permanently. Cardless subscriptions auto-log with `transactions.card_id = NULL` (already supported — §8.2). Auto-logged transactions use `source = 'auto_logged'`.
 4. User can pause (stop temporarily), resume, edit (`amount`, `category`, `name`, `card_id` — but never `frequency` or `start_date`; §8.3 immutability rule), or cancel (stop permanently).
 5. When the card backing a subscription is soft-deleted, regular subscriptions flip to `paused` with a "needs new card" banner on `/subscriptions`; card annual-fee subscriptions flip to `cancelled` (§8.3 split-cascade rule). Pg_cron skips paused rows, so nothing auto-logs while the user reassigns.
 
@@ -1085,7 +1085,7 @@ Append-only audit log of every Gemini and Claude API call. (Perplexity is no lon
 
 ### 8.9 `ai_call_log_daily` (rollup)
 
-Daily aggregation of `ai_call_log` rows older than 90 days.
+Daily aggregation of `ai_call_log` rows older than 90 days. The aggregator's cutoff is truncated to a UTC day boundary (`timestamp < date_trunc('day', now()) - interval '90 days'`, in both the INSERT and the DELETE) so a calendar date is always aggregated whole — a rolling `now()`-based cutoff would split each date across two runs, and the second run's rows would be discarded by the PK `ON CONFLICT DO NOTHING` while the DELETE still removed them.
 
 | Field | Type | Description |
 |---|---|---|
