@@ -32,6 +32,11 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
+import pytest
+
+# Teardown for the subscriptions/transactions this module seeds on the shared user_a (audit P3-38).
+pytestmark = pytest.mark.usefixtures("cleanup_user_a_ledger")
+
 
 
 def test_autolog_due_cardful_subscription(admin_client, user_a, card_a):

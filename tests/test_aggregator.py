@@ -170,21 +170,30 @@ def test_aggregator_is_idempotent_on_rerun(user_a, admin_client):
 
 @pytest.fixture
 def clean_ai_call_log(admin_client):
-    """Wipe `ai_call_log` and `ai_call_log_daily` test residue before each
-    test in this module.
+    """Wipe `ai_call_log` and `ai_call_log_daily` before AND after each test.
 
     A wholesale truncate is fine here — every other suite that touches
     these tables also runs against the local stack and is rerun fresh.
     The aggregator tests must start from a known-empty rollup table to
     pin row-count assertions precisely.
+
+    The after-wipe matters: the before-only version left the LAST test's
+    ai_call_log_daily rows behind for the rest of the session, so later
+    suites were safe only by collection order (audit P3-39).
     """
-    admin_client.table("ai_call_log_daily").delete().neq(
-        "date", "1900-01-01"
-    ).execute()
-    admin_client.table("ai_call_log").delete().neq(
-        "id", "00000000-0000-0000-0000-000000000000"
-    ).execute()
+
+    def _wipe() -> None:
+        """Truncate both tables (admin client, RLS-free)."""
+        admin_client.table("ai_call_log_daily").delete().neq(
+            "date", "1900-01-01"
+        ).execute()
+        admin_client.table("ai_call_log").delete().neq(
+            "id", "00000000-0000-0000-0000-000000000000"
+        ).execute()
+
+    _wipe()
     yield
+    _wipe()
 
 
 def _row(

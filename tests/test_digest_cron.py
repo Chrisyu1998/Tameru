@@ -32,6 +32,9 @@ from app.services.digest import (
     SonnetCallLog,
 )
 
+# Failure-path prefs restore + seeded-ledger-row teardown for the shared user_a (audit P3-37/P3-38).
+pytestmark = pytest.mark.usefixtures("preserve_user_a_meta", "cleanup_user_a_ledger")
+
 
 ET = ZoneInfo("America/New_York")
 

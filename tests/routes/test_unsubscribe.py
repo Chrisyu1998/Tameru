@@ -18,6 +18,10 @@ from app.db import supabase_for_user
 from app.main import app
 from app.util.unsubscribe import make_unsubscribe_token
 
+# Failure-path cleanup: restore user_a's shared users_meta prefs even when asserts fail (audit P3-37).
+pytestmark = pytest.mark.usefixtures("preserve_user_a_meta")
+
+
 
 @pytest.fixture
 def client() -> TestClient:
