@@ -48,9 +48,12 @@ Thumbs.db
 *.log
 npm-debug.log*
 
-# Eval harness — per-run JSON in evals/runs/ IS committed (no merge
-# conflicts across PRs). The derived SQLite is not — rebuild it locally
-# with `python eval.py --report`.
+# Eval harness — per-run JSON stays local (CI uploads it as an Actions
+# artifact instead; no run JSON has ever been committed — the old comment
+# here claiming otherwise was drift). The directory itself is kept via
+# evals/runs/.gitkeep. The derived SQLite is rebuilt locally with
+# `python eval.py --report`.
+evals/runs/*.json
 evals/.cache/
 evals/results.db
 
