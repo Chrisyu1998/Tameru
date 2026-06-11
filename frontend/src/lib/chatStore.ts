@@ -1556,10 +1556,18 @@ function _proposalToCardDraft(
   // posture — silently defaulting both to "other" would let the user save
   // wrong identity metadata and trip the (user_id, issuer, last_four)
   // unique index on the next add of a real card with the same last 4.
+  //
+  // Committed rows are exempt: `committed_payload` omits `needs_manual`
+  // (a proposal-time annotation), so the spread fallback resurrects the
+  // proposal's `needs_manual: true` — and a card the user deliberately
+  // confirmed with issuer "other" would be nulled back to the unresolved
+  // picker state on rehydrate (audit P3-33). A committed row's identity
+  // fields are settled facts; render them as-is.
+  const isCommitted = committed != null;
   const issuer =
-    r.issuer === "other" && r.needs_manual ? null : r.issuer ?? null;
+    !isCommitted && r.issuer === "other" && r.needs_manual ? null : r.issuer ?? null;
   const network =
-    r.network === "other" && r.needs_manual ? null : r.network ?? null;
+    !isCommitted && r.network === "other" && r.needs_manual ? null : r.network ?? null;
 
   const annualFee =
     r.annual_fee === null || r.annual_fee === undefined
