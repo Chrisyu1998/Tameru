@@ -2,7 +2,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from asgi_correlation_id import CorrelationIdMiddleware
+from asgi_correlation_id import CorrelationIdMiddleware, correlation_id
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -246,8 +246,11 @@ app.add_middleware(
 )
 
 # Added BEFORE CorrelationIdMiddleware in source so it sits OUTSIDE Cors
-# in the runtime stack — the headers therefore ride on preflight 200s and
-# on the synthesized 500 from `_unhandled_exception_handler`.
+# in the runtime stack — the headers therefore ride on preflight 200s.
+# NOT on the synthesized 500 from `_unhandled_exception_handler`: that
+# handler runs inside Starlette's ServerErrorMiddleware, which is
+# outermost — outside every user middleware — so the handler stamps the
+# hardening headers and X-Request-ID itself (audit P3-24).
 app.add_middleware(SecurityHeadersMiddleware)
 
 # CorrelationIdMiddleware mounts AFTER CORSMiddleware in the source but
@@ -295,6 +298,17 @@ async def _unhandled_exception_handler(
     if origin and origin in _CORS_ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
+    # ServerErrorMiddleware (where this handler runs) is OUTERMOST, so
+    # this response never traverses SecurityHeadersMiddleware or
+    # CorrelationIdMiddleware — stamp the hardening headers and the
+    # request id here too, or the 500 ships bare and the frontend loses
+    # its X-Request-ID correlation handle (audit P3-24).
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    cid = correlation_id.get()
+    if cid:
+        response.headers["X-Request-ID"] = cid
     return response
 
 
