@@ -30,7 +30,7 @@ from typing import Any
 
 from asgi_correlation_id import correlation_id
 
-from app.logging_redaction import redact_mapping
+from app.logging_redaction import redact_mapping, redact_string
 
 logger = logging.getLogger(__name__)
 
@@ -167,22 +167,28 @@ def _http_exception_status(hint: dict[str, Any] | None) -> int | None:
 
 
 def _originates_from_ai_module(event: dict[str, Any]) -> bool:
-    """Return True if the event's top frame's module is an AI integration.
+    """Return True if ANY frame of ANY exception value is in an AI module.
 
-    Walks the topmost stack frame of the topmost exception. Anchors the
-    match with a trailing dot or exact equality so unrelated modules
-    sharing a prefix do not slip through.
+    Walks every stack frame of every chained exception value — not just
+    the crash-site frame. The crash-site (last) frame of a provider
+    failure re-raised bare from the agent loop is `anthropic.*` /
+    `httpx.*`, never `app.agent.loop`, so a last-frame-only check shipped
+    every Anthropic 5xx / network blip to Sentry even though the same
+    failure was already written to ai_call_log with success=False
+    (invariant 15 "don't double-log"; audit P2-3). If the call path
+    passed through a listed module at all, ai_call_log owns the failure.
+
+    Anchors the match with a trailing dot or exact equality so unrelated
+    modules sharing a prefix do not slip through.
     """
     values = (event.get("exception") or {}).get("values") or []
-    if not values:
-        return False
-    frames = (values[-1].get("stacktrace") or {}).get("frames") or []
-    if not frames:
-        return False
-    module = frames[-1].get("module") or ""
-    for prefix in _AI_INTEGRATION_MODULE_PREFIXES:
-        if module == prefix or module.startswith(prefix + "."):
-            return True
+    for value in values:
+        frames = ((value or {}).get("stacktrace") or {}).get("frames") or []
+        for frame in frames:
+            module = (frame or {}).get("module") or ""
+            for prefix in _AI_INTEGRATION_MODULE_PREFIXES:
+                if module == prefix or module.startswith(prefix + "."):
+                    return True
     return False
 
 
@@ -224,6 +230,20 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
             request["query_string"] = redact_mapping(request["query_string"])
     if "extra" in event:
         event["extra"] = redact_mapping(event["extra"])
+    # `logentry` carries the log message + %-params on LoggingIntegration
+    # events. Today it arrives pre-redacted only because the stdout
+    # handler's PiiRedactionFilter happens to mutate the record in place
+    # before Sentry's patched callHandlers reads it — a propagate=False
+    # third-party logger (or moving the filter) would leak (audit P3-22).
+    # `message` is the log FORMAT string, not the chat wire field, so run
+    # the pattern redactor over it rather than the by-name wholesale
+    # replacement (which would erase every log message).
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict):
+        if isinstance(logentry.get("message"), str):
+            logentry["message"] = redact_string(logentry["message"])
+        if "params" in logentry:
+            logentry["params"] = redact_mapping(logentry["params"])
     breadcrumbs = event.get("breadcrumbs")
     if isinstance(breadcrumbs, dict):
         crumbs = breadcrumbs.get("values") or []
