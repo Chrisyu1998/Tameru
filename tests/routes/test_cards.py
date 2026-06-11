@@ -730,11 +730,13 @@ def test_confirm_with_zero_af_creates_no_subscription(
 def test_confirm_rejects_past_af_renewal_date(
     client, user_a, stub_lookup  # noqa: ARG001
 ):
-    """`next_annual_fee_date < today` → 422 from the CardProposal validator.
+    """`next_annual_fee_date` in the past → 422 from the CardProposal validator.
 
     Day 19b. Strictly past dates would make pg_cron auto-log immediately
     on the next run, which is confusing UX. Same-day is legitimate (the
-    card might charge the AF today) and accepted.
+    card might charge the AF today) and accepted — and so is yesterday
+    (1-day timezone slack for US-evening users whose local today is UTC
+    yesterday, audit P3-30), so the rejection floor is today - 2.
     """
     tag = _tag()
     body = _proposal(
@@ -743,10 +745,33 @@ def test_confirm_rejects_past_af_renewal_date(
         name=f"PastAF-{tag}",
         issuer="capital_one",
         annual_fee="550",
-        next_annual_fee_date=(date.today() - timedelta(days=1)).isoformat(),
+        next_annual_fee_date=(date.today() - timedelta(days=2)).isoformat(),
     )
     resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
     assert resp.status_code == 422
+
+
+def test_confirm_accepts_yesterday_af_renewal_date(
+    client, user_a, stub_lookup  # noqa: ARG001
+):
+    """`next_annual_fee_date == yesterday` is accepted (timezone slack).
+
+    A US-evening user's local "today" is UTC yesterday, and an
+    offline-queued confirm carrying today's date can drain after UTC
+    midnight — both legitimate same-day intents that a strict `< today`
+    check would 422 (audit P3-30/P3-31).
+    """
+    tag = _tag()
+    body = _proposal(
+        network="visa",
+        last_four=_last_four(tag, "5"),
+        name=f"SlackAF-{tag}",
+        issuer="capital_one",
+        annual_fee="550",
+        next_annual_fee_date=(date.today() - timedelta(days=1)).isoformat(),
+    )
+    resp = client.post("/cards/confirm", headers=_auth(user_a), json=body)
+    assert resp.status_code == 200, resp.text
 
 
 def test_soft_delete_cascades_af_to_cancelled_regular_to_paused(
@@ -1053,14 +1078,15 @@ def test_patch_annual_fee_on_card_without_af_sub_is_noop_on_subscriptions(
 
 
 def test_patch_rejects_past_next_annual_fee_date(client, user_a, stub_lookup):  # noqa: ARG001
-    """Past renewal date on PATCH → 422. Mirrors the confirm validator."""
+    """Past renewal date on PATCH → 422. Mirrors the confirm validator
+    (including its 1-day timezone slack — the rejection floor is today - 2)."""
     card, _ = _create_card_with_af(client, user_a, suffix="7")
     resp = client.patch(
         f"/cards/{card['id']}",
         headers=_auth(user_a),
         json={
             "next_annual_fee_date": (
-                date.today() - timedelta(days=1)
+                date.today() - timedelta(days=2)
             ).isoformat()
         },
     )

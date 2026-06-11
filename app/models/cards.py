@@ -263,14 +263,23 @@ class CardProposal(BaseModel):
     @field_validator("next_annual_fee_date")
     @classmethod
     def _v_next_annual_fee_date(cls, value: _dt.date | None) -> _dt.date | None:
-        """Reject strictly-past renewal dates. Same-day is legitimate.
+        """Reject past renewal dates, with one day of timezone slack.
 
         Past-date rejection prevents the pg_cron auto-logger from
         immediately firing on a date the user typed by mistake. Same-day
         renewals are legitimate (the card might charge the AF today).
         DESIGN.md §6.5 forward-only rule.
+
+        The 1-day slack mirrors `_DATE_FUTURE_SLACK` on the transactions
+        confirm route, in the opposite direction: Pydantic validators
+        have no user context, so "today" here is server-UTC — for a
+        US-evening user (UTC is already tomorrow) their local *today* is
+        UTC *yesterday* and a strict `< today` check would reject it.
+        The slack also keeps an offline-queued confirm carrying
+        `next_annual_fee_date == today` from 422ing when the queue
+        drains after UTC midnight (audit P3-30/P3-31).
         """
-        if value is not None and value < _dt.date.today():
+        if value is not None and value < _dt.date.today() - _dt.timedelta(days=1):
             raise ValueError(
                 f"next_annual_fee_date must be today or later (got {value})"
             )
@@ -437,14 +446,16 @@ class CardPatchRequest(BaseModel):
     def _vp_next_annual_fee_date(
         cls, v: _dt.date | None
     ) -> _dt.date | None:
-        """Reject strictly-past renewal-date patches. Null is legal (stop tracking).
+        """Reject past renewal-date patches. Null is legal (stop tracking).
 
-        Same `>= today` rule as `CardProposal._v_next_annual_fee_date` —
-        past dates would make pg_cron auto-log immediately on the next
-        run. Explicit `null` means "stop tracking the AF" and bypasses
-        the date check.
+        Same rule (including the 1-day timezone slack) as
+        `CardProposal._v_next_annual_fee_date` — past dates would make
+        pg_cron auto-log immediately on the next run, but a strict
+        server-UTC `< today` check rejects a US-evening user's local
+        today (audit P3-30). Explicit `null` means "stop tracking the
+        AF" and bypasses the date check.
         """
-        if v is not None and v < _dt.date.today():
+        if v is not None and v < _dt.date.today() - _dt.timedelta(days=1):
             raise ValueError(
                 f"next_annual_fee_date must be today or later (got {v})"
             )
