@@ -70,6 +70,12 @@ from app.services.transactions import apply_transaction_filters, list_transactio
 # transactions in a single filter window is a future-Tameru problem.
 RESULT_ROW_CAP = 5_000
 
+# PostgREST silently caps every response at `max-rows` (1000 on Supabase —
+# memory.md 2026-05-26), so aggregation reads must page at or below that
+# size; a single `.range(0, RESULT_ROW_CAP)` request would come back with
+# at most 1000 rows and no error, silently under-counting totals.
+AGGREGATION_PAGE_SIZE = 1_000
+
 # Hard cap on list-tool outputs. `get_subscriptions` and `get_cards` are
 # normally bounded by user count (subs <50, cards <10), but a defensive
 # cap keeps a runaway tool call from blowing the context budget.
@@ -956,23 +962,24 @@ def calculate_total(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     Response:
         {"total": "123.45", "count": 8, "truncated": false}
 
-    Implementation note: PostgREST has no native SUM, so we fetch up to
-    `RESULT_ROW_CAP + 1` matching rows and sum in Python. The +1 is what
-    detects truncation without a separate COUNT query (same pattern as
-    `list_transactions`'s `has_more`).
+    Implementation note: PostgREST has no native SUM, so we page through
+    matching rows (≤1000/page — PostgREST's `max-rows` cap) up to
+    `RESULT_ROW_CAP` and sum in Python. Truncation is detected by paging
+    one row past the cap (same pattern as `goals._sum_active_transactions`).
     """
     request = CalculateTotalRequest.model_validate(kwargs)
     filters = _filters_from_input(request.model_dump(exclude_none=True), allow_pagination=False)
     client = supabase_for_user(user.jwt)
-    # Reads through `active_transactions` so soft-deleted rows don't appear
-    # in agent totals (DESIGN.md §8 status-column doctrine).
-    query = client.table("active_transactions").select("amount")
-    query = apply_transaction_filters(query, filters)
-    resp = query.range(0, RESULT_ROW_CAP).execute()
-    rows = resp.data or []
-    truncated = len(rows) > RESULT_ROW_CAP
-    if truncated:
-        rows = rows[:RESULT_ROW_CAP]
+
+    def build_query() -> Any:
+        """Build a fresh filtered query per page — `.range()` must be
+        applied to a fresh builder each time (goals.py precedent)."""
+        # Reads through `active_transactions` so soft-deleted rows don't
+        # appear in agent totals (DESIGN.md §8 status-column doctrine).
+        query = client.table("active_transactions").select("amount")
+        return apply_transaction_filters(query, filters)
+
+    rows, truncated = _fetch_aggregation_pages(build_query, cap=RESULT_ROW_CAP)
 
     # Decimal sum — `numeric` columns come back as strings from Supabase.
     total = sum((Decimal(str(row["amount"])) for row in rows), Decimal("0"))
@@ -1099,19 +1106,18 @@ def get_spending_summary(
         window_months = m
 
     client = supabase_for_user(user.jwt)
-    resp = (
+
+    def build_query() -> Any:
+        """Build a fresh windowed query per page — see calculate_total."""
         # Default-safe read via the view (DESIGN.md §8).
-        client.table("active_transactions")
-        .select("category, amount, date")
-        .gte("date", start.isoformat())
-        .lte("date", end.isoformat())
-        .range(0, RESULT_ROW_CAP)
-        .execute()
-    )
-    rows = resp.data or []
-    truncated = len(rows) > RESULT_ROW_CAP
-    if truncated:
-        rows = rows[:RESULT_ROW_CAP]
+        return (
+            client.table("active_transactions")
+            .select("category, amount, date")
+            .gte("date", start.isoformat())
+            .lte("date", end.isoformat())
+        )
+
+    rows, truncated = _fetch_aggregation_pages(build_query, cap=RESULT_ROW_CAP)
 
     # Aggregate in Python — bounded by RESULT_ROW_CAP, no GROUP BY needed.
     totals: dict[str, Decimal] = {}
@@ -1673,6 +1679,43 @@ def _filters_from_input(payload: dict[str, Any], *, allow_pagination: bool) -> T
     if not allow_pagination:
         payload = {k: v for k, v in payload.items() if k not in {"limit", "offset"}}
     return TransactionFilters.model_validate(payload)
+
+
+def _fetch_aggregation_pages(
+    build_query: Any, *, cap: int, page_size: int | None = None
+) -> tuple[list[dict[str, Any]], bool]:
+    """Page through an aggregation read, returning (rows, truncated).
+
+    Exists because PostgREST silently caps every response at `max-rows`
+    (1000 on Supabase) with no error — a single `.range(0, cap)` request
+    with cap > 1000 comes back with at most 1000 rows, the Python-side
+    sum covers an arbitrary subset, and the `len(rows) > cap` truncation
+    sentinel can never fire (the P1 wrong-money bug). Paging at
+    ≤ `max-rows` per page is the only way to actually see all rows.
+
+    `build_query` is a zero-arg callable returning a fresh filtered query
+    builder — `.range()` must be applied to a fresh builder per page
+    (the goals.py `_sum_active_transactions` precedent).
+
+    Truncation semantics: rows beyond `cap` are discarded and
+    `truncated=True` is returned, so callers keep the exact
+    partial-sum-plus-flag contract they had before.
+    """
+    if page_size is None:
+        # Read the module global at call time (not a def-time default) so
+        # tests can monkeypatch the page size.
+        page_size = AGGREGATION_PAGE_SIZE
+    rows: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        resp = build_query().range(start, start + page_size - 1).execute()
+        page = resp.data or []
+        rows.extend(page)
+        if len(rows) > cap:
+            return rows[:cap], True
+        if len(page) < page_size:
+            return rows, False
+        start += page_size
 
 
 def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:

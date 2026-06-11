@@ -275,6 +275,22 @@ def test_calculate_total_truncation_flag_fires(authed_user_a, user_a, card_a, mo
     assert result["count"] == 2
 
 
+def test_calculate_total_pages_past_postgrest_max_rows(authed_user_a, user_a, card_a, monkeypatch):
+    """PostgREST silently caps every response at max-rows (1000), so the
+    aggregation must page — a single capped request would sum an arbitrary
+    subset with truncated=false (the P1 wrong-money bug). Shrinking the
+    page size to 2 proves rows beyond the first page are still summed."""
+    monkeypatch.setattr(tools_module, "AGGREGATION_PAGE_SIZE", 2)
+    tag = _tag()
+    for _ in range(5):
+        _seed_transaction(user_a, card_id=card_a, merchant=f"Page-{tag}", amount="1.00")
+
+    result = calculate_total(authed_user_a, merchant_contains=f"page-{tag}")
+    assert result["truncated"] is False
+    assert result["count"] == 5
+    assert Decimal(result["total"]) == Decimal("5.00")
+
+
 def test_calculate_total_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
     """Verify that calculate total rls isolates users."""
     tag = _tag()
