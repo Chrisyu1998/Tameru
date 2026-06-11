@@ -288,6 +288,41 @@ def test_user_a_cannot_delete_own_ai_call_log_row(user_a):
     )
 
 
+def test_user_a_cannot_delete_own_users_meta_row(user_a):
+    """No DELETE policy on users_meta — the home_currency bypass is closed.
+
+    The original FOR ALL owner policy let a user DELETE their users_meta
+    row and re-bootstrap with a different home_currency, mutating the
+    immutable column in two statements around the BEFORE UPDATE trigger
+    (audit P3-9; migration 20260610130000 split the policy and granted no
+    DELETE). The row may die only via the auth.users cascade — real
+    account deletion through the service-role admin API.
+    """
+    client_a = supabase_for_user(user_a.jwt)
+
+    resp = (
+        client_a.table("users_meta")
+        .delete()
+        .eq("user_id", user_a.id)
+        .execute()
+    )
+    assert resp.data == [], (
+        "users_meta DELETE should affect zero rows (no DELETE policy exists)"
+    )
+
+    # And the row is still there, currency intact.
+    fetched = (
+        client_a.table("users_meta")
+        .select("user_id, home_currency")
+        .eq("user_id", user_a.id)
+        .single()
+        .execute()
+    )
+    assert fetched.data["user_id"] == user_a.id, (
+        "users_meta row was deleted despite no DELETE policy"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------

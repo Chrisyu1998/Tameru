@@ -1055,6 +1055,8 @@ The earlier `mcp_tokens` design — per-user bearer tokens hashed at rest — wa
 | stripe_subscription_status | text | `active` \| `trialing` \| `past_due` \| `canceled` \| `incomplete` \| NULL. Mirrors Stripe; source of truth is Stripe, this column is a local cache. |
 | stripe_current_period_end | timestamptz | End of the current paid billing period. Used to gracefully degrade to free-tier gating when a payment lapses. |
 
+**RLS shape (migration `20260610130000`):** explicit owner SELECT / INSERT / UPDATE policies, **no DELETE policy** — under FORCE RLS the absence of a policy denies the command. The original FOR ALL policy let an owner DELETE the row and re-bootstrap with a different `home_currency`, bypassing the BEFORE UPDATE immutability trigger in two statements (2026-06 audit P3-9). The row dies only via the `auth.users` ON DELETE CASCADE — real account deletion through the auth admin API (service role, RLS-bypassing), so invariant 13's delete-and-re-signup escape hatch is unaffected.
+
 **Note on Stripe vs. Tameru subscriptions:** when the forward-plan columns ship, `stripe_subscription_*` will refer to **the user's paid subscription to Tameru**. They are distinct from the `subscriptions` table (§8.3), which tracks **user-logged recurring charges** like Netflix. Do not conflate the two.
 
 ### 8.8 `ai_call_log`
