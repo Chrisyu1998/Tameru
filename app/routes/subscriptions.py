@@ -260,10 +260,27 @@ def patch_subscription(
         client.table("subscriptions")
         .update(update)
         .eq("id", str(subscription_id))
+        # DB-side terminal guard. The pre-read check above runs on a
+        # snapshot — the row can be cancelled between the SELECT and this
+        # UPDATE (concurrent DELETE from another tab, offline-queue
+        # interleaving), and a PATCH carrying {"status": "active"} would
+        # silently reactivate it, putting the pg_cron auto-logger back in
+        # business on a subscription the user thinks is gone. Same
+        # between-the-queries window the transactions PATCH closes with
+        # .eq("status", "active").
+        .neq("status", "cancelled")
         .execute()
     )
     if not resp.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        # RLS, the row vanished, or it was cancelled between the two
+        # queries. The pre-read proved it existed and was non-terminal a
+        # moment ago, so surface the race as the same terminal_status
+        # error a straight PATCH-on-cancelled gets.
+        raise _domain_error(
+            "terminal_status",
+            "cancelled subscriptions are terminal; create a new "
+            "subscription via chat instead of reactivating the old one",
+        )
     return SubscriptionRow.model_validate(resp.data[0])
 
 
