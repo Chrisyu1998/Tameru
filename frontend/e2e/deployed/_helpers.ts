@@ -78,11 +78,33 @@ function getSupabaseConfig(): { url: string; anonKey: string } {
  * helper deliberately doesn't, so it works for both new-user and
  * returning-user shapes.
  */
+// Stable device id shared by every deployed spec. The Day 28 suite runs
+// serially against ONE E2E user; each spec gets a fresh browser context
+// (no shared storageState), so without pinning this each spec would
+// generate a different `tameru-device-id`. Since they share one user,
+// spec N's device would look "different" from the device spec 01's
+// `/auth/bootstrap` registered — and the single-active-device gate would
+// (correctly) 401 DEVICE_DISPLACED and latch the full-screen displaced
+// modal, which then intercepts every click. Before the P2-2 audit fix,
+// the unconditional claim-device-on-INITIAL_SESSION masked this by
+// silently re-claiming on each load; the fix gates claims to explicit
+// SIGNED_IN, so the suite must now pin one device to model the
+// single-device golden path it actually tests. Real users are
+// unaffected (a single device reloading stays the active device).
+const E2E_DEVICE_ID = "e2e-deployed-device";
+
 export async function signInViaPassword(
   page: Page,
   creds: E2ECreds = getCreds(),
 ): Promise<void> {
   const config = getSupabaseConfig();
+
+  // Pin the device id before any page script runs, so `initAuth()`'s
+  // `getOrCreateDeviceId()` reads this constant on the very first load
+  // (and every navigation) instead of minting a fresh one per context.
+  await page.addInitScript((deviceId) => {
+    window.localStorage.setItem("tameru-device-id", deviceId);
+  }, E2E_DEVICE_ID);
 
   // Hit the REST endpoint from the page so the resulting session is
   // same-origin-readable (cookies aren't in play; localStorage is). We
