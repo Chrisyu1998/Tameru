@@ -86,6 +86,61 @@ def test_rule2_does_not_drop_unrelated_app_modules() -> None:
     assert before_send(event, None) is not None
 
 
+def test_rule2_drops_provider_exception_with_ai_frame_mid_stack() -> None:
+    """An Anthropic SDK error re-raised bare from the agent loop has an
+    `anthropic.*` crash-site frame — but an `app.agent.loop` frame earlier
+    in the stack. ANY frame in a listed module must drop the event: a
+    last-frame-only check shipped every provider 5xx / network blip even
+    though ai_call_log already recorded it (audit P2-3)."""
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "InternalServerError",
+                    "stacktrace": {
+                        "frames": [
+                            {"module": "app.routes.chat", "function": "chat_turn"},
+                            {"module": "app.agent.loop", "function": "_stream_and_log"},
+                            {"module": "anthropic._base_client", "function": "request"},
+                        ],
+                    },
+                },
+            ],
+        },
+    }
+    assert before_send(event, None) is None
+
+
+def test_rule2_walks_all_chained_exception_values() -> None:
+    """A wrapper exception whose CAUSE carries the AI-module frames must
+    still be dropped — chained values are all walked, not just the
+    outermost."""
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "APIConnectionError",
+                    "stacktrace": {
+                        "frames": [
+                            {"module": "app.agent.loop", "function": "_call_and_log"},
+                            {"module": "httpx._client", "function": "send"},
+                        ],
+                    },
+                },
+                {
+                    "type": "RuntimeError",
+                    "stacktrace": {
+                        "frames": [
+                            {"module": "app.routes.chat", "function": "chat_turn"},
+                        ],
+                    },
+                },
+            ],
+        },
+    }
+    assert before_send(event, None) is None
+
+
 def test_rule3_aicalllog_error_ships_even_from_ai_integration_module() -> None:
     """AICallLogError is the canary for the audit pipeline itself
     failing — the rule-2 drop MUST be skipped for this class."""
@@ -145,6 +200,52 @@ def test_redacts_extra_payload_on_survivor() -> None:
     out = before_send(event, None)
     assert out["extra"]["merchant"] == "<redacted:merchant>"
     assert out["extra"]["method"] == "POST"
+
+
+def test_redacts_chat_message_key_in_request_body() -> None:
+    """The /chat/turn wire field is `message` — free user prose that the
+    value-pattern redactor cannot catch (it only matches emails/amounts/
+    etc.). The by-name redactor must replace it wholesale (audit P2-4)."""
+    event = _event(
+        exc_type="RuntimeError",
+        request={
+            "data": {
+                "message": "I spent way too much at Blue Bottle yesterday",
+                "conversation_id": "abc-123",
+            },
+        },
+    )
+    out = before_send(event, None)
+    assert out["request"]["data"]["message"] == "<redacted:chat_text>"
+    assert out["request"]["data"]["conversation_id"] == "abc-123"
+
+
+def test_redacts_logentry_message_and_params() -> None:
+    """LoggingIntegration events carry the log line in `logentry`. The
+    format string is pattern-redacted (NOT wholesale — it is the log
+    message, not the chat field) and the %-params are fully redacted
+    (audit P3-22)."""
+    event = _event(
+        exc_type="RuntimeError",
+        logentry={
+            "message": "send failed for %s",
+            "params": ["leaked@example.com"],
+        },
+    )
+    out = before_send(event, None)
+    assert out["logentry"]["message"] == "send failed for %s"
+    assert out["logentry"]["params"] == ["<redacted:email>"]
+
+
+def test_redacts_logentry_inline_pii_in_message() -> None:
+    """A pre-formatted logentry message with embedded PII is scrubbed by
+    the pattern redactor."""
+    event = _event(
+        exc_type="RuntimeError",
+        logentry={"message": "charged $45.50 to card"},
+    )
+    out = before_send(event, None)
+    assert out["logentry"]["message"] == "charged <redacted:amount> to card"
 
 
 def test_redacts_breadcrumb_data() -> None:

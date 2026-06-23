@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -149,7 +149,10 @@ def test_export_sets_attachment_disposition(client, user_a):
 
     Triggers a browser download instead of an in-tab render. Filename
     embeds the export date so multiple same-day downloads de-dup via OS
-    naming, not silent overwrite.
+    naming, not silent overwrite. Asserted in UTC — the route stamps
+    `datetime.now(timezone.utc).date()`, and a machine-local `date.today()`
+    here flaked whenever a run straddled UTC midnight (memory.md
+    2026-06-02).
     """
     resp = client.get("/export", headers=_auth(user_a))
     assert resp.status_code == 200
@@ -157,7 +160,7 @@ def test_export_sets_attachment_disposition(client, user_a):
     cd = resp.headers.get("content-disposition", "")
     assert cd.startswith("attachment;")
     assert "tameru-export-" in cd
-    assert date.today().isoformat() in cd
+    assert datetime.now(timezone.utc).date().isoformat() in cd
     assert resp.headers.get("cache-control") == "no-store"
 
 

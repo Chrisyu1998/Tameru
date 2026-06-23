@@ -22,7 +22,8 @@
     "closeSheet": "close sheet",
     "displaced": {
       "title": "you signed in on another device.",
-      "body": "this session has ended.",
+      "body": "tameru is active there now. take over on this device, or sign in again.",
+      "useHere": "use tameru here",
       "signInAgain": "sign in again"
     },
     "updateToast": {
@@ -826,5 +827,18 @@
     "cancel": "cancel",
     "add": "add",
     "addCategory": "add category"
+  },
+  "unsubscribe": {
+    "title": "unsubscribe from the weekly digest?",
+    "body": "tameru will stop sending the monday digest email to your inbox. you can re-enable it anytime in settings → notifications.",
+    "confirm": "unsubscribe",
+    "working": "unsubscribing…",
+    "doneTitle": "you're unsubscribed.",
+    "doneBody": "tameru won't send you weekly digest emails anymore. you can re-enable them anytime in settings → notifications inside the app.",
+    "invalidTitle": "this link isn't valid.",
+    "invalidBody": "the unsubscribe link is missing its token. use the link from your most recent digest email.",
+    "errorTitle": "couldn't unsubscribe.",
+    "errorBody": "something went wrong. try again, or turn the digest off in settings → notifications.",
+    "retry": "try again"
   }
 }

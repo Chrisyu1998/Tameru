@@ -34,11 +34,18 @@ _LOGRECORD_BASELINE_KEYS = frozenset({
 
 # Field-name allowlist: a redacted-by-name field is replaced regardless
 # of its value. The list mirrors DESIGN.md §14.5's "redaction set".
+# "message" is the /chat/turn wire field carrying the user's chat text
+# (audit P2-4) — without it, a Sentry event with the chat request body
+# attached shipped the prose verbatim (the value patterns below only
+# catch emails/amounts/etc., not free text). Harmless for LogRecords:
+# `message` is a `_LOGRECORD_BASELINE_KEYS` member, which the filter
+# skips before this map is consulted.
 _REDACT_BY_NAME = {
     "amount": "amount",
     "merchant": "merchant",
     "chat_text": "chat_text",
     "message_text": "chat_text",
+    "message": "chat_text",
     "email": "email",
     "phone": "phone",
     "card_number": "card_number",
@@ -162,9 +169,35 @@ class PiiRedactionFilter(logging.Filter):
         `logger.info("user=%s", user_email)` lands `user_email` in
         `record.args`; the formatter applies `%`-formatting *after* our
         filter runs, so redacting here catches the leak before emit.
+
+        Arbitrary objects (exceptions, pydantic errors) are coerced to a
+        redacted string here rather than passed through: `%s`-formatting
+        would stringify them AFTER the filter ran, so an object whose
+        `str()` embeds PII (e.g. a ValidationError's `input_value=`)
+        defeated a pass-through (audit P3-21). Coercing changes nothing
+        for `%s` (which calls `str()` anyway) — primitives keep their
+        type so `%d`/`%f` formatting still works.
         """
         if isinstance(args, dict):
-            return {key: redact_mapping(val) for key, val in args.items()}
+            return {key: PiiRedactionFilter._coerce_arg(val) for key, val in args.items()}
         if isinstance(args, tuple):
-            return tuple(redact_mapping(val) for val in args)
-        return redact_mapping(args)
+            return tuple(PiiRedactionFilter._coerce_arg(val) for val in args)
+        return PiiRedactionFilter._coerce_arg(args)
+
+    @staticmethod
+    def _coerce_arg(value: object) -> object:
+        """Redact one %-format arg, stringifying non-JSON-shaped objects.
+
+        Containers and strings go through `redact_mapping`; numeric /
+        bool / None primitives pass through (so `%d` formatting keeps
+        working); anything else is stringified and pattern-redacted —
+        the formatter would have stringified it after the filter anyway,
+        bypassing redaction.
+        """
+        if isinstance(value, tuple):
+            return tuple(PiiRedactionFilter._coerce_arg(v) for v in value)
+        if isinstance(value, (dict, list, str)):
+            return redact_mapping(value)
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        return redact_string(str(value))

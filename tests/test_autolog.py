@@ -32,6 +32,11 @@ from __future__ import annotations
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
+import pytest
+
+# Teardown for the subscriptions/transactions this module seeds on the shared user_a (audit P3-38).
+pytestmark = pytest.mark.usefixtures("cleanup_user_a_ledger")
+
 
 
 def test_autolog_due_cardful_subscription(admin_client, user_a, card_a):
@@ -123,6 +128,40 @@ def test_autolog_idempotent_on_same_day(admin_client, user_a, card_a):
     assert len(rows_second) == 1, "idempotency: still exactly one row"
 
 
+def test_autolog_advance_restores_start_date_anchor_day(admin_client, user_a, card_a):
+    """A short-month clamp must not permanently drift the billing day.
+
+    A "monthly on the 31st" subscription whose next_billing_date was
+    clamped to Feb 28 must advance to Mar *31*, not Mar 28 — the advance
+    is anchored to start_date's day-of-month (LEAST(anchor, month length)),
+    not compounded from the previously clamped date. Before the
+    20260610120100 migration this drifted permanently (Feb 28 → Mar 28 →
+    Apr 28 …) with no user-side repair, since frequency/start_date are
+    immutable post-create.
+    """
+    # Last year's Jan 31 so the dates are due (<= today) on any run date.
+    anchor_start = date(date.today().year - 1, 1, 31)
+    clamped_feb = _add_month(anchor_start)  # Feb 28 (or 29) — the clamp
+    assert clamped_feb.day < 31
+    sub_id = _seed_subscription(
+        admin_client,
+        user_id=user_a.id,
+        card_id=card_a,
+        name=f"Anchor-{uuid.uuid4().hex[:6]}",
+        frequency="monthly",
+        amount="14.99",
+        next_billing_date=clamped_feb,
+        start_date=anchor_start,
+    )
+
+    admin_client.rpc("autolog_subscriptions", {}).execute()
+
+    sub = _fetch_subscription(admin_client, sub_id)
+    assert sub["next_billing_date"] == date(
+        anchor_start.year, 3, 31
+    ).isoformat(), "advance must restore the day-31 anchor after a short month"
+
+
 def test_autolog_skips_paused_subscriptions(admin_client, user_a, card_a):
     """A `status='paused'` subscription is not auto-logged.
 
@@ -179,13 +218,15 @@ def _seed_subscription(
     amount: str,
     next_billing_date: date,
     status: str = "active",
+    start_date: date | None = None,
 ) -> str:
     """Insert a subscriptions row via the service-role admin client.
 
     Bypasses RLS so tests can seed under any user_id without going
     through the chat propose/confirm path. The cron function itself
     runs under SECURITY DEFINER so the seeding role doesn't matter for
-    the assertions below.
+    the assertions below. `start_date` defaults to `next_billing_date`;
+    pass it explicitly to exercise the anchor-day advance.
     """
     row = {
         "id": str(uuid.uuid4()),
@@ -194,7 +235,7 @@ def _seed_subscription(
         "name": name,
         "amount": amount,
         "frequency": frequency,
-        "start_date": next_billing_date.isoformat(),
+        "start_date": (start_date or next_billing_date).isoformat(),
         "next_billing_date": next_billing_date.isoformat(),
         "category": "Memberships",
         "status": status,

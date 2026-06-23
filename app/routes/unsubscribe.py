@@ -1,10 +1,17 @@
 """One-click List-Unsubscribe routes (DESIGN.md §6.4, RFC 8058).
 
-Two routes: `GET /unsubscribe` for users who click the visible body
-link or the Gmail "Unsubscribe" button (which sends GET with the URL
-from the `List-Unsubscribe` header), and `POST /unsubscribe` for Gmail
-and Yahoo's automated one-click flow (RFC 8058 / `List-Unsubscribe-Post:
-List-Unsubscribe=One-Click`).
+Two routes with different mutation semantics (audit P3-10):
+
+  - `GET /unsubscribe` — the human-facing path (visible body link).
+    Verifies the HMAC token and 302-redirects to the PWA's
+    `/unsubscribe` confirm page WITHOUT mutating. A GET that mutated on
+    first fetch silently unsubscribed users whose corporate mail
+    scanners (Outlook SafeLinks, Mimecast) prefetch every link in the
+    email body — no human ever clicked.
+  - `POST /unsubscribe` — the mutation. Called by Gmail/Yahoo's
+    automated one-click flow (RFC 8058 / `List-Unsubscribe-Post:
+    List-Unsubscribe=One-Click`) and by the PWA confirm page's button.
+    Scanners don't POST RFC 8058 endpoints; a POST is intent.
 
 NO AUTH on these routes. The HMAC token IS the authorization — a
 forged token gets a 403; a valid token authorizes the opt-out without
@@ -22,10 +29,12 @@ sanctioned service-role callers (the request has no user JWT in scope).
 from __future__ import annotations
 
 import logging
+import os
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from app.db import supabase_admin
 from app.util.unsubscribe import UnsubscribeKind, verify_unsubscribe_token
@@ -33,51 +42,33 @@ from app.util.unsubscribe import UnsubscribeKind, verify_unsubscribe_token
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["unsubscribe"])
 
-_SUCCESS_PAGE = """\
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>Unsubscribed — Tameru</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>
-      body{font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-           color:#1a1a1a;background:#fafafa;margin:0;padding:48px 24px;
-           display:flex;justify-content:center}
-      .card{max-width:420px;background:#fff;border:1px solid #eee;
-            border-radius:12px;padding:32px}
-      h1{font-size:20px;margin:0 0 8px 0;font-weight:600}
-      p{margin:0;color:#555}
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>You're unsubscribed.</h1>
-      <p>Tameru won't send you weekly digest emails anymore. You can
-         re-enable them anytime in Settings → Notifications inside the
-         app.</p>
-    </div>
-  </body>
-</html>
-"""
 
-
-@router.get("/unsubscribe", response_class=HTMLResponse)
+@router.get("/unsubscribe")
 def unsubscribe_get(
     user: UUID = Query(..., alias="user"),
     kind: str = Query(..., alias="kind"),
     token: str = Query(..., alias="token"),
-) -> HTMLResponse:
-    """Handle a click on the visible body link or the Gmail Unsubscribe button.
+) -> RedirectResponse:
+    """Redirect a human click to the PWA confirm page — never mutate on GET.
 
-    Flips `users_meta.weekly_digest_enabled` to false on success;
-    returns 403 on a forged/tampered token. The success page is
-    intentionally a static HTML response (no PWA shell load, no auth
-    prompt) so the user sees confirmation immediately without round-
-    tripping through the app's auth flow.
+    Corporate link scanners GET every URL in an email body, so a
+    mutating GET silently unsubscribed scanned users (audit P3-10). The
+    token is verified here first — a forged link 403s without bouncing
+    the visitor through the PWA — then forwarded intact in the redirect
+    so the confirm page's button can POST it back. The redirect target
+    is the fixed frontend origin, never derived from request input (no
+    open-redirect surface).
     """
-    _apply_unsubscribe(user, kind, token)
-    return HTMLResponse(_SUCCESS_PAGE, status_code=200)
+    validated_kind = _validated_kind(kind)
+    if not verify_unsubscribe_token(token, user, validated_kind):
+        # Don't leak why (forged token vs rotated secret vs wrong
+        # user) — the only legitimate caller has a valid token.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid token")
+    query = urlencode({"user": str(user), "kind": validated_kind, "token": token})
+    return RedirectResponse(
+        f"{_frontend_origin()}/unsubscribe?{query}",
+        status_code=status.HTTP_302_FOUND,
+    )
 
 
 @router.post("/unsubscribe")
@@ -86,12 +77,14 @@ def unsubscribe_post(
     kind: str = Query(..., alias="kind"),
     token: str = Query(..., alias="token"),
 ) -> Response:
-    """RFC 8058 one-click POST.
+    """RFC 8058 one-click POST — the single mutation path.
 
     Gmail and Yahoo's automated unsubscribe flow POSTs to the URL in
     the `List-Unsubscribe` header (when paired with
-    `List-Unsubscribe-Post: List-Unsubscribe=One-Click`). Same effect
-    as the GET; spec says return 200 with an empty body.
+    `List-Unsubscribe-Post: List-Unsubscribe=One-Click`), and the PWA
+    `/unsubscribe` confirm page's button POSTs here too (a simple
+    cross-origin request — no auth header, no preflight; the HMAC token
+    is the authorization). Spec says return 200 with an empty body.
     """
     _apply_unsubscribe(user, kind, token)
     return PlainTextResponse("", status_code=200)
@@ -122,6 +115,16 @@ def _apply_unsubscribe(user_id: UUID, kind_raw: str, token: str) -> None:
         "user unsubscribed via one-click",
         extra={"user_id": str(user_id), "kind": kind},
     )
+
+
+def _frontend_origin() -> str:
+    """The PWA origin the GET redirect targets.
+
+    `FRONTEND_ORIGIN` is in the production-required env tier (app/main.py
+    lifespan); the localhost fallback keeps dev working where the var is
+    deliberately unset (.env.example documents it commented-out).
+    """
+    return (os.environ.get("FRONTEND_ORIGIN") or "http://localhost:5173").rstrip("/")
 
 
 def _validated_kind(raw: str) -> UnsubscribeKind:

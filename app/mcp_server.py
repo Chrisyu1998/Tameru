@@ -33,6 +33,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import jwt
+import sentry_sdk
 from fastapi import HTTPException
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -46,6 +47,7 @@ from app.agent.tools import get_spending_summary as _agent_get_spending_summary
 from app.agent.tools import get_subscriptions as _agent_get_subscriptions
 from app.agent.tools import get_transactions as _agent_get_transactions
 from app.auth import AuthedUser, verify_supabase_jwt
+from app.context import user_id_var
 
 # get_recent_transactions limit bounds. The underlying agent tool caps at
 # MAX_LIMIT regardless; clamping here turns a silly client input into a
@@ -271,7 +273,16 @@ def _current_user() -> AuthedUser:
         # The SDK's auth middleware rejects an unauthenticated request
         # before any tool runs, so this is defensive only.
         raise PermissionError("MCP tool reached without a validated access token")
-    return verify_supabase_jwt(access.token)
+    user = verify_supabase_jwt(access.token)
+    # Stamp the request-scoped user id the same way get_current_user_jwt
+    # does for HTTP routes — the MCP path bypasses that dependency, so
+    # without this every MCP-originated log record carried user_id: null
+    # and Sentry events lacked the user scope (audit P3-23). Id-only —
+    # no email, IP, or transaction data, per the privacy posture.
+    user_id_str = str(user.user_id)
+    user_id_var.set(user_id_str)
+    sentry_sdk.set_user({"id": user_id_str})
+    return user
 
 
 def _tool_get_spending_summary(

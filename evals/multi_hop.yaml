@@ -1,4 +1,4 @@
-# Multi-hop eval — 20 hand-curated chat prompts. Day 22 (DESIGN.md §7.10).
+# Multi-hop eval — 21 hand-curated chat prompts. Day 22 (DESIGN.md §7.10).
 #
 # Each row runs through the full agent loop (run_turn). Scored on:
 #   * tool sequence — does the agent call a sensible set of tools?
@@ -21,8 +21,9 @@
 # If you change the fixture totals, update the expected values below.
 #
 # Coverage: cross-month deltas, category combine, category × card,
-# generative charts, subscription queries, chat-based disambiguation,
-# graceful no-data, and multilingual (>=2 zh-TW + >=2 ja-JP per §7.7).
+# card_ref-filtered per-card totals (chat_v14), generative charts,
+# subscription queries, chat-based disambiguation, graceful no-data, and
+# multilingual (>=2 zh-TW + >=2 ja-JP per §7.7).
 
 # --- cross-month deltas ----------------------------------------------------
 - prompt: "How much more did I spend on dining in March vs February?"
@@ -79,6 +80,19 @@
   answer_value_tolerance_usd: 1.00
 
 # --- category x card -------------------------------------------------------
+- prompt: "How much did I spend on my Amex Gold in March?"
+  difficulty: hard
+  tags: [category-card, card-ref-filter]
+  expected_tool_sequence:
+    - name: get_cards
+      args_must_include: {}
+    - name: calculate_total
+      args_must_include: { card_ref: "amex-1001", date_from: "2026-03-01" }
+  sequence_match: unordered
+  answer_pattern: "\\$\\d"
+  expected_answer_value_usd: 40.00
+  answer_value_tolerance_usd: 1.00
+
 - prompt: "Did I spend more on coffee in March or February on my Amex Gold?"
   difficulty: hard
   tags: [category-card]

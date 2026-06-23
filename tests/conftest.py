@@ -178,6 +178,76 @@ def clean_memory(user_a):
     yield
 
 
+@pytest.fixture
+def preserve_user_a_meta(user_a, admin_client):
+    """Snapshot user_a's mutable `users_meta` prefs; restore on teardown.
+
+    user_a is session-scoped, and several suites mutate its preference
+    columns then restore them inline AFTER their asserts — so one
+    assertion failure left throwaway values behind and cascaded into
+    later suites (test_main's exact-body /me assert; the 2026-06-07
+    DEVICE_DISPLACED incident is the same shape — audit P3-37). Modules
+    that mutate these columns opt in with a thin autouse fixture; the
+    restore here runs in teardown, surviving failed asserts.
+
+    `home_currency` is deliberately excluded: the BEFORE UPDATE trigger
+    makes it immutable, so no test can change it and a restore write is
+    pure risk.
+    """
+    cols = (
+        "analytics_opted_out",
+        "weekly_digest_enabled",
+        "timezone",
+        "ui_language",
+        "active_device_id",
+    )
+    rows = (
+        admin_client.table("users_meta")
+        .select(", ".join(cols))
+        .eq("user_id", user_a.id)
+        .execute()
+        .data
+    )
+    snapshot = {col: rows[0][col] for col in cols} if rows else None
+    yield
+    if snapshot is not None:
+        admin_client.table("users_meta").update(snapshot).eq(
+            "user_id", user_a.id
+        ).execute()
+
+
+@pytest.fixture
+def cleanup_user_a_ledger(user_a, admin_client):
+    """Delete the transactions/subscriptions rows a test seeds for user_a.
+
+    test_digest_cron / test_autolog seed ledger rows on the session-scoped
+    user_a with no teardown — permanent per-run residue that two suites
+    already fled to fresh users to escape (audit P3-38). Diffs ids before
+    vs after and deletes only the new rows; transactions go first because
+    `transactions.subscription_id` references subscriptions.
+    """
+
+    def _ids(table: str) -> set[str]:
+        """Current row ids for user_a in `table` (admin, RLS-free)."""
+        resp = (
+            admin_client.table(table)
+            .select("id")
+            .eq("user_id", user_a.id)
+            .execute()
+        )
+        return {r["id"] for r in resp.data or []}
+
+    before_tx = _ids("transactions")
+    before_subs = _ids("subscriptions")
+    yield
+    new_tx = _ids("transactions") - before_tx
+    if new_tx:
+        admin_client.table("transactions").delete().in_("id", list(new_tx)).execute()
+    new_subs = _ids("subscriptions") - before_subs
+    if new_subs:
+        admin_client.table("subscriptions").delete().in_("id", list(new_subs)).execute()
+
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------

@@ -677,7 +677,12 @@ def _annotate_committed_proposals(
     _card_select = (
         "id, name, status, deleted_at, "
         "network, last_four, issuer, program, multipliers, "
-        "annual_fee, source_urls, client_request_id"
+        "annual_fee, source_urls, client_request_id, "
+        # Tier-3 columns (audit P3-32): region is recomputed server-side
+        # at confirm, so the live row can legitimately differ from the
+        # proposal — omitting these made the chat card a stale view of
+        # exactly the fields confirm can change.
+        "region, base_reward_rate, rewards_currency"
     )
     committed_cards_by_crid: dict[str, dict[str, Any]] = {}
     if card_crid_set:
@@ -873,6 +878,13 @@ def _card_committed_payload(row: dict[str, Any]) -> dict[str, Any]:
         "multipliers": multipliers,
         "annual_fee": row.get("annual_fee"),
         "source_urls": source_urls,
+        # Tier-3 fields (audit P3-32). `region` is recomputed server-side
+        # at confirm time (resolve_card_region), so the committed value
+        # can legitimately differ from the proposal's — the current-state
+        # view (memory.md 2026-05-17) must reflect the live row.
+        "region": row.get("region"),
+        "base_reward_rate": row.get("base_reward_rate"),
+        "rewards_currency": row.get("rewards_currency"),
     }
 
 

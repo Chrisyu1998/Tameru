@@ -88,6 +88,27 @@ Version log:
     per-user language lives in block[1] (NOT hashed) so every user still
     shares one cached block[0] prefix. Static-block edit busts the cache
     once.
+  * chat_v13 (2026-06 audit P2-6) — the block[1] "Today is …" anchor now
+    resolves in the user's `users_meta.timezone` (UTC fallback) via
+    `user_local_today`, not server-UTC. For a JST/TWT user between 00:00
+    and ~09:00 local the UTC date is their *yesterday*, and block[0]
+    tells the agent to default missing transaction dates to "today" — so
+    the default path proposed wrong-dated ledger rows every local
+    morning. Dynamic-tail-only change (block[0] untouched, cache
+    intact); version bumped so ai_call_log rows distinguish the date
+    semantics.
+  * chat_v14 (2026-06 audit P2-9/P3-35) — the read/filter tools complete
+    the chat_v10 ref migration. calculate_total / get_transactions take
+    `card_ref` (the short get_cards handle) instead of a raw `card_id`
+    UUID in the model-facing schema — the UUID path was the exact
+    transcription failure chat_v10 fixed for the propose_* tools, and a
+    slipped hex digit silently summed $0. An unresolvable filter ref
+    raises (is_error tool_result) rather than matching nothing, because
+    a read that silently matches nothing is a confident wrong answer.
+    get_cards / get_subscriptions results are now UUID-free: card `id` /
+    `client_request_id` stripped, subscriptions carry a resolved
+    `card_ref` instead of `card_id`. Static-block edit (tool list
+    wording) busts the cache once.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -108,8 +129,11 @@ from typing import Any
 
 from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
+from app.util.timezone import user_local_today
 
-PROMPT_VERSION = "chat_v12"
+# chat_v14: card filtering on the read tools goes through card_ref; tool
+# results are UUID-free (see the version history in the docstring above).
+PROMPT_VERSION = "chat_v14"
 
 
 SYSTEM_PROMPT = """\
@@ -123,13 +147,15 @@ anyone else's data.
 Pick the tool that matches the question shape, not the keyword:
 
 - **calculate_total**: returns a single sum and a count for the user's \
-transactions matching optional filters (category, card, merchant substring, \
-date range, amount range). Use whenever the user wants a number — "how much \
-did I spend on X", "what's my total at Y", "how much last month". Prefer this \
-over get_transactions for any sum or aggregate question; do not list rows and \
-add them up yourself. For a SPECIFIC named month or period ("in March", \
-"in Q1"), compute the explicit date_from/date_to from today's date (in this \
-prompt) and pass them — do not leave the window open.
+transactions matching optional filters (category, card via `card_ref`, \
+merchant substring, date range, amount range). Use whenever the user wants a \
+number — "how much did I spend on X", "what's my total at Y", "how much last \
+month". Prefer this over get_transactions for any sum or aggregate question; \
+do not list rows and add them up yourself. For a SPECIFIC named month or \
+period ("in March", "in Q1"), compute the explicit date_from/date_to from \
+today's date (in this prompt) and pass them — do not leave the window open. \
+For per-card questions ("how much on my Amex Gold last month"), call \
+get_cards first and pass the card's short `ref` as `card_ref`.
 
 - **get_transactions**: returns a list of transaction rows matching the same \
 filters as calculate_total, plus optional limit/offset. Use when the user \
@@ -156,8 +182,9 @@ calculate_total calls when the user wants a full breakdown.
 - **get_cards**: returns the user's active cards, each with reward \
 multipliers and a short `ref` handle (e.g. "amex-1001"). Use for "what \
 cards do I have", "which card earns most on X", or to resolve a card the \
-user named before a propose_* call — then pass that card's `ref` (never \
-its long `id`) as the `card_ref` argument.
+user named before a propose_* call or a card-filtered read — then pass \
+that card's `ref` as the `card_ref` argument, copied exactly. Tool \
+results never contain UUIDs and no tool accepts one.
 
 - **propose_transaction**: builds a transaction proposal from a \
 user-described purchase. Returns a payload the client renders as a parse \
@@ -280,7 +307,8 @@ def render_system_prompt(
     Request:
         user_jwt: caller's JWT — used by render_user_merchants() to read
             the `top_user_merchants` view under RLS. Required.
-        today:    test seam. Production callers omit it.
+        today:    test seam. Production callers omit it; the date then
+            resolves in the user's `users_meta.timezone` (UTC fallback).
 
     Response:
         [
@@ -311,7 +339,14 @@ def render_system_prompt(
     through unchanged.
     """
     if today is None:
-        today = _dt.date.today()
+        # chat_v13: "today" is the user's local calendar date, read from
+        # users_meta.timezone under RLS (UTC fallback). A server-UTC date
+        # is the user's *yesterday* for the first 8-9 local hours of every
+        # JST/TWT day, and block[0] tells Claude to default missing
+        # transaction dates to "today" — so the UTC anchor wrote
+        # wrong-dated ledger rows by default (audit P2-6). Per-user state
+        # stays in block[1]; the cached block[0] prefix is unaffected.
+        today = user_local_today(user_jwt)
     # Day 16: memory block lands AFTER the merchants block, both inside
     # block[1]. Keeping it in the dynamic tail is load-bearing — per-
     # user memory inside the cached preamble (block[0]) would invalidate

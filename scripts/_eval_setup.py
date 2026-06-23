@@ -34,8 +34,15 @@ from uuid import UUID
 from supabase import create_client
 
 EVAL_USER_EMAIL = "eval@tameru.internal"
-EVAL_USER_PASSWORD = os.environ.get(
-    "EVAL_USER_PASSWORD", "eval-fixture-password-2026"
+# `or` (not a .get default): CI passes `${{ secrets.EVAL_USER_PASSWORD }}`,
+# and a missing GitHub secret renders as an EMPTY string — the env var is
+# set-but-empty, so a .get() default never applies and sign-in fails with
+# "must provide a password". Empty must mean unset here. The password only
+# guards a throwaway fixture user on an ephemeral local/CI Supabase stack,
+# so a hardcoded default is fine; the env override exists for the rare
+# case where the stored password drifted.
+EVAL_USER_PASSWORD = (
+    os.environ.get("EVAL_USER_PASSWORD") or "eval-fixture-password-2026"
 )
 
 # Card fixtures — referenced by name from chat_extraction.yaml's

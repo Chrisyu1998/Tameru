@@ -2,7 +2,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from asgi_correlation_id import CorrelationIdMiddleware
+from asgi_correlation_id import CorrelationIdMiddleware, correlation_id
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -28,6 +28,7 @@ from app.routes import export as export_routes
 from app.routes import unsubscribe as unsubscribe_routes
 from app.routes import webhooks_resend as webhooks_resend_routes
 from app.sentry_filters import init_sentry
+from app.util.env import KNOWN_APP_ENVS, app_env, is_production
 
 # Environment variables every authenticated request path depends on. A
 # process can boot without them and still answer /healthz, then 500 on the
@@ -90,6 +91,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     enter the lifespan (Starlette only runs it inside the client's
     context-manager form), so the test suite is unaffected.
     """
+    # APP_ENV gates the production-only tier below, so a typo'd value
+    # ("producton") would silently skip the entire tier — reject anything
+    # outside the known set at boot (audit P3-7). Unset stays legal (dev).
+    if app_env() not in KNOWN_APP_ENVS:
+        raise RuntimeError(
+            f"Tameru refusing to start — unrecognized APP_ENV "
+            f"{os.environ.get('APP_ENV')!r}. Use 'production' (Railway) or "
+            "'dev' / unset (local); see app/util/env.py."
+        )
     missing = [name for name in _REQUIRED_ENV_VARS if not os.environ.get(name)]
     # GEMINI_MODEL / GEMINI_MODEL_DEFAULT are an at-least-one pair
     # (app/integrations/gemini.py::_model_name). Report the prod-facing
@@ -99,7 +109,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # SENTRY_DSN is required in production; absent in dev means the SDK
     # is a no-op (DESIGN.md §14.5). Missing prod DSN = no error capture,
     # which is worse than a noisy boot crash that demands a fix.
-    if os.environ.get("APP_ENV", "").lower() == "production" and not os.environ.get("SENTRY_DSN"):
+    if is_production() and not os.environ.get("SENTRY_DSN"):
         missing.append("SENTRY_DSN")
     # FRONTEND_ORIGIN is the Vercel PWA host added to the CORS allowlist
     # (`_cors_allowed_origins()`). Unconditionally required would break
@@ -109,7 +119,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # so fail loud there. The digest cron's own module-level check
     # (`app/cron/digest.py::_app_cta_url`) covers the cron service
     # regardless of APP_ENV.
-    if os.environ.get("APP_ENV", "").lower() == "production" and not os.environ.get("FRONTEND_ORIGIN"):
+    if is_production() and not os.environ.get("FRONTEND_ORIGIN"):
         missing.append("FRONTEND_ORIGIN")
     if missing:
         raise RuntimeError(
@@ -246,8 +256,11 @@ app.add_middleware(
 )
 
 # Added BEFORE CorrelationIdMiddleware in source so it sits OUTSIDE Cors
-# in the runtime stack — the headers therefore ride on preflight 200s and
-# on the synthesized 500 from `_unhandled_exception_handler`.
+# in the runtime stack — the headers therefore ride on preflight 200s.
+# NOT on the synthesized 500 from `_unhandled_exception_handler`: that
+# handler runs inside Starlette's ServerErrorMiddleware, which is
+# outermost — outside every user middleware — so the handler stamps the
+# hardening headers and X-Request-ID itself (audit P3-24).
 app.add_middleware(SecurityHeadersMiddleware)
 
 # CorrelationIdMiddleware mounts AFTER CORSMiddleware in the source but
@@ -295,6 +308,17 @@ async def _unhandled_exception_handler(
     if origin and origin in _CORS_ALLOWED_ORIGINS:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
+    # ServerErrorMiddleware (where this handler runs) is OUTERMOST, so
+    # this response never traverses SecurityHeadersMiddleware or
+    # CorrelationIdMiddleware — stamp the hardening headers and the
+    # request id here too, or the 500 ships bare and the frontend loses
+    # its X-Request-ID correlation handle (audit P3-24).
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    cid = correlation_id.get()
+    if cid:
+        response.headers["X-Request-ID"] = cid
     return response
 
 

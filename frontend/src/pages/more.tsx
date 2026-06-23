@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   Bell,
@@ -411,7 +412,12 @@ function SignOutDialog({
   const { t } = useTranslation();
   if (!open) return null;
 
-  return (
+  // Portalled to document.body per the Day-18 rule: more.tsx's wrapper
+  // happens to lack `animate-fade-up` today, so an inline fixed overlay
+  // works by luck — adding the animation class to this page (13 of 14
+  // page wrappers have it) would silently trap the dialog inside the
+  // content box (audit P3-34).
+  return createPortal(
     <div
       role="alertdialog"
       aria-modal="true"
@@ -457,6 +463,7 @@ function SignOutDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

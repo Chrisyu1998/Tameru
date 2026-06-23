@@ -32,7 +32,7 @@ ALLOWED_SUBDIRS = {"cron", "scripts"}  # scripts lives at repo root, kept here f
 # scope (one-click unsubscribe per RFC 8058, Resend webhook). Paths are
 # relative to APP_DIR.
 ALLOWED_FILES = {
-    Path("routes/unsubscribe.py"),       # invariant 1 caller #3 surface
+    Path("routes/unsubscribe.py"),       # invariant 1 caller #5 (RFC 8058, HMAC-token auth)
     Path("routes/webhooks_resend.py"),   # invariant 1 caller #4
     # main.py is the web-process boot-validation surface. It lists the
     # service-role env var name in _REQUIRED_ENV_VARS so a deploy that
@@ -50,6 +50,17 @@ _FORBIDDEN_PATTERNS = [
     re.compile(r"^\s*from\s+app\.db\s+import\s+[^\n]*\bsupabase_admin\b", re.MULTILINE),
     # Wildcard import from app.db launders supabase_admin into the module namespace.
     re.compile(r"^\s*from\s+app\.db\s+import\s+\*", re.MULTILINE),
+    # Module-object access: `import app.db` / `from app import db` followed
+    # by `db.supabase_admin(...)` attribute access slipped past the
+    # from-import patterns above (audit P3-40). Flag the import itself —
+    # request-path code has no legitimate reason to hold the app.db module
+    # object when `from app.db import supabase_for_user` exists.
+    re.compile(r"^\s*import\s+app\.db\b", re.MULTILINE),
+    re.compile(r"^\s*from\s+app\s+import\s+[^\n]*\bdb\b", re.MULTILINE),
+    # Request-path code importing from app/cron/ would inherit that
+    # directory's exclusion transitively — a cron helper that builds an
+    # admin client must not be callable from a handler (audit P3-40).
+    re.compile(r"^\s*(?:from|import)\s+app\.cron\b", re.MULTILINE),
     # Anyone reaching for the service role env var directly.
     re.compile(r"\bSUPABASE_SERVICE_ROLE_KEY\b"),
 ]

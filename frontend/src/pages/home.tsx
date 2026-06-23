@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Dashboard } from "@/components/Dashboard";
 import {
@@ -20,6 +21,11 @@ export default function HomePage() {
   const homeCurrency = useAppStore((s) => s.homeCurrency);
   const { summary, loading } = useDashboardSummary();
   const [hintDismissed, setHintDismissed] = useState(true);
+  // Hooks must run unconditionally — this used to sit below the
+  // `if (!onboarded) return null` early return, a rules-of-hooks
+  // violation (audit P3-36): the gate flipping between renders would
+  // desync React's hook order.
+  const { t } = useTranslation();
 
   // Gate: redirect anyone who isn't fully onboarded to the wizard. We check
   // for missing JWT (signed out) or missing home_currency (signed in but
@@ -45,8 +51,6 @@ export default function HomePage() {
   // Hold the populated/empty branch until the first /dashboard/summary
   // round trip lands — otherwise we'd flash the empty state on every page
   // load before the response arrives.
-  const { t } = useTranslation();
-
   if (!summary) {
     return (
       <div className="mx-auto w-full max-w-md px-5 pt-10 pb-12">
@@ -137,20 +141,31 @@ function GhostTile() {
 /**
  * A subtle pulse ring positioned to surround the BottomNav's center chat
  * button. The button itself is in BottomNav; this is a sibling halo.
+ *
+ * Portalled to document.body: HomePage's `animate-fade-up` wrapper
+ * animates `transform` with fill-mode `both`, which makes it a permanent
+ * containing block for `position: fixed` descendants — rendered inline,
+ * this halo resolved `bottom-0` against the page content and scrolled
+ * with it instead of hugging the BottomNav (the Day-18 BottomSheet trap;
+ * audit P2-10).
  */
 function ChatButtonPulse() {
-  return (
+  return createPortal(
     <div className="pointer-events-none fixed bottom-0 left-1/2 z-30 -translate-x-1/2 md:hidden">
       <div className="relative h-16 w-16 -translate-y-[1.7rem]">
         <span className="absolute inset-0 animate-ping-soft rounded-full bg-moss/30" />
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
 function FirstHintStrip({ onDismiss }: { onDismiss: () => void }) {
   const { t } = useTranslation();
-  return (
+  // Portalled for the same containing-block reason as ChatButtonPulse —
+  // inline, the nudge driving the first chat transaction floated
+  // mid-screen and scrolled away with content (audit P2-10).
+  return createPortal(
     <div className="pointer-events-auto fixed bottom-20 left-1/2 z-40 w-[min(92vw,22rem)] -translate-x-1/2 rounded-2xl border border-hairline bg-elevated px-4 py-3 md:hidden animate-fade-up">
       <p className="font-serif italic text-sm text-ink-secondary lowercase-title">
         {t("home.hintPrompt")}
@@ -177,6 +192,7 @@ function FirstHintStrip({ onDismiss }: { onDismiss: () => void }) {
           {t("home.hintDismiss")}
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

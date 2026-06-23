@@ -65,6 +65,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 from decimal import Decimal
 from pathlib import Path
@@ -232,11 +233,22 @@ def _run_categorization(jwt: str, user_id: uuid.UUID) -> dict[str, Any]:
 
     Calls `categorize()` directly. Amount is parsed for YAML-shape
     fidelity but not passed (categorize_v3 dropped amount from the
-    prompt). Rows where `categorize()` raises are scored as misses.
+    prompt).
+
+    Transient `GeminiError`s are retried (3 attempts, linear backoff)
+    before a row scores as a miss. Without the retry, the suite measured
+    Gemini's *availability*, not the model's accuracy: 114 back-to-back
+    calls reliably hit 5xx bursts (the 2026-06-11 gate breach was 23/114
+    rows failing with `error_code='provider_error'` and got=None — zero
+    wrong categories). The product path deliberately has no retry
+    (a failed categorize falls back to "Other" and the user edits on the
+    parse card); the eval retries because its question is different.
+    A row that still raises after all attempts scores as a miss.
     """
     from app.auth import AuthedUser
     from app.integrations.gemini import categorize, GeminiError
 
+    max_attempts = 3
     rows = _load_yaml("categorization.yaml")
     user = AuthedUser(jwt=jwt, user_id=user_id, email="eval@tameru.internal")
     per_row: list[dict[str, Any]] = []
@@ -245,13 +257,19 @@ def _run_categorization(jwt: str, user_id: uuid.UUID) -> dict[str, Any]:
     for row in rows:
         merchant = row["merchant"]
         expected = row["expected_category"]
-        try:
-            suggestion = categorize(merchant, user)
-            got = suggestion.category
-            ok = got == expected
-        except GeminiError:
-            got = None
-            ok = False
+        got = None
+        ok = False
+        for attempt in range(max_attempts):
+            try:
+                suggestion = categorize(merchant, user)
+                got = suggestion.category
+                ok = got == expected
+                break
+            except GeminiError:
+                if attempt + 1 < max_attempts:
+                    # Linear backoff (2s, 4s) — long enough to ride out a
+                    # 5xx burst, short enough not to balloon a 114-row run.
+                    time.sleep(2 * (attempt + 1))
         if ok:
             correct += 1
         metas.append(_row_meta(row, ok))

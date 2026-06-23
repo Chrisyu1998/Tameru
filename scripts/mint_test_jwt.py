@@ -22,18 +22,8 @@ import uuid
 from supabase import create_client
 
 
-def _load_local_status() -> dict:
-    raw = subprocess.check_output(
-        ["supabase", "status", "-o", "json"], text=True
-    )
-    brace = raw.find("{")
-    if brace < 0:
-        print("supabase status did not return JSON; is the stack running?", file=sys.stderr)
-        sys.exit(1)
-    return json.loads(raw[brace:])
-
-
 def main() -> None:
+    """Mint a confirmed throwaway local-Supabase user and print its JWT."""
     s = _load_local_status()
     admin = create_client(s["API_URL"], s["SERVICE_ROLE_KEY"])
 
@@ -51,6 +41,18 @@ def main() -> None:
     print(f"# email: {email}", file=sys.stderr)
     print(f"# user_id: {session.user.id}", file=sys.stderr)
     print(session.access_token)
+
+
+def _load_local_status() -> dict:
+    """Return `supabase status -o json` as a dict, exiting if the stack is down."""
+    raw = subprocess.check_output(
+        ["supabase", "status", "-o", "json"], text=True
+    )
+    brace = raw.find("{")
+    if brace < 0:
+        print("supabase status did not return JSON; is the stack running?", file=sys.stderr)
+        sys.exit(1)
+    return json.loads(raw[brace:])
 
 
 if __name__ == "__main__":

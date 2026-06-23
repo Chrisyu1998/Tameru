@@ -63,12 +63,19 @@ from app.models.transactions import (
 )
 from app.prompts.categories import ALLOWED_CATEGORIES
 from app.services.transactions import apply_transaction_filters, list_transactions
+from app.util.timezone import user_local_today
 
 # Hard cap on rows fetched for an aggregation. Above this we still return
 # the partial sum but flag the result as truncated so Claude can ask the
 # user to narrow filters. Sized for v1 scale — a single user crossing 5k
 # transactions in a single filter window is a future-Tameru problem.
 RESULT_ROW_CAP = 5_000
+
+# PostgREST silently caps every response at `max-rows` (1000 on Supabase —
+# memory.md 2026-05-26), so aggregation reads must page at or below that
+# size; a single `.range(0, RESULT_ROW_CAP)` request would come back with
+# at most 1000 rows and no error, silently under-counting totals.
+AGGREGATION_PAGE_SIZE = 1_000
 
 # Hard cap on list-tool outputs. `get_subscriptions` and `get_cards` are
 # normally bounded by user count (subs <50, cards <10), but a defensive
@@ -88,7 +95,14 @@ class CalculateTotalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     category: str | None = Field(default=None, description="Closed-enum category filter.")
-    card_id: str | None = Field(default=None, description="Card UUID filter.")
+    card_id: str | None = Field(
+        default=None,
+        description="Card UUID filter — direct/HTTP callers only; not in the model-facing schema.",
+    )
+    card_ref: str | None = Field(
+        default=None,
+        description="Short card handle from get_cards (e.g. 'amex-1001') — the agent's path.",
+    )
     merchant_contains: str | None = Field(
         default=None,
         description="Case-insensitive merchant substring filter.",
@@ -320,10 +334,19 @@ _TRANSACTION_FILTER_PROPERTIES: dict[str, Any] = {
         "enum": list(ALLOWED_CATEGORIES),
         "description": "Restrict to one category from the closed enum.",
     },
-    "card_id": {
+    # card_ref, NOT card_id: the model-facing filter takes the short
+    # get_cards handle. A raw UUID here would put a 36-char random string
+    # back on the model's copy path — the exact transcription failure
+    # chat_v10 eliminated for the propose_* tools (a slipped hex digit
+    # keeps valid UUID format, matches nothing under RLS, and the tool
+    # would confidently report $0). The Pydantic request models still
+    # accept card_id for direct/HTTP callers.
+    "card_ref": {
         "type": "string",
-        "format": "uuid",
-        "description": "Restrict to one card by its UUID.",
+        "description": (
+            "Restrict to one card by its short ref handle from get_cards "
+            "(e.g. 'amex-1001'). Copy the ref exactly; never pass a UUID."
+        ),
     },
     "merchant_contains": {
         "type": "string",
@@ -545,8 +568,10 @@ GET_CARDS_TOOL: dict[str, Any] = {
         "which card earns most on a category, or references a card by "
         "name. Each card includes a short `ref` handle (e.g. "
         "'amex-1001') — pass that `ref` to propose_transaction / "
-        "propose_subscription when the user names a card; never copy the "
-        "long `id` UUID into a later tool call."
+        "propose_subscription when the user names a card, and to "
+        "calculate_total / get_transactions' `card_ref` filter for "
+        "per-card spend questions. Copy the ref exactly; UUIDs are never "
+        "used between tools."
     ),
     "input_schema": {
         "type": "object",
@@ -956,23 +981,25 @@ def calculate_total(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     Response:
         {"total": "123.45", "count": 8, "truncated": false}
 
-    Implementation note: PostgREST has no native SUM, so we fetch up to
-    `RESULT_ROW_CAP + 1` matching rows and sum in Python. The +1 is what
-    detects truncation without a separate COUNT query (same pattern as
-    `list_transactions`'s `has_more`).
+    Implementation note: PostgREST has no native SUM, so we page through
+    matching rows (≤1000/page — PostgREST's `max-rows` cap) up to
+    `RESULT_ROW_CAP` and sum in Python. Truncation is detected by paging
+    one row past the cap (same pattern as `goals._sum_active_transactions`).
     """
     request = CalculateTotalRequest.model_validate(kwargs)
-    filters = _filters_from_input(request.model_dump(exclude_none=True), allow_pagination=False)
     client = supabase_for_user(user.jwt)
-    # Reads through `active_transactions` so soft-deleted rows don't appear
-    # in agent totals (DESIGN.md §8 status-column doctrine).
-    query = client.table("active_transactions").select("amount")
-    query = apply_transaction_filters(query, filters)
-    resp = query.range(0, RESULT_ROW_CAP).execute()
-    rows = resp.data or []
-    truncated = len(rows) > RESULT_ROW_CAP
-    if truncated:
-        rows = rows[:RESULT_ROW_CAP]
+    payload = _resolve_card_ref_filter(client, request.model_dump(exclude_none=True))
+    filters = _filters_from_input(payload, allow_pagination=False)
+
+    def build_query() -> Any:
+        """Build a fresh filtered query per page — `.range()` must be
+        applied to a fresh builder each time (goals.py precedent)."""
+        # Reads through `active_transactions` so soft-deleted rows don't
+        # appear in agent totals (DESIGN.md §8 status-column doctrine).
+        query = client.table("active_transactions").select("amount")
+        return apply_transaction_filters(query, filters)
+
+    rows, truncated = _fetch_aggregation_pages(build_query, cap=RESULT_ROW_CAP)
 
     # Decimal sum — `numeric` columns come back as strings from Supabase.
     total = sum((Decimal(str(row["amount"])) for row in rows), Decimal("0"))
@@ -999,7 +1026,9 @@ def get_transactions(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     serializes cleanly.
     """
     request = GetTransactionsRequest.model_validate(kwargs)
-    filters = _filters_from_input(request.model_dump(exclude_none=True), allow_pagination=True)
+    client = supabase_for_user(user.jwt)
+    payload = _resolve_card_ref_filter(client, request.model_dump(exclude_none=True))
+    filters = _filters_from_input(payload, allow_pagination=True)
     result = list_transactions(user, filters)
     return GetTransactionsResponse(
         items=[
@@ -1035,8 +1064,23 @@ def get_subscriptions(user: AuthedUser, *, status: str | None = None) -> dict[st
     truncated = len(rows) > SUBSCRIPTIONS_ROW_CAP
     if truncated:
         rows = rows[:SUBSCRIPTIONS_ROW_CAP]
+
+    # Resolve card_id → the short get_cards ref server-side. Answering
+    # "which card pays for Netflix?" used to require the model to
+    # visually cross-match two 36-char UUIDs between this result and
+    # get_cards — same failure family as the chat_v10 transcription bug,
+    # with no fail-closed backstop (a mismatch is just a wrong prose
+    # answer). The raw ids (subscription id, card_id, client_request_id)
+    # are stripped: no agent tool consumes them (audit P3-35).
+    card_refs = _card_refs_by_id(client)
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = _strip_keys(row, ("user_id", "id", "card_id", "client_request_id"))
+        card_id = row.get("card_id")
+        item["card_ref"] = card_refs.get(card_id) if card_id else None
+        items.append(item)
     return GetSubscriptionsResponse(
-        items=[_strip_keys(row, ("user_id",)) for row in rows],
+        items=items,
         truncated=truncated,
     ).model_dump(mode="json")
 
@@ -1079,7 +1123,11 @@ def get_spending_summary(
         {"months": months, "date_from": date_from, "date_to": date_to}
     )
 
-    today = _dt.date.today()
+    # User-local "today" (users_meta.timezone, UTC fallback). A server-UTC
+    # anchor excludes east-of-UTC users' local-today rows from "this month
+    # so far" every local morning — the end-clamp below would cut them off
+    # (audit P2-7).
+    today = user_local_today(user.jwt)
     if request.date_from is not None or request.date_to is not None:
         # Explicit window. A lone date_from runs through today; a lone
         # date_to runs from the first of its month. Both supplied → the
@@ -1099,19 +1147,18 @@ def get_spending_summary(
         window_months = m
 
     client = supabase_for_user(user.jwt)
-    resp = (
+
+    def build_query() -> Any:
+        """Build a fresh windowed query per page — see calculate_total."""
         # Default-safe read via the view (DESIGN.md §8).
-        client.table("active_transactions")
-        .select("category, amount, date")
-        .gte("date", start.isoformat())
-        .lte("date", end.isoformat())
-        .range(0, RESULT_ROW_CAP)
-        .execute()
-    )
-    rows = resp.data or []
-    truncated = len(rows) > RESULT_ROW_CAP
-    if truncated:
-        rows = rows[:RESULT_ROW_CAP]
+        return (
+            client.table("active_transactions")
+            .select("category, amount, date")
+            .gte("date", start.isoformat())
+            .lte("date", end.isoformat())
+        )
+
+    rows, truncated = _fetch_aggregation_pages(build_query, cap=RESULT_ROW_CAP)
 
     # Aggregate in Python — bounded by RESULT_ROW_CAP, no GROUP BY needed.
     totals: dict[str, Decimal] = {}
@@ -1141,14 +1188,18 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
         {}
 
     Response:
-        {"items": [{"id": "...", "ref": "amex-1001", "name": "Amex Gold",
+        {"items": [{"ref": "amex-1001", "name": "Amex Gold",
                     "status": "active"}]}
 
     Each item carries a short `ref` handle (`{issuer}-{last_four}`). The
-    agent passes `ref` — not the long `id` UUID — to propose_transaction
-    / propose_subscription's `card_ref` arg. UUIDs are error-prone for an
-    LLM to copy verbatim between tool calls; the short handle is robust
-    and a slip fails closed (no resolution) rather than mis-resolving.
+    agent passes `ref` — not a UUID — to propose_transaction /
+    propose_subscription's `card_ref` arg and to the read tools'
+    `card_ref` filter. UUIDs are error-prone for an LLM to copy verbatim
+    between tool calls; the short handle is robust and a slip fails
+    closed rather than mis-resolving. The row's `id` (and
+    `client_request_id`) are deliberately NOT in the response — nothing
+    in the agent path consumes them, so a long random id in context is
+    pure transcription temptation + token cost (audit P3-35).
     """
     client = supabase_for_user(user.jwt)
     resp = (
@@ -1161,7 +1212,7 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
     rows = resp.data or []
     items: list[dict[str, Any]] = []
     for row in rows:
-        item = _strip_keys(row, ("user_id",))
+        item = _strip_keys(row, ("user_id", "id", "client_request_id"))
         item["ref"] = _card_ref(row.get("issuer"), row.get("last_four"), row.get("id"))
         items.append(item)
     return GetCardsResponse(items=items).model_dump(mode="json")
@@ -1507,7 +1558,11 @@ def propose_subscription(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     card_id = _resolve_proposal_card(client, request.card_id, request.card_ref)
 
     next_billing_date = compute_next_billing_date(
-        request.start_date, request.frequency
+        request.start_date,
+        request.frequency,
+        # User-local today: a JST user's "starting today" must hit the
+        # forward-only clamp, not the future-start branch (audit P3-29).
+        today=user_local_today(user.jwt),
     )
 
     proposal = SubscriptionProposal(
@@ -1675,6 +1730,43 @@ def _filters_from_input(payload: dict[str, Any], *, allow_pagination: bool) -> T
     return TransactionFilters.model_validate(payload)
 
 
+def _fetch_aggregation_pages(
+    build_query: Any, *, cap: int, page_size: int | None = None
+) -> tuple[list[dict[str, Any]], bool]:
+    """Page through an aggregation read, returning (rows, truncated).
+
+    Exists because PostgREST silently caps every response at `max-rows`
+    (1000 on Supabase) with no error — a single `.range(0, cap)` request
+    with cap > 1000 comes back with at most 1000 rows, the Python-side
+    sum covers an arbitrary subset, and the `len(rows) > cap` truncation
+    sentinel can never fire (the P1 wrong-money bug). Paging at
+    ≤ `max-rows` per page is the only way to actually see all rows.
+
+    `build_query` is a zero-arg callable returning a fresh filtered query
+    builder — `.range()` must be applied to a fresh builder per page
+    (the goals.py `_sum_active_transactions` precedent).
+
+    Truncation semantics: rows beyond `cap` are discarded and
+    `truncated=True` is returned, so callers keep the exact
+    partial-sum-plus-flag contract they had before.
+    """
+    if page_size is None:
+        # Read the module global at call time (not a def-time default) so
+        # tests can monkeypatch the page size.
+        page_size = AGGREGATION_PAGE_SIZE
+    rows: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        resp = build_query().range(start, start + page_size - 1).execute()
+        page = resp.data or []
+        rows.extend(page)
+        if len(rows) > cap:
+            return rows[:cap], True
+        if len(page) < page_size:
+            return rows, False
+        start += page_size
+
+
 def _strip_keys(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     """Drop redundant keys from a tool response.
 
@@ -1826,6 +1918,51 @@ def _resolve_card_ref(client: Any, ref: str) -> str | None:
     # `limit(2)` is belt-and-suspenders so a hypothetical dup resolves to
     # None (ambiguous) rather than silently picking one.
     return rows[0]["id"] if len(rows) == 1 else None
+
+
+def _card_refs_by_id(client: Any) -> dict[str, str]:
+    """Map the user's card UUIDs to their short `{issuer}-{last_four}` refs.
+
+    Used by `get_subscriptions` to annotate each row with a model-safe
+    `card_ref` instead of exposing the raw `card_id` UUID. Includes
+    non-active cards too: a paused subscription can still point at a
+    soft-deleted card, and showing its ref beats a null. RLS scopes the
+    read to the caller; one query per tool call, bounded by the <10-cards
+    v1 reality.
+    """
+    resp = client.table("cards").select("id, issuer, last_four").execute()
+    return {
+        row["id"]: _card_ref(row.get("issuer"), row.get("last_four"), row.get("id"))
+        for row in (resp.data or [])
+    }
+
+
+def _resolve_card_ref_filter(client: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a `card_ref` READ-filter to `card_id`, failing loudly.
+
+    Read filters need the opposite failure mode from proposals: a
+    proposal with an unresolvable ref degrades to cardless and the user
+    corrects it on the parse card, but a filter that silently matches
+    nothing returns `{total: "0"}` presented as exact — the model then
+    confidently tells the user they spent $0 on that card (audit P2-9).
+    So an unresolvable ref raises ValueError, which the agent loop
+    surfaces as an `is_error` tool_result the model can react to (re-call
+    get_cards, copy the ref exactly).
+
+    Returns the payload with `card_ref` removed and `card_id` injected
+    when a ref was present; unchanged otherwise.
+    """
+    ref = payload.pop("card_ref", None)
+    if ref is None:
+        return payload
+    card_id = _resolve_card_ref(client, ref)
+    if card_id is None:
+        raise ValueError(
+            f"card_ref {ref!r} does not match any of the user's active cards. "
+            "Call get_cards and copy the `ref` value exactly."
+        )
+    payload["card_id"] = card_id
+    return payload
 
 
 def _resolve_proposal_card(

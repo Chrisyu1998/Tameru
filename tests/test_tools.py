@@ -275,6 +275,49 @@ def test_calculate_total_truncation_flag_fires(authed_user_a, user_a, card_a, mo
     assert result["count"] == 2
 
 
+def test_calculate_total_pages_past_postgrest_max_rows(authed_user_a, user_a, card_a, monkeypatch):
+    """PostgREST silently caps every response at max-rows (1000), so the
+    aggregation must page — a single capped request would sum an arbitrary
+    subset with truncated=false (the P1 wrong-money bug). Shrinking the
+    page size to 2 proves rows beyond the first page are still summed."""
+    monkeypatch.setattr(tools_module, "AGGREGATION_PAGE_SIZE", 2)
+    tag = _tag()
+    for _ in range(5):
+        _seed_transaction(user_a, card_id=card_a, merchant=f"Page-{tag}", amount="1.00")
+
+    result = calculate_total(authed_user_a, merchant_contains=f"page-{tag}")
+    assert result["truncated"] is False
+    assert result["count"] == 5
+    assert Decimal(result["total"]) == Decimal("5.00")
+
+
+def test_calculate_total_filters_by_card_ref(authed_user_a, user_a, card_a):
+    """The model-facing card filter is the short get_cards ref handle —
+    a resolved ref must scope the total to that card's rows (chat_v14;
+    audit P2-9)."""
+    tag = _tag()
+    _seed_transaction(user_a, card_id=card_a, merchant=f"RefFil-{tag}", amount="12.00")
+    _seed_transaction(user_a, card_id=None, merchant=f"RefFil-{tag}", amount="99.00")
+
+    result = calculate_total(
+        authed_user_a,
+        merchant_contains=f"reffil-{tag}",
+        card_ref=_ref_for_card(user_a, card_a),
+    )
+    assert Decimal(result["total"]) == Decimal("12.00")
+    assert result["count"] == 1
+
+
+def test_calculate_total_unresolvable_card_ref_raises(authed_user_a):
+    """A ref that matches no active card must raise — for a READ filter,
+    silently matching nothing returns {total: '0'} presented as exact,
+    and the model confidently tells the user they spent $0 on that card
+    (the failure mode the chat_v10 UUID fix was about). The loop turns
+    the raise into an is_error tool_result the model can react to."""
+    with pytest.raises(ValueError, match="does not match any"):
+        calculate_total(authed_user_a, card_ref="amex-0000")
+
+
 def test_calculate_total_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
     """Verify that calculate total rls isolates users."""
     tag = _tag()
@@ -492,6 +535,38 @@ def test_get_subscriptions_strips_user_id(authed_user_a, user_a, card_a):
         assert "user_id" not in item
 
 
+def test_get_subscriptions_resolves_card_ref_and_strips_uuids(authed_user_a, user_a, card_a):
+    """Subscriptions carry a resolved `card_ref` (the get_cards handle)
+    instead of `card_id` — "which card pays for Netflix?" used to make
+    the model visually cross-match two 36-char UUIDs (chat_v14; audit
+    P3-35). Raw ids are stripped: no agent tool consumes them."""
+    _seed_subscription(
+        user_a, card_id=card_a, name=f"RefSub-{_tag()}",
+        next_billing=date.today() + timedelta(days=3),
+    )
+    result = get_subscriptions(authed_user_a)
+    assert result["items"]
+    expected_ref = _ref_for_card(user_a, card_a)
+    for item in result["items"]:
+        assert "id" not in item
+        assert "card_id" not in item
+        assert "client_request_id" not in item
+    tagged = [s for s in result["items"] if s["name"].startswith("RefSub-")]
+    assert tagged and all(s["card_ref"] == expected_ref for s in tagged)
+
+
+def test_get_subscriptions_cardless_has_null_card_ref(authed_user_a, user_a):
+    """A bank-ACH subscription (card_id NULL) renders card_ref: null."""
+    name = f"AchSub-{_tag()}"
+    _seed_subscription(
+        user_a, card_id=None, name=name,
+        next_billing=date.today() + timedelta(days=3),
+    )
+    result = get_subscriptions(authed_user_a)
+    tagged = [s for s in result["items"] if s["name"] == name]
+    assert tagged and tagged[0]["card_ref"] is None
+
+
 def test_get_subscriptions_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
     """Verify that get subscriptions rls isolates users."""
     tag = _tag()
@@ -602,11 +677,20 @@ def test_get_spending_summary_window_span_grows_with_months(authed_user_a):
     assert start_one == today.replace(day=1)
 
 
-def test_get_spending_summary_excludes_future_dated_transactions(authed_user_a, user_a, card_a):
+def test_get_spending_summary_excludes_future_dated_transactions(
+    authed_user_a, user_a, card_a, monkeypatch
+):
     """`/transactions/confirm` allows `date.today() + 1 day` for client-
     side TZ slack, so future-dated rows can legitimately exist. The
     summary's window is "spent so far" — future rows must not be
-    aggregated, or "this month" overstates spend until midnight UTC."""
+    aggregated, or "this month" overstates spend until midnight UTC.
+
+    `user_local_today` is pinned to the machine-local date the seeds use:
+    the production path resolves "today" in the user's timezone (UTC
+    fallback), which diverges from this test's `date.today()` anchor on
+    an evening run west of UTC.
+    """
+    monkeypatch.setattr(tools_module, "user_local_today", lambda _jwt: date.today())
     tag = _tag()
     # Baseline Dining total before this test seeds anything.
     before = get_spending_summary(authed_user_a, months=1)
@@ -657,17 +741,27 @@ def test_get_spending_summary_rls_isolates_users(authed_user_a, authed_user_b, u
 # ===========================================================================
 
 
-def test_get_cards_returns_active_card(authed_user_a, card_a):
-    """Verify that get cards returns active card."""
+def test_get_cards_returns_active_card(authed_user_a, user_a, card_a):
+    """Verify that get cards returns active card (identified by ref —
+    items are UUID-free since chat_v14)."""
     result = get_cards(authed_user_a)
-    card_ids = {c["id"] for c in result["items"]}
-    assert card_a in card_ids
+    refs = {c["ref"] for c in result["items"]}
+    assert _ref_for_card(user_a, card_a) in refs
 
 
 def test_get_cards_strips_user_id(authed_user_a):
     """Verify that get cards strips user id."""
     for item in get_cards(authed_user_a)["items"]:
         assert "user_id" not in item
+
+
+def test_get_cards_items_are_uuid_free(authed_user_a, card_a):
+    """No raw ids in the model-facing result: nothing in the agent path
+    consumes them, and a 36-char random string in context is pure
+    transcription temptation (chat_v10 bug class; audit P3-35)."""
+    for item in get_cards(authed_user_a)["items"]:
+        assert "id" not in item
+        assert "client_request_id" not in item
 
 
 def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
@@ -691,8 +785,8 @@ def test_get_cards_excludes_soft_deleted(authed_user_a, user_a):
         .data[0]["id"]
     )
     result = get_cards(authed_user_a)
-    visible_ids = {c["id"] for c in result["items"]}
-    assert soft_id not in visible_ids
+    visible_refs = {c["ref"] for c in result["items"]}
+    assert _ref_for_card(user_a, soft_id) not in visible_refs
 
 
 def test_get_cards_returns_multiple_cards(authed_user_a, user_a):
@@ -713,17 +807,19 @@ def test_get_cards_returns_multiple_cards(authed_user_a, user_a):
         .data[0]["id"]
     )
     result = get_cards(authed_user_a)
-    card_ids = {c["id"] for c in result["items"]}
-    assert len(card_ids) >= 2
-    assert extra_id in card_ids
+    refs = {c["ref"] for c in result["items"]}
+    assert len(refs) >= 2
+    assert _ref_for_card(user_a, extra_id) in refs
 
 
-def test_get_cards_rls_isolates_users(authed_user_a, authed_user_b, card_a, card_b):
+def test_get_cards_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_b, card_a, card_b):
     """Verify that get cards rls isolates users."""
-    a_ids = {c["id"] for c in get_cards(authed_user_a)["items"]}
-    b_ids = {c["id"] for c in get_cards(authed_user_b)["items"]}
-    assert card_a in a_ids and card_b not in a_ids
-    assert card_b in b_ids and card_a not in b_ids
+    ref_a = _ref_for_card(user_a, card_a)
+    ref_b = _ref_for_card(user_b, card_b)
+    a_refs = {c["ref"] for c in get_cards(authed_user_a)["items"]}
+    b_refs = {c["ref"] for c in get_cards(authed_user_b)["items"]}
+    assert ref_a in a_refs and ref_b not in a_refs
+    assert ref_b in b_refs and ref_a not in b_refs
 
 
 # ===========================================================================
@@ -1144,6 +1240,25 @@ def _digits4(tag: str) -> str:
     """
     digits = "".join(c for c in tag if c.isdigit())
     return (digits + "0000")[:4]
+
+def _ref_for_card(user, card_id: str) -> str:
+    """Build the short `{issuer}-{last_four}` ref for one of `user`'s cards.
+
+    Tool results are UUID-free since chat_v14, so tests identify cards in
+    results by ref; this resolves a fixture's card id to that handle via
+    an RLS-scoped read.
+    """
+    row = (
+        supabase_for_user(user.jwt)
+        .table("cards")
+        .select("issuer, last_four")
+        .eq("id", card_id)
+        .single()
+        .execute()
+        .data
+    )
+    return f"{row['issuer']}-{row['last_four']}"
+
 
 def _seed_transaction(
     user,

@@ -23,6 +23,11 @@ from app.services.digest import (
     render_email,
 )
 from app.util.language import SUPPORTED_UI_LANGUAGES, is_valid_ui_language
+import pytest
+
+# Failure-path cleanup: restore user_a's shared users_meta prefs even when asserts fail (audit P3-37).
+pytestmark = pytest.mark.usefixtures("preserve_user_a_meta")
+
 
 
 def test_is_valid_ui_language_accepts_supported_and_rejects_others():

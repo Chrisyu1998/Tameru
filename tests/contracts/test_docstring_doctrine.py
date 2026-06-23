@@ -11,7 +11,10 @@ import ast
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-SCANNED_ROOTS = (REPO_ROOT / "app", REPO_ROOT / "tests")
+# CLAUDE.md states the doctrine repo-wide; eval.py and scripts/ used to
+# escape the scan (audit P3-19).
+SCANNED_ROOTS = (REPO_ROOT / "app", REPO_ROOT / "tests", REPO_ROOT / "scripts")
+SCANNED_FILES = (REPO_ROOT / "eval.py",)
 
 
 def test_python_definitions_have_docstrings() -> None:
@@ -78,6 +81,7 @@ def _iter_python_files() -> list[Path]:
             for path in root.rglob("*.py")
             if path.name != "__init__.py" and path.resolve() != Path(__file__).resolve()
         )
+    files.extend(path for path in SCANNED_FILES if path.exists())
     return sorted(files)
 
 def _definition_kind(node: ast.AST) -> str:
