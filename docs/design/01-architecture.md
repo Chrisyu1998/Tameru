@@ -194,11 +194,26 @@ integrations. This was a real bug, not a stylistic preference:
 > migrations — so new backend code could reach prod Postgres *before its migration*, 500-ing any
 > handler that depended on a new column until the migration caught up.
 
-The fix: Railway uses its native "Wait for CI" toggle; Vercel's Git integration is disconnected and a
-`deploy-frontend` CI job (gated on `needs: [backend-test, frontend-test, migrate-prod]`) owns the
-deploy. CI owns release *ordering* — migrations land before the code that needs them. A scheduled
-`prod-health.yml` workflow runs the golden-path E2E against live prod daily and opens a deduped GitHub
-issue on failure, since push-triggered CI is structurally blind to prod breaking *between* deploys.
+The fix: **both** PaaS Git integrations are disconnected and CI owns the entire ordered release —
+`migrate-prod → deploy-backend (Railway CLI) → deploy-frontend (Vercel CLI) → e2e-deployed`. CI owns
+release *ordering*: migrations land before the code that needs them, and the backend deploys before
+the frontend so a new-frontend request never hits an old backend (the contract-skew direction that
+once deadlocked a release).
+
+> **Why backend-from-CI replaced Railway's "Wait for CI" toggle (2026-06).** The toggle made Railway
+> wait for the *whole* check suite — including `e2e-deployed` — before deploying. But e2e tests the
+> *deployed* prod, which still ran the **old** backend until Railway deployed. A backward-incompatible
+> change (a new field the new frontend sends that the old `extra=forbid` backend rejects) deadlocked:
+> e2e red → Railway never deploys → e2e keeps testing the old backend → red forever (the Tier-3
+> `region` incident). Deploying the backend from a CI job *before* e2e makes e2e a true post-deploy
+> gate against the new backend; a red e2e means roll-forward, not deadlock, because the backend is
+> already live. The `digest-cron` Railway service stays on its own integration — it isn't
+> contract-coupled to the frontend. Requires a `RAILWAY_TOKEN` project-token secret and the `Tameru`
+> service's GitHub source disconnected so Railway doesn't also auto-deploy.
+
+A scheduled `prod-health.yml` workflow runs the golden-path E2E against live prod daily and opens a
+deduped GitHub issue on failure, since push-triggered CI is structurally blind to prod breaking
+*between* deploys.
 
 ---
 
