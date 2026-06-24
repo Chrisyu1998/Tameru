@@ -9,6 +9,11 @@ Each item must be checkable from outside (no "looks good" language).
 
 - [ ] `main` is green on the `migrate-prod` job (CI is the only sanctioned
       writer to prod `schema_migrations`; memory.md 2026-05-22).
+- [ ] **Backend deploys from CI** (`deploy-backend` job, Railway CLI): the
+      `RAILWAY_TOKEN` repo secret is set (a Railway *project* token scoped to
+      production), and the `Tameru` Railway service's GitHub source is
+      **disconnected** so Railway does not also auto-deploy on push (which
+      would double-deploy). `digest-cron` stays on its own integration.
 - [ ] Railway web service: lifespan boot check passes (every entry in
       `_REQUIRED_ENV_VARS` is set). Check by hitting
       `$BACKEND_PUBLIC_URL/healthz` and tailing the cold-start log line
@@ -122,8 +127,10 @@ Each item must be checkable from outside (no "looks good" language).
 
 1. `git log --oneline -10` to find the suspect commit.
 2. `git revert <sha>` + push to `main`.
-3. Wait for CI green + Vercel + Railway redeploys (~10 min). The
-   `e2e-deployed` job will catch a regression that survives the revert.
+3. Wait for the CI pipeline (~10 min): `migrate-prod → deploy-backend
+   (Railway) → deploy-frontend (Vercel) → e2e-deployed`. Both deploys run
+   from CI now; the `e2e-deployed` job runs against the redeployed backend
+   and will catch a regression that survives the revert.
 4. Text the friend when fixed.
 
 **Migrations are not auto-rollback-safe.** v1 migrations are additive

@@ -189,9 +189,68 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: supabase db push --password "${{ secrets.SUPABASE_DB_PASSWORD }}"
 
+  deploy-backend:
+    name: Deploy backend to Railway (prod)
+    needs: [backend-test, frontend-test, migrate-prod]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    # CI owns the backend deploy (was: Railway's native "Wait for CI"
+    # toggle). The toggle created a circular dependency: Railway waited
+    # for the WHOLE check suite — including e2e-deployed — to go green
+    # before deploying, but e2e tests the *deployed* prod, which still
+    # ran the OLD backend until Railway deployed. A backward-incompatible
+    # change (e.g. a new field the new frontend sends that the old
+    # `extra=forbid` backend rejects) then deadlocked: e2e red → Railway
+    # never deploys → e2e keeps testing the old backend → red forever
+    # (the 2026-06 Tier-3 `region` incident). Deploying from CI here,
+    # ordered migrate-prod → deploy-backend → deploy-frontend → e2e,
+    # makes e2e a true post-deploy gate against the NEW backend, and a
+    # red e2e can no longer wedge the deploy (the backend is already
+    # live; a failure means roll-forward, not deadlock). Mirrors the
+    # Vercel-from-CI move (deploy-frontend below).
+    #
+    # OPERATOR PREREQUISITES (must be done before this job runs for the
+    # first time — see the PR description / docs/design/01-architecture.md):
+    #   1. `RAILWAY_TOKEN` repo secret = a Railway *project* token scoped
+    #      to the production environment (Railway → project → Settings →
+    #      Tokens). Project tokens are non-interactive and imply the
+    #      project + environment, so no `railway link` is needed.
+    #   2. Disconnect the `Tameru` service's GitHub source in Railway
+    #      (service → Settings → Source → Disconnect) so Railway does NOT
+    #      also auto-deploy on push — otherwise every push double-deploys
+    #      (Railway's webhook AND this job). `railway up` uploads the repo
+    #      and builds via the service's Dockerfile builder (railway.json),
+    #      so a connected GitHub source isn't required. Leave the
+    #      `digest-cron` service on its own integration — it isn't
+    #      contract-coupled to the frontend.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      # `railway up` (no --detach) uploads the checked-out repo, builds
+      # the Docker image on Railway, waits for the deploy to roll out and
+      # the /healthz check (railway.json) to pass, then exits with the
+      # deploy status — so a failed build/healthcheck fails this job, and
+      # there's no false-green-during-rollout (the job blocks until the
+      # NEW container is serving, unlike a bare 200 poll where the old
+      # container answers until the new one is ready — memory 2026-05-28).
+      # `--ci` selects non-interactive log streaming.
+      - name: Deploy to Railway (build + wait for healthcheck)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service Tameru --ci
+
   deploy-frontend:
     name: Deploy frontend to Vercel (prod)
-    needs: [backend-test, frontend-test, migrate-prod]
+    # Backend-first: deploy-backend must land before the new frontend so
+    # a new-frontend request never hits an old backend (the contract-skew
+    # direction that caused the `region` deadlock — memory 2026-06-06).
+    # The transient window is new-backend + old-frontend, which the
+    # backward-compatibility discipline keeps safe.
+    needs: [migrate-prod, deploy-backend]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -228,7 +287,8 @@ jobs:
       # vars when the Vercel side didn't have them set, and `spawn sh
       # ENOENT` inside `vercel build` on the runner shell. Building
       # server-side eliminates both. CI still gates the deploy via the
-      # `needs:` chain above — tests must pass before this step runs.
+      # `needs:` chain above — tests must pass and the backend must be
+      # deployed before this step runs.
       - name: Deploy to Vercel (Vercel builds server-side)
         working-directory: .
         run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
@@ -291,10 +351,13 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      # Railway has "Wait for CI" on (memory.md 2026-05-22), so the new
-      # image is rolling out when this job starts. Poll /healthz until
-      # we see a 200 from the app (not the x-railway-fallback "train
-      # has not arrived" page). 5-minute ceiling.
+      # Fast liveness confirm. The new backend is ALREADY live by now —
+      # the deploy-backend job (in this job's transitive `needs` via
+      # deploy-frontend) blocks until Railway's /healthz passes on the
+      # new container — so this poll normally returns 200 on the first
+      # attempt; it only loops if Railway's edge needs a moment to route.
+      # Poll /healthz until we see a 200 from the app (not the
+      # x-railway-fallback "train has not arrived" page). 5-minute ceiling.
       #
       # `curl -w "%{http_code}"` writes ONLY the status code (no
       # newlines, no multi-line JSON), so `$status` stays simple and
@@ -407,9 +470,11 @@ jobs:
           node-version: "20"
 
       # Same healthcheck shape as the e2e-deployed job — see that step's
-      # comment for the curl-options rationale. /healthz is GET-only
-      # (`@app.get("/healthz")`); a HEAD request returns 405, so we use
-      # GET and capture status + headers in one shot.
+      # comment for the curl-options rationale and why the new backend is
+      # already live by this point (deploy-backend deployed it
+      # synchronously). /healthz is GET-only (`@app.get("/healthz")`); a
+      # HEAD request returns 405, so we use GET and capture status +
+      # headers in one shot.
       - name: Wait for Railway healthcheck
         env:
           HEALTHCHECK_URL: ${{ secrets.SMOKE_API_URL }}/healthz
