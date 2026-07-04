@@ -150,6 +150,18 @@
   "chat": {
     "back": "戻る",
     "newChat": "新しいチャット",
+    "recap": {
+      "title": "今週",
+      "above": "週平均を {{delta}} 上回っています",
+      "below": "週平均を {{delta}} 下回っています",
+      "inline": "週平均とほぼ同じです",
+      "baselineStart": "ここから基準ができていきます",
+      "topAbove": "最多カテゴリー：{{cat}}（{{amount}}）· いつもより {{delta}} 多い",
+      "topBelow": "最多カテゴリー：{{cat}}（{{amount}}）· いつもより {{delta}} 少ない",
+      "topInline": "最多カテゴリー：{{cat}}（{{amount}}）· いつもと同程度",
+      "expand": "今週の振り返りを表示",
+      "collapse": "今週の振り返りを閉じる"
+    },
     "placeholder": "入力またはマイクをタップ",
     "thinking": "考え中…",
     "offline": "オフライン — 再接続時に送信されます。",
@@ -558,6 +570,8 @@
       "desc": "tameru があなたに話しかける方法 — インターフェース、チャットの返答、週次ダイジスト。このデバイスの言語がデフォルト。"
     },
     "theme": {
+      "label": "ダークモード",
+      "desc": "暗い配色を使用します。デフォルトはライト。",
       "switchToLight": "ライトモードに切り替え",
       "switchToDark": "ダークモードに切り替え"
     }
@@ -581,7 +595,8 @@
       "notifications": "通知",
       "privacy": "プライバシー",
       "signOut": "サインアウト",
-      "language": "言語"
+      "language": "言語",
+      "appearance": "外観"
     },
     "notifications": {
       "ariaLabel": "通知",
@@ -599,6 +614,9 @@
       "confirm": "サインアウト"
     },
     "languageSheet": {
+      "done": "完了"
+    },
+    "appearanceSheet": {
       "done": "完了"
     }
   },

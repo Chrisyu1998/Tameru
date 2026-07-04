@@ -23,6 +23,7 @@ import { ExportDataButton } from "@/components/ExportDataButton";
 import { PrivacyDisclosure } from "@/components/PrivacyDisclosure";
 import { TimezoneRow } from "@/components/TimezoneRow";
 import { LanguageRow } from "@/components/LanguageRow";
+import { ThemeRow } from "@/components/ThemeRow";
 
 /**
  * Render a currency code as "USD · $" using Intl. The home-currency invariant
@@ -236,8 +237,9 @@ function AccountPanel() {
       <p className="mt-3 px-1 text-[0.78rem] text-ink-tertiary">
         {t("settings.account.immutableNote")}
       </p>
-      <div className="mt-5 rounded-2xl border border-hairline bg-surface px-4">
+      <div className="mt-5 divide-y divide-hairline rounded-2xl border border-hairline bg-surface px-4">
         <LanguageRow />
+        <ThemeRow />
       </div>
     </div>
   );

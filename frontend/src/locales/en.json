@@ -150,6 +150,18 @@
   "chat": {
     "back": "back",
     "newChat": "new chat",
+    "recap": {
+      "title": "this week",
+      "above": "{{delta}} above your weekly average",
+      "below": "{{delta}} below your weekly average",
+      "inline": "in line with your weekly average",
+      "baselineStart": "your baseline starts here",
+      "topAbove": "{{cat}} led at {{amount}} · {{delta}} above usual",
+      "topBelow": "{{cat}} led at {{amount}} · {{delta}} below usual",
+      "topInline": "{{cat}} led at {{amount}} · in line with usual",
+      "expand": "show weekly recap",
+      "collapse": "hide weekly recap"
+    },
     "placeholder": "type or tap the mic",
     "thinking": "thinking…",
     "offline": "offline — messages will send when you reconnect.",
@@ -558,6 +570,8 @@
       "desc": "how tameru talks to you — the interface, chat replies, and your weekly digest. defaults to this device's language."
     },
     "theme": {
+      "label": "dark mode",
+      "desc": "use a darker color scheme. defaults to light.",
       "switchToLight": "switch to light mode",
       "switchToDark": "switch to dark mode"
     }
@@ -581,7 +595,8 @@
       "notifications": "notifications",
       "privacy": "privacy",
       "signOut": "sign out",
-      "language": "language"
+      "language": "language",
+      "appearance": "appearance"
     },
     "notifications": {
       "ariaLabel": "notifications",
@@ -599,6 +614,9 @@
       "confirm": "sign out"
     },
     "languageSheet": {
+      "done": "done"
+    },
+    "appearanceSheet": {
       "done": "done"
     }
   },
