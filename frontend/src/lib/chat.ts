@@ -337,6 +337,14 @@ export interface ParseDraft {
   clientRequestId?: string;
   notes?: string | null;
   geminiSuggestion?: string | null;
+  /**
+   * Create-surface attribution — `"nlp"` for chat-typed drafts (the default
+   * when unset) and `"receipt_photo"` for drafts from a scanned receipt
+   * (POST /receipts/parse). Round-trips to POST /transactions/confirm so the
+   * committed row's `source` is correct. The local heuristic parser leaves it
+   * undefined → treated as `"nlp"`.
+   */
+  source?: "nlp" | "receipt_photo";
 }
 
 /* ─── Heuristic parser ───────────────────────────────────────────── */

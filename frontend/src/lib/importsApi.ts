@@ -8,7 +8,7 @@
  * (callbacks, not a Promise<T>).
  */
 
-import { apiFetch, ApiError, apiBaseUrl } from './api';
+import { apiFetch, ApiError, apiBaseUrl, maybeFlagDisplacement } from './api';
 import { useAppStore } from '../store';
 
 export type SignConvention = 'charges_positive' | 'charges_negative';
@@ -100,6 +100,11 @@ export async function previewCsv(
   const text = await resp.text();
   const parsed: unknown = text ? JSON.parse(text) : null;
   if (!resp.ok) {
+    // This multipart path bypasses apiJson, so latch a displaced-device 401
+    // ourselves (matching the receipt-upload path) — otherwise a
+    // DEVICE_DISPLACED / MISSING_DEVICE_ID on a CSV preview never pops the
+    // global single-active-device modal.
+    maybeFlagDisplacement(resp.status, parsed);
     throw new ApiError(
       resp.status,
       parsed,

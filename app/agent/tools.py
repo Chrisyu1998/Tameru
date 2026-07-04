@@ -40,7 +40,6 @@ from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.integrations.card_lookup import lookup_card
 from app.integrations.card_regions import region_for_currency
-from app.integrations.gemini import GeminiError, categorize
 from app.models.cards import (
     CardIssuer,
     CardLookupResult,
@@ -59,10 +58,13 @@ from app.models.transactions import (
     DEFAULT_LIMIT,
     MAX_LIMIT,
     TransactionFilters,
-    TransactionProposal,
 )
 from app.prompts.categories import ALLOWED_CATEGORIES
-from app.services.transactions import apply_transaction_filters, list_transactions
+from app.services.transactions import (
+    apply_transaction_filters,
+    build_transaction_proposal,
+    list_transactions,
+)
 from app.util.timezone import user_local_today
 
 # Hard cap on rows fetched for an aggregation. Above this we still return
@@ -1284,50 +1286,32 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     """
     request = ProposeTransactionRequest.model_validate(kwargs)
 
-    # No-date path: the agent omits `date`, and the server fills the user's
-    # local "today" deterministically rather than trusting the model to copy
-    # the injected anchor. This is the fix for the "wrong date when I don't
-    # say one" class — the LLM never touches the default date. Explicit /
-    # relative dates still come from the model (request.date is set).
-    resolved_date = request.date or user_local_today(user.jwt)
-
-    if request.category is not None:
-        category = request.category
-        gemini_suggestion: str | None = None
-    else:
-        try:
-            suggestion = categorize(request.merchant, user)
-            category = suggestion.category
-            gemini_suggestion = suggestion.category
-        except GeminiError:
-            category = "Other"
-            gemini_suggestion = None
-
+    # Resolve the card here — the agent passes the short `card_ref` handle
+    # (robust against the UUID-transcription slips the Day 22 eval surfaced);
+    # a direct/test caller may pass a `card_id` UUID. An unresolvable
+    # ref/UUID drops to None so the parse card prompts the user to pick
+    # rather than failing at commit on `_assert_card_owned`. The shared
+    # builder takes the already-resolved card_id.
     client = supabase_for_user(user.jwt)
     card_id = _resolve_proposal_card(client, request.card_id, request.card_ref)
 
-    # Carry the merchant through in its display form (validator already
-    # stripped leading/trailing whitespace). The §8.2 schema says
-    # transactions.merchant is "as entered or parsed" — the case-preserving
-    # value the user sees in their ledger. normalize_merchant() lowercases
-    # for the merchant_category JOIN key (§8.4), which is a different
-    # column with a different purpose; the confirm route handles that
-    # normalization itself when it upserts the past-correction row
-    # (app/routes/transactions.py:_upsert_merchant_correction), and
-    # categorize() normalizes internally for its own cache lookup. Pre-
-    # normalizing here would defeat Day 9c's canonicalization win — the
-    # whole point is that Claude picks "Kentucky Fried Chicken" from the
-    # top_user_merchants block, and the user should see that exact form
-    # on the parse card, not "kentucky fried chicken".
-    proposal = TransactionProposal(
+    # Date defaulting, categorization (+ the frozen `gemini_suggestion`
+    # baseline), and the `client_request_id` mint all live in
+    # build_transaction_proposal — shared with the receipt-photo path so the
+    # two create surfaces can't drift. The merchant is carried through in its
+    # display form (the request validator already stripped whitespace);
+    # normalization for the §8.4 merchant_category key happens at confirm
+    # time, not here (Day 9c canonicalization — the user should see
+    # "Kentucky Fried Chicken" on the parse card, not "kentucky fried chicken").
+    proposal = build_transaction_proposal(
+        user,
         merchant=request.merchant,
         amount=request.amount,
-        date=resolved_date,
+        date=request.date,
         card_id=card_id,
-        category=category,
+        category=request.category,
         notes=request.notes,
-        gemini_suggestion=gemini_suggestion,
-        client_request_id=uuid4(),
+        source="nlp",
     )
     return proposal.model_dump(mode="json")
 

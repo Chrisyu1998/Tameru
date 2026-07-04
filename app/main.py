@@ -22,6 +22,7 @@ from app.routes import goals as goals_routes
 from app.routes import imports as imports_routes
 from app.routes import memory as memory_routes
 from app.routes import preferences as preferences_routes
+from app.routes import receipts as receipts_routes
 from app.routes import subscriptions as subscriptions_routes
 from app.routes import transactions as transactions_routes
 from app.routes import export as export_routes
@@ -331,6 +332,7 @@ app.include_router(memory_routes.router)
 app.include_router(goals_routes.router)
 app.include_router(subscriptions_routes.router)
 app.include_router(imports_routes.router)
+app.include_router(receipts_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(preferences_routes.router)
 app.include_router(export_routes.router)

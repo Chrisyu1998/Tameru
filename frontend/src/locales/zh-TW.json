@@ -169,6 +169,7 @@
     "dismiss": "關閉",
     "send": "傳送",
     "recordVoice": "錄製語音",
+    "captureReceipt": "掃描收據",
     "emptyState": {
       "heading": "告訴我你花了什麼",
       "body": "輸入或說出來，我來整理其餘的。也可以請我編輯或比較。",
@@ -648,7 +649,7 @@
     "disclosure": {
       "aiProvidersHeading": "AI 提供商",
       "aiProvidersAnthropicParagraph": "當你與 tameru 聊天時 — 新增交易、提問或其他操作 — 你的訊息會傳送至 anthropic。卡片獎勵倍率查詢也會傳送至 anthropic，僅包含公開的卡片名稱及末四碼，絕不包含你的交易資料。anthropic 預設保留期限為 30 天（信任與安全審查），已針對 tameru 組織申請零資料保留，申請通過後將降為零。anthropic 在任何方案下均不使用 API 資料進行模型訓練。",
-      "aiProvidersGeminiParagraph": "我們也使用 google gemini 付費方案為每筆交易選擇分類 — 僅將商店名稱及金額傳送至 gemini，不包含其他資料。gemini 也用於解析 csv 匯入及收據照片。google 付費方案不使用 API 資料進行訓練；免費方案則會，因此我們從不使用免費方案。",
+      "aiProvidersGeminiParagraph": "我們也使用 google gemini 付費方案為每筆交易選擇分類 — 為此僅會傳送商店名稱與金額。當你掃描收據時，照片本身會傳送至 gemini（可能包含明細、店家地址或部分卡號）；照片僅用於讀取商店名稱、總金額與日期，且不會被儲存。gemini 也以相同方式解析 csv 匯入。google 付費方案不使用 API 資料進行訓練；免費方案則會，因此我們從不使用免費方案。",
       "analyticsHeading": "產品分析",
       "analyticsParagraph1": "我們使用 posthog（美國雲端）僅計算結構性事件：聊天會話開始與結束、功能使用、上手步驟、每週摘要開啟及顯示的錯誤。我們絕不傳送交易金額、商店名稱、卡片詳情或你在聊天中詢問的文字內容。",
       "analyticsParagraph2": "上方的切換開關可立即停止新事件的傳送。已計算的資料將保留在 posthog 中，直到你要求我們刪除為止。"

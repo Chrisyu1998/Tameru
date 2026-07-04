@@ -38,9 +38,14 @@ class TransactionProposal(BaseModel):
     Keeping one class means the tool and the endpoint cannot drift on wire
     shape. If they need to diverge later, split then — not pre-emptively.
 
-    There is no `source` field — the server hardcodes `"nlp"` on the
-    confirm path. CSV import and the pg_cron auto-logger write at the SQL
-    layer with their own `source` values.
+    `source` is `"nlp"` for chat-typed proposals (the default) and
+    `"receipt_photo"` for the receipt-photo path (`POST /receipts/parse` →
+    `build_transaction_proposal(..., source="receipt_photo")`). It is an
+    enum-constrained `Literal`, not a free string, so a client can never
+    write `"csv_import"` / `"auto_logged"` (those write at the SQL layer with
+    their own dedup semantics — a client-set value there would be abuse). The
+    confirm route reads `proposal.source` verbatim. CSV import and the
+    pg_cron auto-logger still write their own `source` at the SQL layer.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -53,6 +58,7 @@ class TransactionProposal(BaseModel):
     notes: str | None = None
     gemini_suggestion: str | None = None
     client_request_id: UUID
+    source: Literal["nlp", "receipt_photo"] = "nlp"
 
     @field_validator("merchant")
     @classmethod

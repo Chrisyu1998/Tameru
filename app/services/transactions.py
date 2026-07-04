@@ -22,16 +22,22 @@ what guarantees that's safe.
 
 from __future__ import annotations
 
-from typing import Any
+import datetime as _dt
+from decimal import Decimal
+from typing import Any, Literal
+from uuid import UUID, uuid4
 
 from app.auth import AuthedUser
 from app.db import supabase_for_user
+from app.integrations.gemini import GeminiError, categorize
 from app.models.transactions import (
     MAX_LIMIT,
     TransactionFilters,
     TransactionListResponse,
+    TransactionProposal,
     TransactionRow,
 )
+from app.util.timezone import user_local_today
 
 
 def apply_transaction_filters(query: Any, filters: TransactionFilters) -> Any:
@@ -102,3 +108,74 @@ def list_transactions(
 
     items = [TransactionRow.model_validate(row) for row in rows]
     return TransactionListResponse(items=items, has_more=has_more)
+
+
+def build_transaction_proposal(
+    user: AuthedUser,
+    *,
+    merchant: str,
+    amount: Decimal,
+    date: _dt.date | None = None,
+    card_id: str | UUID | None = None,
+    category: str | None = None,
+    notes: str | None = None,
+    source: Literal["nlp", "receipt_photo"] = "nlp",
+) -> TransactionProposal:
+    """Build a `TransactionProposal` from resolved fields.
+
+    The shared core of Day 9's `propose_transaction` agent tool (chat) and the
+    `POST /receipts/parse` route (receipt photo), so the two create surfaces
+    cannot drift on how date defaulting, categorization, and the
+    `client_request_id` mint work. Read-only + construct — writes nothing (the
+    `propose_transaction` write-invariant test depends on that staying true).
+
+    Behavior contract (identical to the logic that was inline in
+    `propose_transaction`):
+
+      * `date` None → filled with `user_local_today(user.jwt)` (the caller's
+        local calendar date, resolved under RLS in `users_meta.timezone`, UTC
+        fallback). A supplied `date` is used verbatim. The default path never
+        routes the date through an LLM (the fix for the "wrong date when I
+        don't say one" class).
+      * `category` supplied → used as-is with `gemini_suggestion=None` (no
+        Gemini baseline to learn against). `category` None →
+        `categorize(merchant, user)`; on success set both `category` and
+        `gemini_suggestion` to the result (they start equal and diverge only
+        when the user edits on the parse card — that divergence is the signal
+        the confirm route's `merchant_category` upsert consumes). On
+        `GeminiError`, fall back to `category="Other"`, `gemini_suggestion=None`
+        (the categorize call already wrote its own `ai_call_log` row).
+      * `card_id` is already resolved by the caller — chat resolves the short
+        `card_ref` handle to a UUID via `_resolve_proposal_card`; the receipt
+        path has no card and passes None. An unresolved/absent card stays None
+        so the parse card prompts the user to pick.
+      * `source` is `"nlp"` (chat) or `"receipt_photo"` (receipts). It is
+        enum-constrained on the model.
+      * `client_request_id` is minted fresh so every proposal is idempotent at
+        `POST /transactions/confirm`.
+    """
+    resolved_date = date or user_local_today(user.jwt)
+
+    if category is not None:
+        resolved_category = category
+        gemini_suggestion: str | None = None
+    else:
+        try:
+            suggestion = categorize(merchant, user)
+            resolved_category = suggestion.category
+            gemini_suggestion = suggestion.category
+        except GeminiError:
+            resolved_category = "Other"
+            gemini_suggestion = None
+
+    return TransactionProposal(
+        merchant=merchant,
+        amount=amount,
+        date=resolved_date,
+        card_id=card_id,
+        category=resolved_category,
+        notes=notes,
+        gemini_suggestion=gemini_suggestion,
+        client_request_id=uuid4(),
+        source=source,
+    )
