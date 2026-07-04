@@ -2,7 +2,7 @@
 
 ## Goal
 
-Labeling an issue `claude-plan` makes Claude Code post a **design plan as a comment** — restated goal, explicit invariant check against CLAUDE.md, clarifying questions, step breakdown, **no code**. Replying and applying `plan-approved` makes it open a **draft PR** implementing the approved plan. The human gates are exactly the two judgment points: plan approval and merge. Combined with Day 30, this completes the pipeline: nightly eval detects drift → issue auto-filed → you label `claude-plan` → plan comment → you approve → draft PR → eval gate + CI + your review.
+Labeling an issue `claude-plan` makes Claude Code post a **design plan as a comment** — restated goal, explicit invariant check against CLAUDE.md, clarifying questions, step breakdown, **no code**. Replying and applying `plan-approved` makes it open a **draft PR** implementing the approved plan. The human gates are exactly the two judgment points: plan approval and merge. Combined with Day 30, this completes the pipeline: the weekly eval detects drift → issue auto-filed → you label `claude-plan` → plan comment → you approve → draft PR → eval gate + CI + your review.
 
 ## Depends on
 

@@ -1,0 +1,258 @@
+name: Weekly eval
+
+# Scheduled model-drift detector. Runs the full eval suite weekly against
+# the env-resolved production models; per-PR CI is structurally blind to
+# model drift under UNCHANGED code (the chat + Gemini models are resolved
+# from env — CLAUDE.md model table — so a provider can change behavior with
+# zero commits). The corpus, prompts, thresholds, and judge are byte-for-byte
+# the same as ci.yml's eval-gate, so a score drop is attributable to the
+# model, not the dataset.
+#
+# Standalone file, NOT `schedule:` bolted onto ci.yml — memory.md 2026-05-28
+# documents why that runs the wrong jobs (ci.yml's post-deploy needs:/if:
+# chain skips exactly the jobs a scheduled run wants). Mirrors prod-health.yml's
+# standalone-scheduled + deduped-issue-on-failure shape.
+
+on:
+  # Weekly, Sunday 07:00 UTC — clear of the Monday digest cron, the daily
+  # 11:00 UTC prod-health, and Day 33b's weekly prod-to-eval. Tune freely.
+  schedule:
+    - cron: "0 7 * * 0"
+  # Hand-trigger for "check for drift now" + the done-when local tests.
+  workflow_dispatch:
+
+# A manual dispatch overlapping the scheduled fire must not run two paid
+# eval passes for the same week; don't cancel one already in flight.
+concurrency:
+  group: weekly-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  eval:
+    name: Weekly eval (model-drift detector)
+    runs-on: ubuntu-latest
+    # Single job (vs prod-health's two): the issue-filing step reads the
+    # per-run JSON from the workspace, so it must share the runner with the
+    # eval step — a separate `needs:` job gets a fresh runner with no files.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Apply migrations to local stack
+        run: supabase db reset --no-seed
+
+      - name: Install backend deps
+        run: pip install -e ".[dev]"
+
+      - name: Seed eval fixtures
+        env:
+          EVAL_USER_PASSWORD: ${{ secrets.EVAL_USER_PASSWORD }}
+        run: python scripts/seed_eval_fixtures.py
+
+      - name: Run eval suite
+        id: eval
+        env:
+          # Separate eval-only keys with a tight monthly quota set in the
+          # Anthropic / Google dashboards (the dashboard is the authoritative
+          # budget). The weekly run adds ~4 suite runs/month to this meter.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY_EVAL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_EVAL }}
+          GEMINI_MODEL_DEFAULT: gemini-2.5-flash
+          EVAL_USER_PASSWORD: ${{ secrets.EVAL_USER_PASSWORD }}
+          # Judge runs on EVERY weekly run (no day-of-week gate) — EVAL_JUDGE
+          # defaults on in eval.py. ~20 short Sonnet calls/run on the eval key.
+          ANTHROPIC_JUDGE_MODEL: claude-sonnet-4-6
+        run: python eval.py --eval=all
+
+      - name: Upload per-run eval JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-eval-run
+          path: evals/runs/*.json
+          if-no-files-found: warn
+
+      - name: File / update eval-regression issue
+        # Gate on the eval step SPECIFICALLY, not job-level failure(): an
+        # infra failure (Supabase didn't boot, pip died) is not model drift
+        # and must not file a bogus eval-regression issue (GitHub still emails
+        # the repo owner on a failed scheduled run). The `always() &&` prefix
+        # is load-bearing — a bare `if: steps.eval.outcome == 'failure'` is
+        # implicitly ANDed with success(), so it would be SKIPPED on the very
+        # failure it's meant to catch.
+        if: always() && steps.eval.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const label = 'eval-regression';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // Gate floors — a DISPLAY mirror of THRESHOLDS in eval.py. The
+            // `breaches` list in the run JSON is authoritative; these only
+            // annotate the breached score with its floor. If they drift, the
+            // worst case is a stale floor number in the issue body.
+            const GATES = {
+              'categorization.accuracy': 0.88,
+              'chat_extraction.propose_transaction.amount': 0.93,
+              'chat_extraction.propose_subscription.row_pass': 0.85,
+              'multi_hop.tool_sequence': 0.85,
+            };
+
+            // How to find failing rows per gated score key (field names from
+            // eval.py's per-suite per_row dicts). Natural keys only — the
+            // corpus has no per-row id.
+            const FAIL_SPEC = {
+              'categorization.accuracy': {
+                key: (r) => r.merchant,
+                fails: (r) => r.pass === false,
+                detail: (r) => `got "${r.got}" != expected "${r.expected}"`,
+              },
+              'chat_extraction.propose_transaction.amount': {
+                key: (r) => r.user_message,
+                fails: (r) => r.expected_tool === 'propose_transaction' && r.amount_pass === false,
+                detail: (r) => r.detail || r.error || `got_tool=${r.got_tool}`,
+              },
+              'chat_extraction.propose_subscription.row_pass': {
+                key: (r) => r.user_message,
+                fails: (r) => r.expected_tool === 'propose_subscription' && r.pass === false,
+                detail: (r) => r.detail || r.error || `got_tool=${r.got_tool}`,
+              },
+              'multi_hop.tool_sequence': {
+                key: (r) => r.prompt,
+                fails: (r) => r.sequence_pass === false,
+                detail: (r) => {
+                  const got = (r.actual_tool_sequence || []).map((s) => s.name);
+                  return `expected ${JSON.stringify(r.expected_tool_sequence)}, got ${JSON.stringify(got)}`;
+                },
+              },
+            };
+
+            const MAX_ROWS = 15; // cap per suite; the artifact has the rest
+
+            function freshestRun() {
+              const dir = 'evals/runs';
+              let files;
+              try {
+                files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+              } catch (e) {
+                return null;
+              }
+              if (files.length === 0) return null;
+              files.sort((a, b) =>
+                fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
+              try {
+                return JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'));
+              } catch (e) {
+                return null;
+              }
+            }
+
+            const payload = freshestRun();
+            let body;
+            if (!payload || !Array.isArray(payload.breaches) || payload.breaches.length === 0) {
+              // Eval errored before writing a usable JSON (or failed for a
+              // reason that isn't a gate breach). Don't crash — file a thin
+              // body pointing at the run log.
+              body = [
+                '**Weekly eval** failed, but no gate-breach detail could be read from the run (the eval may have errored before writing `evals/runs/*.json`).',
+                '',
+                `- Run: ${runUrl}`,
+                '- Artifact: `weekly-eval-run`',
+                '',
+                'See the run log. If the next scheduled run is green, this was a transient provider blip — close this issue.',
+              ].join('\n');
+            } else {
+              const lines = [];
+              lines.push('**Weekly eval gate breach** — model drift suspected. Corpus, prompts, and thresholds are unchanged from the last green run, so the variable is the env-resolved model.');
+              lines.push('');
+              lines.push(`- Run: ${runUrl}`);
+              lines.push('- Artifact: `weekly-eval-run` (full per-run JSON)');
+              lines.push(`- Model: \`${payload.model}\` · commit \`${String(payload.git_sha || '').slice(0, 7)}\` · ${payload.timestamp}`);
+              lines.push('');
+              lines.push('## Breached gates');
+              for (const breach of payload.breaches) {
+                const score = payload.scores ? payload.scores[breach] : undefined;
+                const scoreStr = typeof score === 'number' ? score.toFixed(3) : String(score);
+                const gate = GATES[breach];
+                const gateStr = gate != null ? ` (gate ${gate.toFixed(2)})` : '';
+                lines.push(`- \`${breach}\` — ${scoreStr}${gateStr}`);
+              }
+              lines.push('');
+              lines.push('## Failing rows');
+              for (const breach of payload.breaches) {
+                const spec = FAIL_SPEC[breach];
+                const suite = breach.split('.')[0];
+                const result = payload.results && payload.results[suite];
+                lines.push(`### \`${breach}\``);
+                if (!spec || !result || !Array.isArray(result.rows)) {
+                  lines.push('_See the `weekly-eval-run` artifact for per-row detail._');
+                  lines.push('');
+                  continue;
+                }
+                const failing = result.rows.filter(spec.fails);
+                if (failing.length === 0) {
+                  lines.push('_No per-row failures isolated — see the artifact._');
+                  lines.push('');
+                  continue;
+                }
+                for (const r of failing.slice(0, MAX_ROWS)) {
+                  lines.push(`- \`${spec.key(r)}\` — ${spec.detail(r)}`);
+                }
+                if (failing.length > MAX_ROWS) {
+                  lines.push(`- …and ${failing.length - MAX_ROWS} more (see artifact).`);
+                }
+                lines.push('');
+              }
+              lines.push('---');
+              lines.push('If the next scheduled run is green, this was a transient provider blip (e.g. a 5xx burst) — close this issue. We do not partition infra-vs-drift; a one-off failure just retries next week.');
+              lines.push('');
+              lines.push('To hand this to the plan loop, apply the `claude-plan` label. (Not auto-applied — human triage decides whether this is plan-worthy.)');
+              body = lines.join('\n');
+            }
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Weekly eval: gate breach (model drift?)',
+                labels: [label],
+                body,
+              });
+            }
+
+      - name: Stop Supabase stack
+        if: always()
+        run: supabase stop --no-backup

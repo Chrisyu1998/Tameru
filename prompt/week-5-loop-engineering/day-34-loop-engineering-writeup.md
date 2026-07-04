@@ -7,7 +7,7 @@
 ## Read first
 
 - https://addyosmani.com/blog/loop-engineering/ — the primitives and the warnings; the doc quotes its framing accurately rather than from memory.
-- The shipped artifacts being described: `.github/workflows/nightly-eval.yml`, `claude-plan.yml`, `prod-to-eval.yml`, `prod-health.yml`, `eval.py` (quarantine), `app/services/hygiene.py`, `memory.md` (now committed), CLAUDE.md, `evals/prod_patterns.json`.
+- The shipped artifacts being described: `.github/workflows/weekly-eval.yml`, `claude-plan.yml`, `prod-to-eval.yml`, `prod-health.yml`, `eval.py` (quarantine), `app/services/hygiene.py`, `memory.md` (now committed), CLAUDE.md, `evals/prod_patterns.json`.
 
 ## Deliverables
 
@@ -23,7 +23,7 @@ Structure:
    | Skills (knowledge agents don't re-derive) | CLAUDE.md invariants + contract tests that *enforce* them |
    | Persistent state ("memory has to be on disk") | `memory.md` decision log (committed), `evals/prod_patterns.json` |
    | Writer/grader separation | Codex (different vendor) reviews Claude's code; Sonnet judge grades the Haiku student |
-   | Automations | nightly-eval, prod-health, prod-to-eval schedules |
+   | Automations | weekly-eval, prod-health, prod-to-eval schedules |
    | Connectors | `gh`-driven deduped issues, label-triggered plan/PR workflows |
    | Sub-agents | plan stage vs implement stage; finder (judge) vs verifier (reproduction check) |
 

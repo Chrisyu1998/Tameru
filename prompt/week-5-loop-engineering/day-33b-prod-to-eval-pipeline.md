@@ -9,7 +9,7 @@ This closes the full loop across the week's work: production failure → quarant
 ## Depends on
 
 - Day 33a merged **and its backtest verdict was "build it"** — if the judge's precision wasn't validated, stop and fix that first.
-- Day 30 (nightly eval must understand quarantine — see Deliverable 1).
+- Day 30 (weekly eval must understand quarantine — see Deliverable 1).
 
 ## Read first
 
@@ -39,7 +39,7 @@ This closes the full loop across the week's work: production failure → quarant
 
 ### 4. `.github/workflows/prod-to-eval.yml`
 
-- `schedule:` weekly (clear of prod-health 11:00 UTC and nightly-eval) + `workflow_dispatch`. Needs prod read secrets (service-role key, as prod-health already wires) **and** the local-stack steps; eval-key billing; `contents: write` + `pull-requests: write`.
+- `schedule:` weekly (clear of prod-health 11:00 UTC and weekly-eval) + `workflow_dispatch`. Needs prod read secrets (service-role key, as prod-health already wires) **and** the local-stack steps; eval-key billing; `contents: write` + `pull-requests: write`.
 - **Quiet-week skip:** fewer than ~8 sampled turns → log "skipped: insufficient traffic," exit 0, no PR. Don't lower the bar to manufacture findings. (At ~10 users this will fire often — the weekly cadence proves the loop; the Day 33a backtest was the harvest.)
 - Failure of the *pipeline itself* files a deduped issue (label `prod-to-eval-failure`), prod-health pattern.
 
