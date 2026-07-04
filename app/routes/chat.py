@@ -47,7 +47,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.loop import _clean_block_dict, stream_turn
-from app.agent.memory import distill_session
+from app.agent.memory import (
+    MIN_CONVERSATION_MESSAGES,
+    REDISTILL_DELTA,
+    distill_session,
+)
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
 
@@ -139,6 +143,19 @@ def chat_turn(
         user=user,
         current_conversation_id=conversation_id,
     )
+
+    # T3 (2026-07-03): also (re-)distill the conversation the user is
+    # actively in, so distillation no longer requires a return-visit after
+    # the 10-minute idle window — the case that left one-sitting testers
+    # with zero facts. Only for a *continuing* conversation: a brand-new
+    # one (no `conversation_id` in the body) has no committed messages yet,
+    # so the probe would always return nothing.
+    if body.conversation_id is not None:
+        _schedule_current_distillation(
+            background_tasks=background_tasks,
+            user=user,
+            conversation_id=conversation_id,
+        )
 
     def generate() -> Iterator[bytes]:
         """Produce the SSE byte stream for this turn.
@@ -894,23 +911,29 @@ def _schedule_idle_distillation(
     user: AuthedUser,
     current_conversation_id: UUID,
 ) -> None:
-    """Probe for an idle, undistilled conversation and schedule its distill.
+    """Probe for an idle conversation needing (re-)distillation and schedule it.
 
-    Calls the `find_idle_undistilled_conversation` RPC under the user's
-    JWT — the 10-minute idle threshold and the anti-join against
-    `conversation_distillation_state` are both inside that SQL. If a row
-    comes back, queue `distill_session` as a FastAPI BackgroundTask so it
-    runs after the SSE stream closes.
+    Calls the `find_idle_undistilled_conversation` RPC under the user's JWT —
+    the 10-minute idle threshold and the count-delta predicate (never
+    distilled, OR grown by `REDISTILL_DELTA` since its last distillation) both
+    live in that SQL. This is the *backstop* for a conversation the user has
+    walked away from; the current-conversation probe handles the active one.
+    If a row comes back, queue `distill_session` as a FastAPI BackgroundTask
+    so it runs after the SSE stream closes.
 
-    Any failure is logged and swallowed. The chat turn proceeds normally;
-    the next turn's piggyback firing will retry (we only mark a
-    conversation done when distillation succeeds end-to-end).
+    Any failure is logged and swallowed. The chat turn proceeds normally; the
+    next turn's firing retries (the state row advances only when distillation
+    succeeds end-to-end).
     """
     try:
         client = supabase_for_user(user.jwt)
         resp = client.rpc(
             "find_idle_undistilled_conversation",
-            {"p_current_conversation_id": str(current_conversation_id)},
+            {
+                "p_current_conversation_id": str(current_conversation_id),
+                "p_min_messages": MIN_CONVERSATION_MESSAGES,
+                "p_redistill_delta": REDISTILL_DELTA,
+            },
         ).execute()
         target = resp.data
         # PostgREST returns either the scalar value or null for a scalar-
@@ -925,6 +948,50 @@ def _schedule_idle_distillation(
         background_tasks.add_task(distill_session, user.jwt, target_id)
     except Exception:
         logger.exception("piggyback distillation probe failed; turn continues")
+
+
+def _schedule_current_distillation(
+    *,
+    background_tasks: BackgroundTasks,
+    user: AuthedUser,
+    conversation_id: UUID,
+) -> None:
+    """(Re-)distill the conversation the user is actively in, as it grows.
+
+    Complements `_schedule_idle_distillation`, which only catches a *prior*
+    conversation after the 10-minute idle window. This probe fires for the
+    current conversation, so distillation no longer requires a return-visit
+    — `find_conversation_to_distill` returns it once it has
+    `MIN_CONVERSATION_MESSAGES` committed rows and has grown by
+    `REDISTILL_DELTA` since its last distillation (the message-count delta
+    lives in the SQL).
+
+    Runs before the current turn is persisted, so it sees only committed
+    history; the just-sent turn is caught on the next probe or by the idle
+    backstop. Any failure is logged and swallowed — the turn proceeds.
+    """
+    try:
+        client = supabase_for_user(user.jwt)
+        resp = client.rpc(
+            "find_conversation_to_distill",
+            {
+                "p_conversation_id": str(conversation_id),
+                "p_min_messages": MIN_CONVERSATION_MESSAGES,
+                "p_redistill_delta": REDISTILL_DELTA,
+            },
+        ).execute()
+        target = resp.data
+        if not target:
+            return
+        if isinstance(target, list):
+            target = target[0] if target else None
+            if not target:
+                return
+        background_tasks.add_task(distill_session, user.jwt, UUID(str(target)))
+    except Exception:
+        logger.exception(
+            "current-conversation distillation probe failed; turn continues"
+        )
 
 
 def _sse_frame(event: str, data: str) -> bytes:
