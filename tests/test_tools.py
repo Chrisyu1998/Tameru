@@ -1029,6 +1029,57 @@ def test_propose_transaction_falls_back_to_other_on_gemini_error(
     assert result["gemini_suggestion"] is None
 
 
+def test_propose_transaction_defaults_missing_date_to_user_local_today(
+    authed_user_a, monkeypatch
+):
+    """When the user gives no date, the tool fills the caller's local
+    `today` server-side — the default date is NEVER routed through the
+    model (chat_v15). This is the fix for the "wrong date when I don't
+    say one" class: the LLM omits `date` and the server resolves it
+    deterministically via `user_local_today`, so a mis-read of the
+    injected "Today is …" anchor can no longer mis-date the row."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
+    )
+    # Pin "today" so the assertion is deterministic and doesn't depend on
+    # the run's wall clock or the test user's stored timezone.
+    monkeypatch.setattr(tools_module, "user_local_today", lambda _jwt: date(2026, 7, 3))
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Trader Joe's",
+        amount=47,
+    )
+    assert result["date"] == "2026-07-03"
+
+
+def test_propose_transaction_keeps_explicit_date_over_default(
+    authed_user_a, monkeypatch
+):
+    """An explicit/relative date the model computed wins over the
+    server default — `user_local_today` only fires when `date` is
+    absent, so a supplied date is used verbatim."""
+    monkeypatch.setattr(
+        tools_module,
+        "categorize",
+        lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
+    )
+
+    def _must_not_fire(_jwt):
+        """user_local_today must not be consulted when date is supplied."""
+        raise AssertionError("user_local_today must not fire when date is supplied")
+
+    monkeypatch.setattr(tools_module, "user_local_today", _must_not_fire)
+    result = propose_transaction(
+        authed_user_a,
+        merchant="Trader Joe's",
+        amount=47,
+        date="2026-05-13",
+    )
+    assert result["date"] == "2026-05-13"
+
+
 def test_propose_transaction_preserves_real_card_id(
     authed_user_a, card_a, monkeypatch
 ):

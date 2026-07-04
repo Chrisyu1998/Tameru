@@ -277,6 +277,16 @@ class ProposeTransactionRequest(BaseModel):
     re-categorizing — there's no Gemini baseline to learn against in
     that branch and that is the correct semantic.
 
+    `date` is optional. When the user gives no date, the agent OMITS it
+    and the tool fills the user's local `today` (`user_local_today`,
+    resolved under RLS in `users_meta.timezone`) server-side — the date
+    on the pure default path is never routed through the model. LLMs are
+    unreliable at copying/computing a date (the same transcription-error
+    class that forced the `card_ref` short handle), and the injected
+    "Today is …" anchor is only as correct as the model's reading of it.
+    The agent still supplies `date` for explicit/relative dates
+    ("yesterday", "last Friday"), which it must compute from the anchor.
+
     Example request:
         {"merchant": "Trader Joe's", "amount": 47, "date": "2026-05-13",
          "card_ref": "amex-1001"}
@@ -286,7 +296,7 @@ class ProposeTransactionRequest(BaseModel):
 
     merchant: str
     amount: Decimal
-    date: _dt.date
+    date: _dt.date | None = None
     card_id: UUID | None = None
     card_ref: str | None = None
     category: str | None = None
@@ -597,7 +607,7 @@ PROPOSE_TRANSACTION_TOOL: dict[str, Any] = {
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["merchant", "amount", "date"],
+        "required": ["merchant", "amount"],
         "properties": {
             "merchant": {
                 "type": "string",
@@ -611,7 +621,15 @@ PROPOSE_TRANSACTION_TOOL: dict[str, Any] = {
             "date": {
                 "type": "string",
                 "format": "date",
-                "description": "Transaction date (YYYY-MM-DD).",
+                "description": (
+                    "Transaction date (YYYY-MM-DD). OMIT this field when the "
+                    "user does not say when the purchase happened — the server "
+                    "fills today's date in the user's timezone. Only set it for "
+                    "an explicit or relative date the user gives ('yesterday', "
+                    "'last Friday', 'on the 3rd'), computed from today's date "
+                    "in this prompt. Never guess today's date yourself for the "
+                    "no-date case."
+                ),
             },
             "card_ref": {
                 "type": "string",
@@ -1240,6 +1258,11 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     `.delete(` / `.rpc(`, the test fails.
 
     Behavior contract:
+      * `date` omitted (user gave no date) → filled with `user_local_today`
+        (the caller's local calendar date, resolved under RLS in
+        `users_meta.timezone`, UTC fallback). `date` supplied (explicit or
+        relative date the model computed) → used verbatim. The default path
+        never routes the date through the model.
       * `category` supplied by Claude → accepted as-is, `gemini_suggestion`
         stays None. No Gemini baseline to learn against in this branch.
       * `category` omitted → call categorize(merchant, user). On success,
@@ -1260,6 +1283,13 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
         at commit time on `_assert_card_owned`.
     """
     request = ProposeTransactionRequest.model_validate(kwargs)
+
+    # No-date path: the agent omits `date`, and the server fills the user's
+    # local "today" deterministically rather than trusting the model to copy
+    # the injected anchor. This is the fix for the "wrong date when I don't
+    # say one" class — the LLM never touches the default date. Explicit /
+    # relative dates still come from the model (request.date is set).
+    resolved_date = request.date or user_local_today(user.jwt)
 
     if request.category is not None:
         category = request.category
@@ -1292,7 +1322,7 @@ def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     proposal = TransactionProposal(
         merchant=request.merchant,
         amount=request.amount,
-        date=request.date,
+        date=resolved_date,
         card_id=card_id,
         category=category,
         notes=request.notes,
