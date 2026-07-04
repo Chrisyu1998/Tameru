@@ -404,7 +404,10 @@
     "searchPlaceholder": "搜尋商家",
     "clearSearch": "清除搜尋",
     "deletingTapToUndo": "刪除中 · 點擊以復原",
-    "emptyFilters": "沒有符合篩選條件的項目。"
+    "emptyFilters": "沒有符合篩選條件的項目。",
+    "prevMonth": "上個月",
+    "nextMonth": "下個月",
+    "emptyMonth": "本月尚無支出紀錄。"
   },
   "oauth": {
     "title": "允許連線",

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Donut } from "@/components/Donut";
 import {
-  currentMonthTransactions,
+  isCurrentMonth,
   ledger,
   totalCents,
   useLedger,
@@ -36,8 +36,37 @@ export default function BreakdownPage() {
     () => goals.filter((g) => g.goal.period === "month"),
     [goals],
   );
-  const monthTx = useMemo(() => currentMonthTransactions(transactions), [transactions]);
+  // 0 = current month, 1 = last month, 2 = two months ago, …. The picker
+  // walks backward through history so a mis-dated past transaction becomes
+  // reachable (and editable via the per-category list); it never pages into
+  // the future.
+  const [monthOffset, setMonthOffset] = useState(0);
+  const monthRef = useMemo(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() - monthOffset, 1);
+  }, [monthOffset]);
+
+  const monthTx = useMemo(
+    () => transactions.filter((t) => isCurrentMonth(t.date, monthRef)),
+    [transactions, monthRef],
+  );
   const monthTotal = totalCents(monthTx);
+
+  // Disable "previous" once we reach the month of the oldest loaded
+  // transaction — nothing older to page into. (Bounded by the 500-row
+  // fetch window: if the list is truncated, prev stops at the loaded
+  // boundary, which fails safe.) "Next" is disabled at the current month
+  // so the picker never surfaces a future month.
+  const earliestDate = useMemo(() => {
+    if (transactions.length === 0) return null;
+    return transactions.reduce(
+      (min, t) => (t.date < min ? t.date : min),
+      transactions[0].date,
+    );
+  }, [transactions]);
+  const canGoPrev =
+    earliestDate !== null && new Date(earliestDate + "T00:00:00") < monthRef;
+  const canGoNext = monthOffset > 0;
 
   const byCategory = useMemo(() => {
     const map = new Map<Category, typeof monthTx>();
@@ -73,9 +102,29 @@ export default function BreakdownPage() {
       </header>
 
       <section className="mt-6 flex flex-col items-center">
-        <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
-          {formatMonth().toLowerCase()}
-        </p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setMonthOffset((o) => o + 1)}
+            disabled={!canGoPrev}
+            aria-label={t("breakdown.prevMonth")}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary transition-colors hover:bg-sunken/60 hover:text-ink disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <p className="min-w-[7.5rem] text-center text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
+            {formatMonth(monthRef).toLowerCase()}
+          </p>
+          <button
+            type="button"
+            onClick={() => setMonthOffset((o) => Math.max(0, o - 1))}
+            disabled={!canGoNext}
+            aria-label={t("breakdown.nextMonth")}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary transition-colors hover:bg-sunken/60 hover:text-ink disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
 
         <div className="mt-3">
           <Donut slices={byCategory.map((c) => ({ category: c.category, cents: c.cents }))}>
@@ -89,7 +138,7 @@ export default function BreakdownPage() {
         </div>
       </section>
 
-      {monthGoals.length > 0 && (
+      {monthOffset === 0 && monthGoals.length > 0 && (
         <section className="mt-8">
           <p className="text-[0.7rem] uppercase tracking-wider text-ink-tertiary">
             {t("breakdown.vsYourBudgets")}
@@ -185,6 +234,11 @@ export default function BreakdownPage() {
             );
           })}
         </ul>
+        {byCategory.length === 0 && (
+          <p className="rounded-2xl border border-hairline bg-sunken/40 py-10 text-center text-sm text-ink-tertiary">
+            {t("breakdown.emptyMonth")}
+          </p>
+        )}
       </section>
     </div>
   );

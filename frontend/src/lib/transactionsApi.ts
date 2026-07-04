@@ -101,10 +101,15 @@ export function fromWire(row: TransactionRowWire): Transaction {
 }
 
 export async function listTransactions(): Promise<Transaction[]> {
-  // No filters / pagination yet — v1 has ~10 users with a single home view.
-  // When the list page gets infinite scroll, switch to limit + offset and
-  // surface has_more.
-  const wire = await apiJson<TransactionListWire>('/transactions');
+  // Request the full window the backend allows (MAX_LIMIT = 500) rather
+  // than the default 50. The breakdown month picker filters this list
+  // client-side, and rows come back date-desc — so a 50-row default
+  // truncates OLDER months first, which would make "last month" look
+  // empty for anyone with a busy current month. At v1 scale (~10 users,
+  // manual entry) 500 covers every user comfortably; a user past 500
+  // transactions sees the oldest truncated (the backend's own MAX_LIMIT
+  // ceiling), at which point the list needs real limit+offset pagination.
+  const wire = await apiJson<TransactionListWire>('/transactions?limit=500');
   return wire.items.map(fromWire);
 }
 

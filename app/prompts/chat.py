@@ -109,6 +109,17 @@ Version log:
     `client_request_id` stripped, subscriptions carry a resolved
     `card_ref` instead of `card_id`. Static-block edit (tool list
     wording) busts the cache once.
+  * chat_v15 (no-date transaction default) — `propose_transaction.date`
+    is now OPTIONAL. When the user gives no date the agent OMITS `date`
+    and the tool fills the user's local `today` server-side
+    (`user_local_today`), instead of the agent copying the injected
+    "Today is …" anchor into the tool call. The anchor read was a
+    needless transcription hop through the model (same failure class as
+    the card-UUID copy that chat_v10 removed), and it could land the
+    wrong date when the model mis-read the anchor. The agent still
+    computes explicit/relative dates ("yesterday", "last Friday") from
+    the anchor. Static-block edit (propose_transaction wording) busts
+    the cache once.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -131,9 +142,10 @@ from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 from app.util.timezone import user_local_today
 
-# chat_v14: card filtering on the read tools goes through card_ref; tool
-# results are UUID-free (see the version history in the docstring above).
-PROMPT_VERSION = "chat_v14"
+# chat_v15: propose_transaction.date is optional — the agent omits it when
+# the user gives no date and the tool fills the user's local today (see the
+# version history in the docstring above).
+PROMPT_VERSION = "chat_v15"
 
 
 SYSTEM_PROMPT = """\
@@ -192,10 +204,14 @@ card; the row is only written when the user taps "looks right" in the UI. \
 **This tool does not add the transaction.** After calling it, tell the user \
 something like "here's the parse — tap looks right to add it." Do NOT say \
 "I've added it" or "added successfully" — the row does not exist yet. \
-**If the user doesn't say when the purchase happened, default the date to \
-today — do NOT ask "when was this?".** The parse card lets the user correct \
-the date before confirming, so a missing date is never a reason to withhold \
-the proposal or to ask a follow-up. A missing *amount* is different: if the \
+**If the user doesn't say when the purchase happened, OMIT the `date` field \
+entirely — the server fills in today's date in the user's timezone. Do NOT \
+ask "when was this?" and do NOT compute or copy today's date yourself for \
+this case.** Only set `date` when the user gives an explicit or relative date \
+("yesterday", "last Friday", "on the 3rd"), which you compute from today's \
+date in this prompt. The parse card lets the user correct the date before \
+confirming, so a missing date is never a reason to withhold the proposal or \
+to ask a follow-up. A missing *amount* is different: if the \
 user gives no amount, ask for it — a proposal needs a real number. If \
 the user names a card ("on my Amex Gold"), call get_cards first, then pass \
 the matching card's short `ref` (e.g. "amex-1001") as `card_ref` — copy \
