@@ -404,7 +404,10 @@
     "searchPlaceholder": "search merchants",
     "clearSearch": "clear search",
     "deletingTapToUndo": "deleting · tap to undo",
-    "emptyFilters": "nothing matches your filters."
+    "emptyFilters": "nothing matches your filters.",
+    "prevMonth": "previous month",
+    "nextMonth": "next month",
+    "emptyMonth": "no spending recorded this month."
   },
   "oauth": {
     "title": "allow connection",

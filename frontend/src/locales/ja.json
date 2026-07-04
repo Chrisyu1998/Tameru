@@ -404,7 +404,10 @@
     "searchPlaceholder": "加盟店を検索",
     "clearSearch": "検索をクリア",
     "deletingTapToUndo": "削除中 · タップで元に戻す",
-    "emptyFilters": "フィルターに一致する項目がありません。"
+    "emptyFilters": "フィルターに一致する項目がありません。",
+    "prevMonth": "前の月",
+    "nextMonth": "次の月",
+    "emptyMonth": "この月の支出はまだありません。"
   },
   "oauth": {
     "title": "接続を許可",
