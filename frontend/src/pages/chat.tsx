@@ -13,10 +13,12 @@ import { ParseCard } from "@/components/chat/ParseCard";
 import { ServiceBanner } from "@/components/chat/ServiceBanner";
 import { SubscriptionParseCard } from "@/components/chat/SubscriptionParseCard";
 import { VoiceOverlay } from "@/components/chat/VoiceOverlay";
+import { WeeklyRecapCard } from "@/components/chat/WeeklyRecapCard";
 import { isVoiceSupported, useVoice } from "@/lib/voice";
 import { EditTransactionSheet } from "@/components/EditTransactionSheet";
 import { ledger, useLedger } from "@/lib/ledger";
 import { consumeChatSeed } from "@/lib/chatSeed";
+import { getWeeklyRecap, type WeeklyRecap } from "@/lib/chatApi";
 import {
   parseTransaction,
   type ChatMessage,
@@ -62,6 +64,25 @@ export default function ChatPage() {
   // lose context. Fire-and-forget; failures fall back to an empty thread.
   useEffect(() => {
     void chatStore.hydrateMessages();
+  }, []);
+
+  // Fetch this week's recap for the pinned "This week" card (DESIGN.md §6.2).
+  // Fire-and-forget: a failed/empty recap just means no card. The server
+  // returns null for a brand-new/dormant user (no wasted Sonnet call).
+  const [recap, setRecap] = useState<WeeklyRecap | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await getWeeklyRecap();
+        if (!cancelled) setRecap(r);
+      } catch {
+        // A recap fetch failure never breaks the chat surface.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Track online status for the offline notice.
@@ -234,6 +255,10 @@ export default function ChatPage() {
               onDismiss={() => setServiceDown(false)}
             />
           )}
+
+          {/* Weekly recap — pinned "This week" card above the thread. Not a
+              chat_messages row (the thread stays append-only, DESIGN.md §6.2). */}
+          {recap && <WeeklyRecapCard recap={recap} />}
 
           {/* Empty state */}
           {messages.length === 0 && (

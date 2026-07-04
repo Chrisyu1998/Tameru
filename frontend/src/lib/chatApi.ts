@@ -76,6 +76,35 @@ export async function getChatMessages(
   );
 }
 
+/*
+ * Typed wrapper for GET /chat/recap (app/routes/chat.py).
+ *
+ * The in-app "This week" recap card (DESIGN.md §6.2 / §6.4) — the weekly
+ * digest aggregates + Sonnet narrative, surfaced at the top of the chat
+ * screen instead of only in email. Returns `null` when there is no recap to
+ * show (brand-new/dormant user). Money fields arrive as decimal *strings*
+ * (Pydantic serializes Decimal as a string, never float) in the user's
+ * `home_currency` major units — `Number(...)` them before formatting.
+ */
+export interface WeeklyRecap {
+  dedup_week: string; // recipient's local Monday (ISO date) — the seen-key
+  week_start: string;
+  week_end: string;
+  week_total: string;
+  baseline_avg: string;
+  top_category: string | null;
+  top_category_total: string | null;
+  top_category_baseline: string | null;
+  home_currency: string;
+  ui_language: string | null;
+  observation: string;
+  nudge: string | null;
+}
+
+export async function getWeeklyRecap(): Promise<WeeklyRecap | null> {
+  return apiJson<WeeklyRecap | null>('/chat/recap');
+}
+
 /**
  * Normalize a thrown ApiError into the structured shape the chat store
  * dispatches on. Non-ApiError throws (network failures, unexpected JSON,

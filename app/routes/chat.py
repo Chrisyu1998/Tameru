@@ -39,8 +39,11 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Iterator
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -54,6 +57,16 @@ from app.agent.memory import (
 )
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
+from app.integrations.aicalllog import log_ai_call
+from app.services.digest import (
+    DEFAULT_DIGEST_TZ_NAME,
+    SONNET_PROMPT_VERSION,
+    compose_digest,
+    digest_model,
+    local_week_monday,
+    recap_row,
+    sonnet_prompt_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -303,9 +316,198 @@ def chat_messages(
     return ChatMessagesResponse(messages=messages, has_more=has_more)
 
 
+class WeeklyRecapResponse(BaseModel):
+    """The in-app "This week" recap card payload (DESIGN.md §6.2 / §6.4).
+
+    The composed weekly-digest aggregates + Sonnet narrative, surfaced as a
+    pinned card at the top of the chat screen instead of only in the email
+    digest. `dedup_week` (the recipient's local Monday) is the client's
+    localStorage seen-key; `week_total`/`baseline_avg` drive the headline
+    delta with its §6.3 color; `top_category*` drive the "X led at $Y" line;
+    `observation`/`nudge` are the Sonnet prose (in `ui_language`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dedup_week: str
+    week_start: str
+    week_end: str
+    week_total: Decimal
+    baseline_avg: Decimal
+    top_category: str | None = None
+    top_category_total: Decimal | None = None
+    top_category_baseline: Decimal | None = None
+    home_currency: str
+    ui_language: str | None = None
+    observation: str
+    nudge: str | None = None
+
+
+@router.get("/recap", response_model=WeeklyRecapResponse | None)
+def chat_recap(
+    user: AuthedUser = Depends(get_current_user_with_device),
+) -> WeeklyRecapResponse | None:
+    """Return this week's recap for the pinned chat card, or None.
+
+    Caller: the chat page mount fetches this to render the "This week" card
+    above the message thread (the card is NOT a `chat_messages` row — the
+    thread stays append-only; DESIGN.md §6.2, memory 2026-05-17).
+
+    Resolution order:
+      1. A stored `weekly_recap` row for the current local week (written by
+         the digest cron for digest-enabled users, or by a prior call here)
+         is returned as-is — no compose, no Sonnet call. The common path.
+      2. Otherwise, if the user has no recent activity worth summarizing
+         (brand-new or dormant), return None — no card, no wasted Sonnet call.
+      3. Otherwise compose on demand under the user's JWT (covers
+         digest-disabled users), log the Sonnet call to `ai_call_log`
+         (invariant 14, `task_type='recap'`), upsert the row (ON CONFLICT DO
+         NOTHING — first writer for the week wins), and return it.
+
+    RLS: everything runs under the user's JWT — `weekly_recap` read/insert and
+    the `compose_digest` reads are all `auth.uid()`-scoped. No service role.
+    """
+    client = supabase_for_user(user.jwt)
+    dedup_week = local_week_monday(
+        _recap_timezone(client, user.user_id), datetime.now(timezone.utc)
+    )
+
+    existing = (
+        client.table("weekly_recap")
+        .select("*")
+        .eq("user_id", str(user.user_id))
+        .eq("dedup_week", dedup_week.isoformat())
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return _recap_response(existing.data[0])
+
+    if not _has_recap_activity(client, user.user_id, dedup_week):
+        return None
+
+    # On-demand compose for users without a stored recap (digest-disabled, or
+    # before Monday's cron fires). The UNIQUE (user_id, dedup_week) + ON
+    # CONFLICT DO NOTHING guarantees exactly one stored row; the single-active-
+    # device invariant (#5) makes a concurrent second compose here effectively
+    # impossible, so the wasted-Sonnet-call race is an accepted, bounded
+    # tradeoff rather than something worth a lock at v1 scale.
+    payload, call_log = compose_digest(client, user.user_id)
+    _log_recap_ai_call(user, call_log)
+    row = recap_row(payload, dedup_week)
+    client.table("weekly_recap").upsert(
+        row, on_conflict="user_id,dedup_week", ignore_duplicates=True
+    ).execute()
+    return _recap_response(row)
+
+
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
+
+def _recap_timezone(client, user_id: UUID) -> ZoneInfo:
+    """Resolve the user's IANA timezone for the recap dedup-week computation.
+
+    Mirrors the digest cron's fallback (memory 2026-06-01): NULL or an
+    unresolvable stored zone falls back to the default digest zone, so the
+    week key is always computable. Read under the caller's JWT (RLS-scoped).
+    """
+    resp = (
+        client.table("users_meta")
+        .select("timezone")
+        .eq("user_id", str(user_id))
+        .limit(1)
+        .execute()
+    )
+    name = resp.data[0].get("timezone") if resp.data else None
+    try:
+        return ZoneInfo(name) if name else ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
+    except Exception:
+        return ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
+
+
+def _has_recap_activity(client, user_id: UUID, dedup_week) -> bool:
+    """True iff the user has any active transaction in the recap's lookback window.
+
+    Gates the on-demand compose so a brand-new or dormant user (no history in
+    the ~9-week window the recap summarizes) gets no card and no Sonnet call,
+    rather than an empty "$0, first week" recap. The window is
+    `[dedup_week - 63 days, dedup_week - 1 day]` — the baseline span through
+    last Sunday. Deliberately spans the whole baseline, not just the prior
+    week: an established user whose *last* week was $0 should still get a
+    (positive) recap; only the truly-dormant case is suppressed.
+    """
+    window_start = (dedup_week - timedelta(days=63)).isoformat()
+    window_end = (dedup_week - timedelta(days=1)).isoformat()
+    resp = (
+        client.table("transactions")
+        .select("id")
+        .eq("user_id", str(user_id))
+        .eq("status", "active")
+        .gte("date", window_start)
+        .lte("date", window_end)
+        .limit(1)
+        .execute()
+    )
+    return bool(resp.data)
+
+
+def _log_recap_ai_call(user: AuthedUser, call_log) -> None:
+    """Write the on-demand recap's Sonnet call to `ai_call_log` under the user JWT.
+
+    Invariant 14 — the request-handler AI-call path uses the user's JWT (not
+    the service role the cron uses). `task_type='recap'` keeps on-demand
+    composes distinct from scheduled `digest` sends in the cost dashboard.
+    Best-effort: a failed audit write must not fail the recap response.
+    """
+    try:
+        log_ai_call(
+            user.jwt,
+            user_id=user.user_id,
+            provider="anthropic",
+            model=digest_model(),
+            task_type="recap",
+            prompt_version=SONNET_PROMPT_VERSION,
+            prompt_hash=sonnet_prompt_hash(),
+            input_tokens=call_log.input_tokens,
+            output_tokens=call_log.output_tokens,
+            latency_ms=call_log.latency_ms,
+            success=call_log.success,
+            error_code=call_log.error_code,
+        )
+    except Exception:
+        logger.exception(
+            "recap ai_call_log write failed", extra={"user_id": str(user.user_id)}
+        )
+
+
+def _recap_response(row: dict[str, Any]) -> WeeklyRecapResponse:
+    """Build a `WeeklyRecapResponse` from a `weekly_recap` row (or `recap_row` dict).
+
+    One builder for both the stored-row read path and the freshly-composed
+    path, since `recap_row` produces the same shape as a DB row — so a cached
+    recap and a just-composed one render byte-identically. Numerics are coerced
+    through `Decimal` (never float — invariant 13).
+    """
+    top_total = row.get("top_category_total")
+    top_baseline = row.get("top_category_baseline")
+    return WeeklyRecapResponse(
+        dedup_week=str(row["dedup_week"]),
+        week_start=str(row["week_start"]),
+        week_end=str(row["week_end"]),
+        week_total=Decimal(str(row["week_total"])),
+        baseline_avg=Decimal(str(row["baseline_avg"])),
+        top_category=row.get("top_category"),
+        top_category_total=Decimal(str(top_total)) if top_total is not None else None,
+        top_category_baseline=(
+            Decimal(str(top_baseline)) if top_baseline is not None else None
+        ),
+        home_currency=row["home_currency"],
+        ui_language=row.get("ui_language"),
+        observation=row["observation"],
+        nudge=row.get("nudge"),
+    )
+
 
 def _load_history(user: AuthedUser, conversation_id: UUID) -> list[dict[str, Any]]:
     """Reconstruct the Anthropic-shaped message list from chat_turn_trace.

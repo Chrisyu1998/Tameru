@@ -28,13 +28,19 @@ from app.services.entry_moment import (
     RULE_2_MIN_THIS_WEEK_COUNT,
     RULE_3_MIN_DAYS_FOR_PROJECTION,
     RULE_4_MIN_WRONG_CARD_COUNT,
+    RULE_5_MIN_PRIOR_MONTH_COUNT,
+    RULE_6_MIN_WEEK_COUNT,
     RULE_CARD_MISMATCH,
+    RULE_CATEGORY_SHARE,
     RULE_CUMULATIVE_DELTA,
+    RULE_LARGEST_THIS_WEEK,
+    RULE_PACING_UNDER,
     RULE_SINGLE_TX_NOTABLE,
     RULE_WEEKLY_FREQUENCY,
     SEVERITY_ALERT,
     SEVERITY_CALM,
     SEVERITY_ELEVATED,
+    SEVERITY_POSITIVE,
     _format_multiplier,
     _ordinal,
     _passes_noise_threshold,
@@ -311,8 +317,15 @@ def test_rule_4_skipped_under_min_wrong_card_count():
     assert _pick_rule(sig) is None
 
 
-def test_rule_4_suppressed_by_14_day_global_window():
-    """Rule 4 is rate-limited across all categories every 14 days."""
+def test_rule_4_suppressed_by_recent_fire_in_category():
+    """Rule 4 is rate-limited once per category every 14 days.
+
+    `last_card_mismatch_at` is now populated by the RPC from a
+    *per-category* window (was global before 2026-07-03); at the unit level
+    a non-null value still hard-suppresses. The per-category scoping itself
+    lives in `entry_moment_signals` and is covered by the SQL integration
+    suite.
+    """
     sig = _signals(
         this_card_name="Chase Freedom",
         this_card_multiplier=Decimal("1"),
@@ -332,6 +345,198 @@ def test_rule_4_skipped_when_no_better_card():
         best_card_name="Amex Gold",
         best_card_multiplier=Decimal("4"),
         wrong_card_count_this_week=RULE_4_MIN_WRONG_CARD_COUNT,
+    )
+    assert _pick_rule(sig) is None
+
+
+# ---------------------------------------------------------------------------
+# _pick_rule — rule 5 (category share, gate-free warm-up)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_5_category_share_fires_without_soft_gate():
+    """Rule 5 fires in a user's first month — it needs no baseline history."""
+    sig = _signals(
+        amount=Decimal("40"),
+        month_tx_count_in_category=RULE_5_MIN_PRIOR_MONTH_COUNT,
+        mtd_category_spend=Decimal("100"),
+        # Soft gate deliberately NOT met — proving rule 5 is gate-free.
+        category_tx_count_prior=0,
+        category_history_days=0,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_CATEGORY_SHARE
+    assert decision.sentence == "that's 40% of your dining spending this month."
+    assert decision.severity == SEVERITY_CALM
+
+
+def test_rule_5_skipped_below_share_floor():
+    """A purchase under RULE_5_MIN_SHARE of the month's category is not notable."""
+    sig = _signals(
+        amount=Decimal("30"),
+        month_tx_count_in_category=RULE_5_MIN_PRIOR_MONTH_COUNT,
+        mtd_category_spend=Decimal("100"),  # 30% < 35% floor.
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_5_skipped_under_min_prior_month_count():
+    """Rule 5 needs a few prior in-month tx so 'X% this month' ranks against more than one."""
+    sig = _signals(
+        amount=Decimal("40"),
+        month_tx_count_in_category=RULE_5_MIN_PRIOR_MONTH_COUNT - 1,
+        mtd_category_spend=Decimal("100"),
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_5_skipped_when_share_exceeds_one_refund_distortion():
+    """A refund-distorted month (share > 1) is skipped rather than shown as >100%."""
+    sig = _signals(
+        amount=Decimal("60"),
+        month_tx_count_in_category=RULE_5_MIN_PRIOR_MONTH_COUNT,
+        mtd_category_spend=Decimal("50"),  # amount > mtd ⇒ share 1.2.
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_5_suppressed_by_recent_fire():
+    """Rule 5 honors the once-per-category-per-7-days rate limit."""
+    sig = _signals(
+        amount=Decimal("40"),
+        month_tx_count_in_category=RULE_5_MIN_PRIOR_MONTH_COUNT,
+        mtd_category_spend=Decimal("100"),
+        last_category_share_at="2026-05-18T00:00:00Z",
+    )
+    assert _pick_rule(sig) is None
+
+
+# ---------------------------------------------------------------------------
+# _pick_rule — rule 6 (largest this week, gate-free warm-up)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_6_largest_this_week_fires_without_soft_gate():
+    """Rule 6 fires when this is strictly the biggest purchase this week."""
+    sig = _signals(
+        amount=Decimal("100"),
+        week_tx_count_all=RULE_6_MIN_WEEK_COUNT,
+        week_prior_max_all=Decimal("50"),
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_LARGEST_THIS_WEEK
+    assert decision.sentence == "biggest single purchase this week."
+    assert decision.severity == SEVERITY_CALM
+
+
+def test_rule_6_skipped_when_not_strictly_largest():
+    """Rule 6 requires strict greater-than — a tie with the week's prior max is silent."""
+    sig = _signals(
+        amount=Decimal("50"),
+        week_tx_count_all=RULE_6_MIN_WEEK_COUNT,
+        week_prior_max_all=Decimal("50"),
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_6_skipped_under_min_week_count():
+    """With too few purchases this week, 'biggest this week' is trivially true — skip it."""
+    sig = _signals(
+        amount=Decimal("100"),
+        week_tx_count_all=RULE_6_MIN_WEEK_COUNT - 1,
+        week_prior_max_all=Decimal("50"),
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_6_suppressed_by_recent_fire():
+    """Rule 6 honors the once-per-7-days (global) rate limit."""
+    sig = _signals(
+        amount=Decimal("100"),
+        week_tx_count_all=RULE_6_MIN_WEEK_COUNT,
+        week_prior_max_all=Decimal("50"),
+        last_largest_this_week_at="2026-05-18T00:00:00Z",
+    )
+    assert _pick_rule(sig) is None
+
+
+# ---------------------------------------------------------------------------
+# _pick_rule — rule 7 (pacing under, positive)
+# ---------------------------------------------------------------------------
+
+
+def test_rule_7_pacing_under_fires_positive():
+    """Rule 7 fires green when projected spend is comfortably under baseline."""
+    # Day 20 of a 30-day month, $100 MTD → projected $150, $50 (25%) under
+    # the $200 baseline → positive (moss) band.
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("100"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_PACING_UNDER
+    assert decision.severity == SEVERITY_POSITIVE
+    assert decision.sentence == "on pace for about $50 under your monthly dining average."
+
+
+def test_rule_7_requires_soft_gate():
+    """Rule 7 asserts a personal baseline, so it needs the soft gate like rule 3."""
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE - 1,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("100"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_7_skipped_below_under_ratio():
+    """A projection only slightly under baseline (<15%) is not a 'you're okay' moment."""
+    # Day 20, $120 MTD → projected $180, $20 (10%) under $200 — under the
+    # 15% positive floor.
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("120"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_7_skipped_in_first_days_of_month():
+    """Forecast-only: a 'you're under' claim before day 5 is meaningless."""
+    sig = _signals(
+        txn_date=date(2026, 6, 3),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("5"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=27,
+    )
+    assert _pick_rule(sig) is None
+
+
+def test_rule_7_suppressed_by_recent_fire():
+    """Rule 7 honors the once-per-category-per-14-days rate limit."""
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        mtd_category_spend=Decimal("100"),
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+        last_pacing_under_at="2026-06-10T00:00:00Z",
     )
     assert _pick_rule(sig) is None
 
@@ -440,6 +645,43 @@ def test_priority_alert_rule_3_outranks_rule_2():
     assert decision.severity == SEVERITY_ALERT
 
 
+def test_priority_real_signal_outranks_warmup_rules():
+    """A real signal (rule 1) beats the gate-free warm-up rules when both apply."""
+    sig = _signals(
+        # Rule 1 eligible.
+        amount=Decimal("80"),
+        month_tx_count_in_category=RULE_1_MIN_MONTH_COUNT,
+        prior_max_in_category_this_month=Decimal("50"),
+        # Rule 5 (category_share) also eligible: $80 of $100 MTD = 80%.
+        mtd_category_spend=Decimal("100"),
+        # Rule 6 (largest_this_week) also eligible.
+        week_tx_count_all=RULE_6_MIN_WEEK_COUNT,
+        week_prior_max_all=Decimal("50"),
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_SINGLE_TX_NOTABLE
+
+
+def test_priority_warmup_outranks_positive_pacing_under():
+    """The warm-up rules sit above the positive rule; pacing_under is last resort."""
+    sig = _signals(
+        txn_date=date(2026, 6, 20),
+        category_tx_count_prior=MIN_TX_COUNT_FOR_BASELINE,
+        category_history_days=MIN_HISTORY_DAYS_FOR_BASELINE,
+        # Rule 5 (category_share) eligible: $40 of $100 MTD = 40%.
+        amount=Decimal("40"),
+        month_tx_count_in_category=RULE_5_MIN_PRIOR_MONTH_COUNT,
+        mtd_category_spend=Decimal("100"),
+        # Rule 7 (pacing_under) also eligible: projected $150 vs $200 (25% under).
+        monthly_baseline_category=Decimal("200"),
+        days_remaining_in_month=10,
+    )
+    decision = _pick_rule(sig)
+    assert decision is not None
+    assert decision.rule_id == RULE_CATEGORY_SHARE
+
+
 # ---------------------------------------------------------------------------
 # Sentence formatting helpers
 # ---------------------------------------------------------------------------
@@ -533,6 +775,11 @@ def _signals(**overrides: Any) -> _Signals:
         "last_weekly_frequency_at": None,
         "last_cumulative_delta_at": None,
         "last_card_mismatch_at": None,
+        "week_tx_count_all": 0,
+        "week_prior_max_all": Decimal("0"),
+        "last_category_share_at": None,
+        "last_largest_this_week_at": None,
+        "last_pacing_under_at": None,
     }
     defaults.update(overrides)
     return _Signals(**defaults)

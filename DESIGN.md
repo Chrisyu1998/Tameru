@@ -366,18 +366,24 @@ Dashboards with many charts create a false sense of progress without changing be
 
 #### Entry-Moment Insight — primary behavioral intervention
 
-Immediately after a transaction is confirmed, `POST /transactions/confirm` returns at most **one** contextual sentence, rendered as a bubble in the chat thread directly below the committed parse card (`EntryInsightBubble`). It is not a toast and not a modal: it stays in the thread for the rest of the session, with no dismiss affordance — rate limits, enforced server-side in `entry_moment_fires`, are what prevent fatigue. The insight is **ephemeral by design** — it is not written to `chat_messages`, so it does not reappear when the conversation is rehydrated on a later app open. The durable home for an ongoing overspending signal is the dashboard category tile (§6.3) and the weekly digest (§6.4).
+Immediately after a transaction is confirmed, `POST /transactions/confirm` returns at most **one** contextual sentence, rendered as a bubble in the chat thread directly below the committed parse card (`EntryInsightBubble`). It is not a toast and not a modal: it stays in the thread for the rest of the session, with no dismiss affordance — rate limits, enforced server-side in `entry_moment_fires`, are what prevent fatigue. The per-transaction insight is **ephemeral by design** — it is not written to `chat_messages`, so it does not reappear when the conversation is rehydrated on a later app open. The durable home for an ongoing signal is the dashboard category tile (§6.3), the weekly digest (§6.4), and — since 2026-07-03 — the in-app **weekly recap card** pinned at the top of the chat screen (§6.4), which persists and re-renders each week. That ephemerality relaxation is scoped to the one weekly recap artifact; the per-transaction bubbles stay ephemeral.
 
-A deterministic rule engine (`app/services/entry_moment.py`) evaluates four rules and returns the first that fires:
+A deterministic rule engine (`app/services/entry_moment.py`) evaluates rules in priority order and returns the first that fires:
 
 1. **single_tx_notable** — a new monthly high in a category.
 2. **weekly_frequency** — an elevated weekly count vs. the 4-week average.
 3. **cumulative_delta** — category spend pulling above the baseline (pace-aware; see below).
-4. **card_mismatch** — wrong-card usage with a better-earning option.
+4. **card_mismatch** — wrong-card usage with a better-earning option (rate-limited once per category per 14 days).
+5. **category_share** — this purchase is a large share (≥35%) of the month's spend in its category.
+6. **largest_this_week** — the biggest single purchase this week, across categories.
+7. **pacing_under** — projected category spend comfortably (≥15%) *under* the baseline.
+
+Rules 5 and 6 are **gate-free warm-ups**: they claim no baseline, so they surface in a user's first month — before the ≥6-transaction / ≥30-day soft gate that rules 2 and 3 depend on can clear (the reason a month-old user otherwise saw an insight only rarely). Rule 7 is the **positive** counterpart to rule 3 (a "you're okay" moment). The warm-ups and the positive rule sit below every real signal, so an overspend or card-mismatch nudge always wins.
 
 **Severity tiers.** Each fired insight carries a `severity` that drives a tiered visual treatment mirroring the §6.3 baseline color scale:
 
-- `calm` — a quiet grey italic aside. Rules 1, 2, and 4.
+- `calm` — a quiet grey italic aside. Rules 1, 2, 4, and the warm-up rules 5 and 6.
+- `positive` — moss/green, with a downward glyph. Rule 7 only — projected spend comfortably under the category baseline.
 - `elevated` — amber, with a leading glyph. Rule 3 only, when spend tracks 10–25% over the category baseline.
 - `alert` — terracotta, with a warning glyph. Rule 3 only, 25%+ over baseline.
 
@@ -388,6 +394,7 @@ An `alert`-tier rule 3 **outranks the calm rules** — a "you're on pace to over
 Examples by tier:
 
 - calm: *"4th dining transaction this week — you usually have 2."*
+- positive: *"on pace for about $40 under your monthly dining average."*
 - alert: *"on pace for about $180 over your monthly dining average."*
 
 Rules: one sentence; at most two numbers, always framed as a delta vs. the baseline — never a bare absolute, never a judgment ("you spend a lot here" is the wrong tone). No buttons (a severity glyph is not an action affordance). Not shown when there's nothing meaningful to surface — the first transaction in a category, or a within-noise delta.
@@ -452,6 +459,8 @@ The primary delivery mechanism for spending insight. Reaches users who don't ope
 If it takes more than 15 seconds to read, it's too long. Brevity is the feature.
 
 **AI provider boundary:** Claude Sonnet 4.6 receives **aggregates only** — category totals, week-over-week deltas. Never merchant names or raw transaction rows. Anthropic has ZDR, but minimum-surface is the privacy posture (CLAUDE.md). The Sonnet call is logged to `ai_call_log` with `task_type='digest'` per CLAUDE.md invariant 14 (service-role write since the cron has no user JWT in scope).
+
+**In-app weekly recap (added 2026-07-03).** The same composed payload is also surfaced *inside* the app as a pinned "This week" card at the top of the chat screen (`GET /chat/recap` → `WeeklyRecapCard`), so the insight reaches users who disabled the email and gives the entry-moment insight a durable weekly home (§6.2). One recap per user per local week is stored in `weekly_recap` (dedup keyed on the recipient's local Monday, like `email_log`). Two write paths feed it, both reusing `compose_digest`: the cron stores it for free while composing the email (no extra Sonnet call), and `GET /chat/recap` composes on demand under the user's JWT for anyone without a stored row yet (digest-disabled users, or before Monday's cron fires) — at most one Sonnet call per user per week, dedup'd. The on-demand compose is logged to `ai_call_log` under the user's JWT with `task_type='recap'` (distinct from the cron's `'digest'` so on-demand composes are separable in the cost dashboard). The recap is **not** a `chat_messages` row — it renders above the append-only thread, and collapses to a one-line pill (localStorage, keyed on the local week) after the user hides it. A brand-new/dormant user with no recent activity gets `null` (no card, no wasted Sonnet call).
 
 **Eligibility:** an active user is one with (a) a confirmed email, (b) not soft-deleted, (c) `users_meta.weekly_digest_enabled = true`, and (d) at least one `active` transaction in the past 4 weeks (zombie-send filter — silent users at v1 scale are usually inactive accounts, not waiting for nudges). All four predicates live in one SQL query, not a Python loop.
 
@@ -1241,7 +1250,29 @@ Per-send record for the §6.4 weekly digest (and any future scheduled email type
 
 **Reserve-then-send usage:** the cron computes `p_dedup_week` (the recipient's local Monday date) and calls this RPC with `p_success=true` and `p_provider_message_id=NULL` BEFORE invoking Resend. Empty SETOF return means the partial unique conflict fired (week slot taken — skip user). One-row return is the freshly-inserted reservation; the cron then sends and either UPDATEs `provider_message_id` on success or flips `success=false` on failure to release the slot for a same-week retry. This ordering is the actual duplicate-send guard — see §6.4 idempotency paragraph for why the alternative (log after send) leaves a real race.
 
-### 8.15 *(future — placeholder)*
+### 8.15 `weekly_recap`
+
+In-app "This week" recap card store (§6.2 / §6.4, added 2026-07-03, migration `20260703120100`). One composed weekly-digest payload per user per local week, surfaced as a pinned card at the top of the chat screen so the insight reaches users who disabled the email digest and gives the entry-moment insight a durable weekly home. Written by two paths, both reusing `compose_digest`: the digest cron (service role) while composing the email, and `GET /chat/recap` (user JWT) on demand for users without a stored row.
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Primary key |
+| user_id | UUID | `NOT NULL`; `REFERENCES auth.users(id) ON DELETE CASCADE` |
+| dedup_week | date | `NOT NULL`. The recipient's **local Monday date** — same key semantics as `email_log.dedup_week` |
+| week_start / week_end | date | `NOT NULL`. Mon–Sun of the summarized week, in the user's zone |
+| week_total / baseline_avg | numeric | `NOT NULL`. Week total + 8-week trailing average |
+| top_category | text | Nullable. Raw (English) category key; the frontend localizes via `useCategoryLabel()` (§6.6) |
+| top_category_total / top_category_baseline | numeric | Nullable. The top category's week total + its 8-week baseline |
+| home_currency | text | `NOT NULL`. For client-side money formatting |
+| ui_language | text | Nullable. The language the Sonnet `observation`/`nudge` were written in |
+| observation / nudge | text | The Sonnet narrative (`nudge` nullable) — reused verbatim from the digest payload |
+| created_at | timestamptz | Default `now()` |
+
+**Index:** `weekly_recap_user_week_uniq UNIQUE (user_id, dedup_week)` — a **plain** unique constraint (not partial), so PostgREST `.upsert(on_conflict="user_id,dedup_week", ignore_duplicates=True)` infers the arbiter without an RPC. First writer for the week wins; recaps are immutable snapshots.
+
+**RLS shape:** `ENABLE`/`FORCE ROW LEVEL SECURITY` with owner `SELECT` + owner `INSERT` policies only (no UPDATE/DELETE — immutable). The cron writes via the service role (BYPASSRLS); `GET /chat/recap` reads and inserts under the user's JWT. The on-demand compose logs its Sonnet call to `ai_call_log` with `task_type='recap'` (added to the CHECK on both `ai_call_log` and `ai_call_log_daily` in migration `20260703120200`), distinct from the cron's `'digest'`.
+
+### 8.16 *(future — placeholder)*
 
 When the §16 welcome email sequence ships, extend `email_log.kind` CHECK with `'welcome_d0'`, `'welcome_d1'`, `'welcome_d7'`. No schema change beyond the CHECK; the unique-week idempotency rule still holds (a user can receive at most one of each kind per week, which is correct for the welcome sequence too — they should get the day-0 welcome exactly once).
 

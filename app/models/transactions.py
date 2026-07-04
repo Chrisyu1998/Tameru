@@ -187,7 +187,9 @@ class EntryMomentInsight(BaseModel):
     `EntryInsightBubble`. `severity` drives a tiered visual treatment that
     mirrors the dashboard's §6.3 baseline color scale:
 
-      * `calm`     — quiet grey aside (rules 1 / 2 / 4).
+      * `calm`     — quiet grey aside (rules 1 / 2 / 4 + warm-up rules 5 / 6).
+      * `positive` — green; the pace-aware rule 7, tracking comfortably under
+                     the category baseline (a "you're okay" moment).
       * `elevated` — amber; the pace-aware rule 3, tracking 10-25% over the
                      category baseline.
       * `alert`    — terracotta; rule 3, 25%+ over baseline.
@@ -199,7 +201,7 @@ class EntryMomentInsight(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str
-    severity: Literal["calm", "elevated", "alert"]
+    severity: Literal["calm", "positive", "elevated", "alert"]
 
 
 class TransactionConfirmResponse(BaseModel):

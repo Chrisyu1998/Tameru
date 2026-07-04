@@ -48,6 +48,9 @@ RULE_SINGLE_TX_NOTABLE = "single_tx_notable"
 RULE_WEEKLY_FREQUENCY = "weekly_frequency"
 RULE_CUMULATIVE_DELTA = "cumulative_delta"
 RULE_CARD_MISMATCH = "card_mismatch"
+RULE_CATEGORY_SHARE = "category_share"
+RULE_LARGEST_THIS_WEEK = "largest_this_week"
+RULE_PACING_UNDER = "pacing_under"
 
 MIN_TX_COUNT_FOR_BASELINE = 6
 MIN_HISTORY_DAYS_FOR_BASELINE = 30
@@ -57,16 +60,31 @@ RULE_2_MIN_PRIOR_AVG = Decimal("0.5")
 RULE_1_MIN_MONTH_COUNT = 3
 RULE_4_MIN_WRONG_CARD_COUNT = 2
 
+# Warm-up rules (category_share, largest_this_week) — gate-free observations
+# that give a first-month user something honest to see before the soft gate
+# clears. They make no baseline claim, so they don't need history.
+RULE_5_MIN_PRIOR_MONTH_COUNT = 2  # ≥2 prior in-category ⇒ fires by the 3rd.
+RULE_5_MIN_SHARE = Decimal("0.35")  # this purchase ≥35% of the month's category.
+RULE_6_MIN_WEEK_COUNT = 3  # a "biggest this week" needs a few to rank against.
+
 # Rule 3 (cumulative_delta) — pace projection + severity banding.
 # Below this many days into the month a straight-line projection from
 # 2-3 days of data is noise, so rule 3 falls back to retrospective framing.
 RULE_3_MIN_DAYS_FOR_PROJECTION = 5
 SEVERITY_ALERT_RATIO = Decimal("0.25")
 
+# Rule 7 (pacing_under) — the positive counterpart to rule 3. Forecast-only
+# (a "you're under" claim in the first days of the month is meaningless) and
+# a wider percent floor than the over-baseline noise floor, so it fires only
+# when the user is *comfortably* under — a genuine "you're okay" moment.
+RULE_7_UNDER_RATIO = Decimal("0.15")
+
 # Severity tiers — drive EntryInsightBubble's tiered visual treatment and
 # mirror the §6.3 dashboard color scale. `calm` is the quiet grey aside;
-# `elevated` is amber (10-25% over baseline); `alert` is terracotta (25%+).
+# `positive` is green (comfortably below baseline); `elevated` is amber
+# (10-25% over baseline); `alert` is terracotta (25%+).
 SEVERITY_CALM = "calm"
+SEVERITY_POSITIVE = "positive"
 SEVERITY_ELEVATED = "elevated"
 SEVERITY_ALERT = "alert"
 
@@ -143,6 +161,11 @@ class _Signals:
     last_weekly_frequency_at: str | None
     last_cumulative_delta_at: str | None
     last_card_mismatch_at: str | None
+    week_tx_count_all: int
+    week_prior_max_all: Decimal
+    last_category_share_at: str | None
+    last_largest_this_week_at: str | None
+    last_pacing_under_at: str | None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "_Signals":
@@ -177,6 +200,11 @@ class _Signals:
             last_weekly_frequency_at=row.get("last_weekly_frequency_at"),
             last_cumulative_delta_at=row.get("last_cumulative_delta_at"),
             last_card_mismatch_at=row.get("last_card_mismatch_at"),
+            week_tx_count_all=int(row.get("week_tx_count_all") or 0),
+            week_prior_max_all=Decimal(str(row.get("week_prior_max_all") or 0)),
+            last_category_share_at=row.get("last_category_share_at"),
+            last_largest_this_week_at=row.get("last_largest_this_week_at"),
+            last_pacing_under_at=row.get("last_pacing_under_at"),
         )
 
 
@@ -207,6 +235,13 @@ def _pick_rule(sig: _Signals) -> _RuleDecision | None:
     outranks the calmer "new monthly high" (rule 1) and "elevated weekly
     frequency" (rule 2) observations. Below the alert band, rule 3 keeps
     its original priority-3 slot.
+
+    The gate-free warm-up rules (category_share, largest_this_week) and the
+    positive rule (pacing_under) sit *below* every "real signal" so they
+    only surface when nothing louder applies. This keeps them from ever
+    talking over an overspend or card-mismatch nudge, while still giving a
+    first-month user (whose soft-gated rules can't fire yet) and an on-track
+    user something worth seeing.
     """
     overspending = _rule_cumulative_delta(sig)
     if overspending is not None and overspending.severity == SEVERITY_ALERT:
@@ -221,6 +256,15 @@ def _pick_rule(sig: _Signals) -> _RuleDecision | None:
     if overspending is not None:
         return overspending
     decision = _rule_card_mismatch(sig)
+    if decision is not None:
+        return decision
+    decision = _rule_category_share(sig)
+    if decision is not None:
+        return decision
+    decision = _rule_largest_this_week(sig)
+    if decision is not None:
+        return decision
+    decision = _rule_pacing_under(sig)
     if decision is not None:
         return decision
     return None
@@ -387,6 +431,122 @@ def _rule_card_mismatch(sig: _Signals) -> _RuleDecision | None:
         sentence=sentence,
         category=sig.category,
         severity=SEVERITY_CALM,
+    )
+
+
+def _rule_category_share(sig: _Signals) -> _RuleDecision | None:
+    """Fire when this purchase is a large share of the month's category spend.
+
+    A gate-free "where's it going" observation — it claims no baseline, so it
+    needs no history and can surface in a user's first month.
+
+    Guards:
+      * At least `RULE_5_MIN_PRIOR_MONTH_COUNT` prior in-month transactions in
+        the category (so "X% of your dining this month" ranks against a few,
+        not one).
+      * This purchase is `RULE_5_MIN_SHARE`–100% of month-to-date category
+        spend (the upper bound skips refund-distorted months where the ratio
+        exceeds 1).
+      * Rate limit: once per category per rolling 7 days.
+    """
+    if sig.month_tx_count_in_category < RULE_5_MIN_PRIOR_MONTH_COUNT:
+        return None
+    if sig.mtd_category_spend <= 0:
+        return None
+    share = sig.amount / sig.mtd_category_spend
+    if share < RULE_5_MIN_SHARE or share > 1:
+        return None
+    if sig.last_category_share_at is not None:
+        return None
+    pct = int(round(float(share) * 100))
+    sentence = f"that's {pct}% of your {sig.category.lower()} spending this month."
+    return _RuleDecision(
+        rule_id=RULE_CATEGORY_SHARE,
+        sentence=sentence,
+        category=sig.category,
+        severity=SEVERITY_CALM,
+    )
+
+
+def _rule_largest_this_week(sig: _Signals) -> _RuleDecision | None:
+    """Fire when this is the biggest single purchase this week, across categories.
+
+    A gate-free cross-category "notable" — the weekly cousin of rule 1's
+    per-category monthly high. Needs no baseline, so it surfaces early.
+
+    Guards:
+      * At least `RULE_6_MIN_WEEK_COUNT` transactions this week (including this
+        one) — otherwise "biggest this week" is trivially true.
+      * `amount > week_prior_max_all` (strict) — strictly larger than every
+        other purchase in the 7-day window.
+      * Rate limit: once per rolling 7 days (across all categories).
+    """
+    if sig.week_tx_count_all < RULE_6_MIN_WEEK_COUNT:
+        return None
+    if sig.amount <= sig.week_prior_max_all:
+        return None
+    if sig.last_largest_this_week_at is not None:
+        return None
+    return _RuleDecision(
+        rule_id=RULE_LARGEST_THIS_WEEK,
+        sentence="biggest single purchase this week.",
+        category=sig.category,
+        severity=SEVERITY_CALM,
+    )
+
+
+def _rule_pacing_under(sig: _Signals) -> _RuleDecision | None:
+    """Fire when projected category spend is comfortably under the baseline.
+
+    The positive counterpart to rule 3 (cumulative_delta): same forecast
+    machinery, opposite sign. Forecast-only — a "you're under" claim in the
+    first days of a month is meaningless — and requires the soft gate, because
+    it *does* assert a personal baseline. The wider percent floor
+    (`RULE_7_UNDER_RATIO`) keeps it to genuinely-on-track moments so it reads as
+    a warm "you're okay," not a constant.
+
+    Guards:
+      * Category cleared the soft gate.
+      * `days_remaining > 0` and at least `RULE_3_MIN_DAYS_FOR_PROJECTION` days
+        elapsed (so the forecast is honest).
+      * Projected spend is under baseline by the combined absolute + percent
+        floor.
+      * Rate limit: once per category per rolling 14 days.
+    """
+    if not _passes_soft_gate(sig):
+        return None
+    if sig.monthly_baseline_category <= 0:
+        return None
+    if sig.days_remaining_in_month <= 0:
+        return None
+    if sig.last_pacing_under_at is not None:
+        return None
+
+    days_elapsed = sig.txn_date.day
+    if days_elapsed < RULE_3_MIN_DAYS_FOR_PROJECTION:
+        return None
+    days_in_month = days_elapsed + sig.days_remaining_in_month
+    projected = (
+        sig.mtd_category_spend / Decimal(days_elapsed) * Decimal(days_in_month)
+    )
+    delta = sig.monthly_baseline_category - projected  # positive ⇒ under budget
+    if delta <= 0:
+        return None
+    if delta < _min_delta_usd():
+        return None
+    if delta / sig.monthly_baseline_category < RULE_7_UNDER_RATIO:
+        return None
+
+    delta_int = int(round(float(delta)))
+    sentence = (
+        f"on pace for about ${delta_int} under your monthly "
+        f"{sig.category.lower()} average."
+    )
+    return _RuleDecision(
+        rule_id=RULE_PACING_UNDER,
+        sentence=sentence,
+        category=sig.category,
+        severity=SEVERITY_POSITIVE,
     )
 
 

@@ -131,10 +131,11 @@ export interface AssistantRichChartMessage {
 /**
  * Severity tier for an entry-moment insight — drives `EntryInsightBubble`'s
  * tiered visual treatment. Mirrors the dashboard's §6.3 baseline color
- * scale: `calm` is the quiet grey aside, `elevated` is amber, `alert` is
- * terracotta. Only the pace-aware overspending rule escalates above `calm`.
+ * scale: `calm` is the quiet grey aside, `positive` is moss/green
+ * (comfortably under baseline), `elevated` is amber, `alert` is terracotta.
+ * The pace-aware rules escalate above `calm` in both directions.
  */
-export type InsightSeverity = "calm" | "elevated" | "alert";
+export type InsightSeverity = "calm" | "positive" | "elevated" | "alert";
 
 /**
  * Entry-moment insight bubble — Day 13. Rendered below a committed

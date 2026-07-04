@@ -1289,6 +1289,96 @@ def test_loop_cap_returns_error_frame_and_persists_nothing(client, user_a, monke
 
 
 # ---------------------------------------------------------------------------
+# GET /chat/recap — the in-app weekly recap card (DESIGN.md §6.2 / §6.4).
+# ---------------------------------------------------------------------------
+
+
+def test_recap_composes_on_demand_then_serves_from_cache(client, user_a, admin_client, monkeypatch):
+    """First call composes + stores the recap; the second is a cache hit (no recompose).
+
+    `compose_digest` and the activity gate are mocked so the route is exercised
+    end-to-end (auth, dedup lookup, upsert, response shaping) without a live
+    Sonnet call or seeding a transaction into the session-scoped `user_a`.
+    """
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from uuid import UUID
+
+    import app.routes.chat as chat_module
+    from app.services.digest import CategoryRollup, DigestPayload, SonnetCallLog
+
+    payload = DigestPayload(
+        user_id=UUID(user_a.id),
+        week_start=datetime(2026, 6, 22, tzinfo=timezone.utc),
+        week_end=datetime(2026, 6, 28, 23, 59, 59, tzinfo=timezone.utc),
+        week_total=Decimal("180"),
+        baseline_avg=Decimal("200"),
+        top_category=CategoryRollup(
+            category="Dining", week_total=Decimal("80"), baseline_avg=Decimal("60")
+        ),
+        home_currency="USD",
+        observation="Spending was steady this week.",
+        nudge=None,
+        ui_language="en",
+    )
+    call_log = SonnetCallLog(
+        input_tokens=10, output_tokens=5, latency_ms=100, success=True, error_code=None
+    )
+    calls = {"compose": 0}
+
+    def fake_compose(_client, _user_id):
+        """Count composes so the cache-hit assertion is exact."""
+        calls["compose"] += 1
+        return payload, call_log
+
+    monkeypatch.setattr(chat_module, "compose_digest", fake_compose)
+    monkeypatch.setattr(chat_module, "_has_recap_activity", lambda *a, **k: True)
+    monkeypatch.setattr(chat_module, "_log_recap_ai_call", lambda *a, **k: None)
+    # Clear any recap left by a prior run so this test starts from a miss.
+    admin_client.table("weekly_recap").delete().eq("user_id", user_a.id).execute()
+
+    try:
+        first = client.get("/chat/recap", headers=_auth(user_a))
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body is not None
+        assert body["observation"] == "Spending was steady this week."
+        assert body["week_total"] == "180"
+        assert body["top_category"] == "Dining"
+        assert body["top_category_total"] == "80"
+        assert calls["compose"] == 1
+
+        # Second call is served from the stored row — no recompose.
+        second = client.get("/chat/recap", headers=_auth(user_a))
+        assert second.status_code == 200, second.text
+        assert second.json()["observation"] == "Spending was steady this week."
+        assert calls["compose"] == 1
+    finally:
+        admin_client.table("weekly_recap").delete().eq("user_id", user_a.id).execute()
+
+
+def test_recap_returns_null_when_no_recent_activity(client, user_a, admin_client, monkeypatch):
+    """A user with no recent activity gets no card and no Sonnet call."""
+    import app.routes.chat as chat_module
+
+    calls = {"compose": 0}
+
+    def fake_compose(_client, _user_id):
+        """Should never be reached when the activity gate returns False."""
+        calls["compose"] += 1
+        raise AssertionError("compose_digest called despite no recent activity")
+
+    monkeypatch.setattr(chat_module, "compose_digest", fake_compose)
+    monkeypatch.setattr(chat_module, "_has_recap_activity", lambda *a, **k: False)
+    admin_client.table("weekly_recap").delete().eq("user_id", user_a.id).execute()
+
+    resp = client.get("/chat/recap", headers=_auth(user_a))
+    assert resp.status_code == 200, resp.text
+    assert resp.json() is None
+    assert calls["compose"] == 0
+
+
+# ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
 

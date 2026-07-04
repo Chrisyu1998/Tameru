@@ -21,7 +21,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -314,6 +314,47 @@ def render_email(
     )
 
     return RenderedEmail(subject=subject, html=html, text=text)
+
+
+def local_week_monday(tz: ZoneInfo, now: datetime) -> date:
+    """The Monday (date) of `now`'s week in `tz` — the digest/recap dedup key.
+
+    Shared by the digest cron (`_local_week_monday`, which resolves the zone
+    name and stringifies the result) and the in-app recap route (GET
+    /chat/recap), so both compute the same `weekly_recap.dedup_week` for a
+    given user and week. Invariant across the Monday-morning retry fires and
+    across a mid-week timezone change (memory 2026-06-01).
+    """
+    local = now.astimezone(tz)
+    return (local - timedelta(days=local.weekday())).date()
+
+
+def recap_row(payload: DigestPayload, dedup_week: date) -> dict[str, Any]:
+    """Build the `weekly_recap` insert row from a composed digest payload.
+
+    Pure (no DB). Reused by both write paths so the stored row shape is
+    identical regardless of trigger: the cron upserts this under the service
+    role; GET /chat/recap upserts it under the user's JWT. Decimals are
+    stringified for the numeric columns (never float — invariant 13). The
+    same dict also feeds the route's response builder, so a freshly-composed
+    recap and a re-read stored recap render byte-identically.
+    """
+    top = payload.top_category
+    return {
+        "user_id": str(payload.user_id),
+        "dedup_week": dedup_week.isoformat(),
+        "week_start": payload.week_start.date().isoformat(),
+        "week_end": payload.week_end.date().isoformat(),
+        "week_total": str(payload.week_total),
+        "baseline_avg": str(payload.baseline_avg),
+        "top_category": top.category if top is not None else None,
+        "top_category_total": str(top.week_total) if top is not None else None,
+        "top_category_baseline": str(top.baseline_avg) if top is not None else None,
+        "home_currency": payload.home_currency,
+        "ui_language": payload.ui_language,
+        "observation": payload.observation,
+        "nudge": payload.nudge,
+    }
 
 
 # ---------------------------------------------------------------------------

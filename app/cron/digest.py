@@ -45,7 +45,7 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -58,6 +58,8 @@ from app.services.digest import (
     SonnetCallLog,
     compose_digest,
     digest_model,
+    local_week_monday,
+    recap_row,
     render_email,
     sonnet_prompt_hash,
 )
@@ -218,6 +220,19 @@ def send_weekly_digests(
                     extra={"user_id": str(user_id)},
                 )
             continue
+
+        # Store the in-app weekly recap from the payload we just composed —
+        # digest-enabled users get their recap card for free (no extra Sonnet
+        # call). Best-effort and fully isolated: a recap-store failure must
+        # NOT release the email reservation or abort the send, so it never
+        # reaches the reservation-release paths above.
+        try:
+            _store_recap(admin, payload=payload, dedup_week=dedup_week)
+        except Exception:
+            logger.exception(
+                "weekly_recap store failed (email path continues)",
+                extra={"user_id": str(user_id)},
+            )
 
         # SEND. The wrapper's documented contract is never-raises (it
         # converts every SDK exception to ResendSendResult(success=False)).
@@ -455,8 +470,7 @@ def _local_week_monday(tz_name: str | None, now_utc: datetime) -> str:
         tz = ZoneInfo(tz_name) if tz_name else ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
     except Exception:
         tz = ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
-    local = now_utc.astimezone(tz)
-    return (local - timedelta(days=local.weekday())).date().isoformat()
+    return local_week_monday(tz, now_utc).isoformat()
 
 
 def _list_auth_users(admin) -> list[dict]:
@@ -555,6 +569,23 @@ def _reserve_slot(admin, *, user_id: UUID, dedup_week: str) -> str | None:
     if not resp.data:
         return None
     return resp.data[0]["id"]
+
+
+def _store_recap(admin, *, payload, dedup_week: str) -> None:
+    """Upsert the composed payload into `weekly_recap` for the in-app recap card.
+
+    `ON CONFLICT (user_id, dedup_week) DO NOTHING` — first writer for the week
+    wins (the on-demand GET /chat/recap path may have already stored it, or a
+    prior cron fire in the retry window did). Runs under the service role like
+    the rest of the cron; the recap card reads it back under the user's JWT via
+    RLS. Called after a successful compose, isolated from the email send so its
+    failure never touches the email reservation (DESIGN.md §6.4).
+    """
+    admin.table("weekly_recap").upsert(
+        recap_row(payload, date.fromisoformat(dedup_week)),
+        on_conflict="user_id,dedup_week",
+        ignore_duplicates=True,
+    ).execute()
 
 
 def _finalize_reservation_success(

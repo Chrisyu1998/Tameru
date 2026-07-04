@@ -52,6 +52,10 @@ _EXPECTED_CALLER_MODULES = frozenset({
     "app/agent/memory.py",
     "app/integrations/gemini.py",
     "app/integrations/card_lookup.py",
+    # GET /chat/recap (2026-07-03): the in-app weekly recap composes the digest
+    # payload on demand under the user's JWT for digest-disabled users and logs
+    # that Sonnet call with task_type='recap' (DESIGN.md §6.4).
+    "app/routes/chat.py",
 })
 
 
