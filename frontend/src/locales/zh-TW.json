@@ -150,6 +150,18 @@
   "chat": {
     "back": "返回",
     "newChat": "新聊天",
+    "recap": {
+      "title": "本週",
+      "above": "比每週平均多 {{delta}}",
+      "below": "比每週平均少 {{delta}}",
+      "inline": "與每週平均相當",
+      "baselineStart": "基準從這裡開始建立",
+      "topAbove": "最高類別：{{cat}}（{{amount}}）· 比平常多 {{delta}}",
+      "topBelow": "最高類別：{{cat}}（{{amount}}）· 比平常少 {{delta}}",
+      "topInline": "最高類別：{{cat}}（{{amount}}）· 與平常相當",
+      "expand": "顯示本週回顧",
+      "collapse": "收合本週回顧"
+    },
     "placeholder": "輸入或點擊麥克風",
     "thinking": "思考中…",
     "offline": "離線 — 重新連線後訊息將自動傳送。",
@@ -558,6 +570,8 @@
       "desc": "tameru 與你溝通的方式 — 介面、聊天回覆及每週摘要。預設為此裝置的語言。"
     },
     "theme": {
+      "label": "深色模式",
+      "desc": "使用較深的配色。預設為淺色。",
       "switchToLight": "切換至淺色模式",
       "switchToDark": "切換至深色模式"
     }
@@ -581,7 +595,8 @@
       "notifications": "通知",
       "privacy": "隱私",
       "signOut": "登出",
-      "language": "語言"
+      "language": "語言",
+      "appearance": "外觀"
     },
     "notifications": {
       "ariaLabel": "通知",
@@ -599,6 +614,9 @@
       "confirm": "登出"
     },
     "languageSheet": {
+      "done": "完成"
+    },
+    "appearanceSheet": {
       "done": "完成"
     }
   },

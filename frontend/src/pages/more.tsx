@@ -8,6 +8,7 @@ import {
   Lock,
   LogOut,
   Plug,
+  SunMoon,
   Upload,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -17,6 +18,7 @@ import { ImportCsvSheet } from "@/components/ImportCsvSheet";
 import { Pill } from "@/components/Pill";
 import { TimezoneRow } from "@/components/TimezoneRow";
 import { LanguageRow } from "@/components/LanguageRow";
+import { ThemeRow } from "@/components/ThemeRow";
 import { signOut } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store";
@@ -26,7 +28,13 @@ import {
   updatePreferences,
 } from "@/lib/preferencesApi";
 
-type SheetKey = "import" | "notifications" | "language" | "signout" | null;
+type SheetKey =
+  | "import"
+  | "notifications"
+  | "language"
+  | "appearance"
+  | "signout"
+  | null;
 
 export default function MorePage() {
   const { t } = useTranslation();
@@ -121,6 +129,11 @@ export default function MorePage() {
           icon={<Languages className="h-4 w-4" />}
           onClick={() => setOpenSheet("language")}
         />
+        <RowButton
+          label={t("more.secondary.appearance")}
+          icon={<SunMoon className="h-4 w-4" />}
+          onClick={() => setOpenSheet("appearance")}
+        />
         <RowLink
           to="/privacy"
           label={t("more.secondary.privacy")}
@@ -144,6 +157,10 @@ export default function MorePage() {
       />
       <LanguageSheet
         open={openSheet === "language"}
+        onClose={() => setOpenSheet(null)}
+      />
+      <AppearanceSheet
+        open={openSheet === "appearance"}
         onClose={() => setOpenSheet(null)}
       />
       <SignOutDialog
@@ -339,6 +356,41 @@ function LanguageSheet({
         className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
       >
         {t("more.languageSheet.done")}
+      </button>
+    </BottomSheet>
+  );
+}
+
+/* ─── Appearance sheet ────────────────────────────────────────── */
+
+function AppearanceSheet({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  // Mobile entry point for the light/dark theme control. Mirrors the
+  // LanguageSheet shape — the shared ThemeRow owns its label, description,
+  // and the localStorage-backed toggle, so the sheet is just a container
+  // plus a done button. Replaces the global floating ThemeToggle that used
+  // to collide with the chat page's new-chat button.
+  const { t } = useTranslation();
+  return (
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      ariaLabel={t("more.secondary.appearance")}
+    >
+      <div className="rounded-2xl border border-hairline bg-surface px-4">
+        <ThemeRow />
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-2xl bg-moss px-5 text-sm font-medium text-surface hover:bg-moss-deep"
+      >
+        {t("more.appearanceSheet.done")}
       </button>
     </BottomSheet>
   );

@@ -1,6 +1,5 @@
 import { Outlet, useLocation, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { BottomNav } from "@/components/BottomNav";
 import { Sidebar } from "@/components/Sidebar";
 import { DesktopComposer } from "@/components/desktop/DesktopComposer";
@@ -26,7 +25,6 @@ export default function Layout() {
   if (isBare) {
     return (
       <div className="min-h-screen bg-canvas text-ink">
-        <ThemeToggle />
         <Outlet />
         <PendingSyncBanner />
       </div>
@@ -35,7 +33,6 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
-      <ThemeToggle />
       <div className="flex min-h-screen">
         <Sidebar />
         <main className="relative flex-1 pb-24 md:pb-32">
