@@ -1,17 +1,19 @@
-"""Day 16 — distill_session called twice for the same conversation is a no-op.
+"""Day 16 — distill_session called twice on an UNCHANGED conversation is a no-op.
 
-The piggyback predicate in POST /chat/turn excludes any conversation
-that has a conversation_distillation_state row — so the second call
-shouldn't happen in normal operation. But defense in depth matters:
-- A race where two chat turns from the same user fire the piggyback
-  before either's BackgroundTask completes could schedule two
-  distillations of the same conversation_id.
-- A manual replay or admin re-run should also be safe.
+Since T3 (2026-07-03) distillation is no longer once-per-conversation:
+the current conversation is re-distilled as it grows. But a re-run on a
+conversation that has NOT grown by REDISTILL_DELTA must still be a no-op,
+which covers both the race and the manual-replay cases:
+- Two chat turns firing the current-conversation probe before either's
+  BackgroundTask completes: the first writes `message_count`, the second
+  sees no growth and returns.
+- A manual replay / admin re-run of the same conversation is safe.
 
-Contract: a second distill_session call for an already-distilled
+Contract: a second distill_session call on an unchanged, already-distilled
 conversation makes no Anthropic call and writes no additional rows.
-Mechanism: the implementation should fast-path on the existence of a
-conversation_distillation_state row before reading chat_messages.
+Mechanism: the state row records `message_count`, and distill_session
+returns early when the live count hasn't exceeded it by REDISTILL_DELTA.
+(The grown-conversation re-distill path is covered in test_memory_redistill.)
 """
 
 from __future__ import annotations
@@ -100,11 +102,13 @@ def test_second_distill_call_is_noop(user_a, monkeypatch):
     memory_module.distill_session(user_a.jwt, conversation_id)
     assert counting.call_count == 1, "first distillation didn't call Haiku"
 
-    # Second call must be a fast-path no-op.
+    # Second call on the UNCHANGED conversation must be a no-op: the state
+    # row now records message_count == 4, and the live count is still 4, so
+    # the (4 - 4) < REDISTILL_DELTA guard short-circuits before Haiku.
     memory_module.distill_session(user_a.jwt, conversation_id)
     assert counting.call_count == 1, (
-        "second distill_session call hit Anthropic — fast-path on "
-        "conversation_distillation_state is missing"
+        "second distill_session call hit Anthropic — the unchanged-"
+        "conversation guard (message_count delta) is missing"
     )
 
     client = supabase_for_user(user_a.jwt)

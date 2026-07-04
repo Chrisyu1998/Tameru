@@ -49,59 +49,103 @@ logger = logging.getLogger(__name__)
 # reference it without re-deriving the §7.6 threshold.
 MIN_CONVERSATION_MESSAGES = 4
 MAX_FACTS_RENDERED = 60
+
+# Re-distillation cadence (T3, 2026-07-03). Once a conversation has been
+# distilled through message N, the current-turn probe
+# (find_conversation_to_distill) only re-schedules it after it grows by at
+# least this many more committed messages. Keeps a long, actively-growing
+# conversation captured without a Haiku call on every single turn. Passed
+# to the RPC from the chat route AND used as distill_session's own
+# race-guard, so the two must agree.
+REDISTILL_DELTA = 4
+
 ALLOWED_CATEGORIES = frozenset(
     {"spending_pattern", "preference", "active_context", "card_preference", "goal"}
 )
 
 # ai_call_log.prompt_version for the distillation system prompt. Bump
 # when DISTILL_SYSTEM_PROMPT changes in a way that could affect what
-# Haiku extracts — eval / cost-curve bucketing relies on it.
-PROMPT_VERSION = "memory_distill_v2"
+# Haiku extracts — eval / cost-curve bucketing relies on it. v3 (2026-07-03)
+# rewrote the prompt to be less conservative and to invite spending
+# *patterns* out of ledger-heavy chat (few-shot examples, E1/E2).
+PROMPT_VERSION = "memory_distill_v3"
 
 _DEFAULT_MODEL = "claude-haiku-4-5"
 
 DISTILL_SYSTEM_PROMPT = """\
 You are a memory-distillation pass for a personal-finance assistant. \
-Read the conversation and extract atomic facts about the user that \
-should persist across future sessions.
+Read the conversation and extract durable facts about the USER that will \
+make future sessions feel personal and informed — their habits, \
+preferences, goals, plans, and how they like to use their cards.
+
+Be generous. Most real conversations contain at least one thing worth \
+remembering. Err toward capturing a fact when in doubt — a low-value fact \
+just gets a low relevance_score and decays on its own. Only return an \
+empty array when the conversation is purely mechanical (e.g. a lone "add \
+$5 coffee" with no preference, plan, or habit expressed).
 
 Each fact must be:
-  * About the user (their goals, habits, preferences, active context, \
-or card setups). Do not extract facts about the assistant, the data, \
-or generic financial knowledge.
-  * Self-contained — a future turn must be able to use the fact \
-without seeing this conversation.
-  * One claim per fact. Compound facts ("user likes X and dislikes Y") \
-must be split.
+  * About the user — their goals, habits, preferences, active context, \
+or card strategies. Not about the assistant, not generic financial \
+knowledge.
+  * Self-contained — a future turn must be able to use the fact without \
+seeing this conversation.
+  * One claim per fact. Split compound facts ("likes X and dislikes Y").
 
-Do NOT extract live-ledger state. Specifically, do not extract:
+Extract enduring PATTERNS and INTENT, not raw ledger rows. A spending \
+conversation is full of signal even when the individual transactions are \
+noise:
+  * "logged a $47 Trader Joe's run" — the transaction is noise, but "User \
+grocery-shops at Trader Joe's" is a fact (spending_pattern).
+  * "booked an $800 flight to Tokyo for April" — the charge is noise, but \
+"User is planning a Tokyo trip in April 2027" is a fact (active_context).
+  * "I always put dining on my Amex" — "User puts dining on their Amex" is \
+a fact (card_preference).
+
+Do NOT extract live inventory or one-off ledger specifics — the live tools \
+(get_cards, get_subscriptions, get_transactions) are the source of truth \
+for these and they change outside chat:
   * Which cards the user currently owns (e.g. "User has Amex Platinum \
-1007"). Cards can be deleted via the cards page; the live database \
-(via the get_cards tool) is the source of truth.
-  * Which subscriptions are active, or any specific transaction. These \
-are queried live via get_subscriptions / get_transactions and can \
-change outside chat.
-Card and subscription HABITS are fine ("User puts Costco runs on CSR"). \
-Ownership/inventory is not.
+1007"). A card HABIT is fine; card OWNERSHIP is not.
+  * Which subscriptions are active, or the amount/date/merchant of a \
+specific transaction.
 
 Category vocabulary (use exactly these strings):
-  * spending_pattern  — recurring habits, e.g. "User eats out 3x/week \
-on average".
-  * preference        — non-card preferences, e.g. "User prefers groceries \
-over dining for rewards".
-  * active_context    — short-lived facts, e.g. "User is planning a Tokyo \
-trip in spring 2027". These naturally decay (Day 17).
-  * card_preference   — card-specific habits, e.g. "User puts Costco runs \
-on CSR".
+  * spending_pattern  — recurring habits, e.g. "User eats out ~3x/week".
+  * preference        — non-card preferences, e.g. "User prefers earning \
+on groceries over dining".
+  * active_context    — time-bound facts that naturally decay, e.g. "User \
+is saving for a wedding in fall 2027".
+  * card_preference   — card strategies/habits, e.g. "User puts Costco \
+runs on CSR".
   * goal              — explicit objective with a target/timeline, e.g. \
-"User is working toward CSR $4K SUB by Q2 2026".
+"User is working toward the CSR $4K SUB by Q2 2026".
 
-Score each fact 0.0–1.0 by enduring relevance: 1.0 = will matter a year \
-from now; 0.3 = passing comment, may not matter next week.
+Score each fact 0.0–1.0 by enduring relevance: 1.0 = still true and useful \
+a year out; 0.3 = a passing comment that may not matter next week.
 
-Return a JSON array of objects with keys `fact`, `category`, \
-`relevance_score`. Return only the JSON array — no prose, no markdown \
-fences. If there is nothing worth remembering, return `[]`.
+Return ONLY a JSON array of objects with keys `fact`, `category`, \
+`relevance_score` — no prose, no markdown fences.
+
+Example — a conversation with signal:
+  user: I put my Costco runs on CSR for the points, trying to hit the $4K \
+SUB by Q2
+  assistant: Nice — you're $1.9K away.
+  user: cool. also logging a $60 dinner at Nobu
+  assistant: Added $60 dining.
+Output:
+  [{"fact": "User puts Costco purchases on CSR", "category": \
+"card_preference", "relevance_score": 0.7}, {"fact": "User is working \
+toward the CSR $4K SUB by Q2 2026", "category": "goal", "relevance_score": \
+0.9}]
+(The $60 Nobu dinner is a one-off transaction — not extracted.)
+
+Example — purely mechanical, nothing to remember:
+  user: add $5 coffee
+  assistant: Added $5 coffee. Anything else?
+  user: no thanks
+Output:
+  []
 """
 
 
@@ -140,27 +184,36 @@ def distill_session(user_jwt: str, conversation_id: UUID) -> None:
 
     Response: None. Side effects on success:
         * 0..N `user_memory` rows upserted via the RPC.
-        * One `conversation_distillation_state` row inserted, marking the
-          conversation done so the piggyback predicate skips it forever.
+        * One `conversation_distillation_state` row upserted (monotonically —
+          via `upsert_conversation_distillation_state`), recording how many
+          messages this conversation was distilled through (`message_count`)
+          so the probes re-distill it only after it grows by REDISTILL_DELTA.
         * One `ai_call_log` row with `task_type='memory_distill'`.
 
     Fast-paths (no Anthropic call, no DB writes other than what's noted):
-        * Conversation already has a `conversation_distillation_state`
-          row — return immediately.
         * `chat_messages` row count < MIN_CONVERSATION_MESSAGES — return
           without writing a state row, so a longer follow-up in the same
           conversation can trigger distillation later.
+        * Already distilled and the conversation has NOT grown by at least
+          REDISTILL_DELTA messages since — return. This makes a re-run on an
+          unchanged conversation a clean no-op.
 
-    Failure posture: any exception below the fast-path checks is
-    caught, logged, and swallowed. The `conversation_distillation_state`
-    row is NOT inserted on failure, so the next piggyback firing
-    retries the conversation.
+    Concurrency: the delta guard is read-then-act (not atomic), so two
+    genuinely simultaneous schedules of the same conversation can each still
+    run one Haiku call — accepted at v1 scale, and harmless (fact upserts are
+    dedup-idempotent). What the guard does NOT tolerate is a regressed
+    `message_count`; the monotonic GREATEST upsert prevents that, so a
+    straggler task cannot lower the recorded count and over-trigger later
+    re-distills.
+
+    Failure posture: any exception below the fast-path checks is caught,
+    logged, and swallowed. The `conversation_distillation_state` row is NOT
+    written on failure, so the next probe retries the conversation.
     """
     try:
         client = supabase_for_user(user_jwt)
 
-        if _already_distilled(client, conversation_id):
-            return
+        prior_count = _distilled_message_count(client, conversation_id)
 
         rows = (
             client.table("chat_messages")
@@ -171,7 +224,10 @@ def distill_session(user_jwt: str, conversation_id: UUID) -> None:
             .data
             or []
         )
-        if len(rows) < MIN_CONVERSATION_MESSAGES:
+        message_count = len(rows)
+        if message_count < MIN_CONVERSATION_MESSAGES:
+            return
+        if prior_count is not None and (message_count - prior_count) < REDISTILL_DELTA:
             return
 
         user_id = _resolve_user_id(client, conversation_id)
@@ -226,11 +282,19 @@ def distill_session(user_jwt: str, conversation_id: UUID) -> None:
                     conversation_id,
                 )
 
-        client.table("conversation_distillation_state").insert(
+        # Record the count we distilled through (was insert-once) so the probes
+        # re-schedule only after REDISTILL_DELTA more messages. Via the
+        # `upsert_conversation_distillation_state` RPC rather than PostgREST
+        # `.upsert()` because the write must be MONOTONIC: two overlapping
+        # tasks can snapshot different live counts, and a plain last-writer-wins
+        # upsert would let a straggler regress `message_count`. The RPC's
+        # GREATEST(...) on conflict makes the stored count never go backward.
+        client.rpc(
+            "upsert_conversation_distillation_state",
             {
-                "conversation_id": str(conversation_id),
-                "user_id": str(user_id),
-            }
+                "p_conversation_id": str(conversation_id),
+                "p_message_count": message_count,
+            },
         ).execute()
     except Exception:
         # Distillation is enrichment — never propagate. The piggyback
@@ -305,23 +369,27 @@ def _model_name() -> str:
     return os.environ.get("ANTHROPIC_MEMORY_MODEL") or _DEFAULT_MODEL
 
 
-def _already_distilled(client: Any, conversation_id: UUID) -> bool:
-    """Return True if a `conversation_distillation_state` row exists.
+def _distilled_message_count(client: Any, conversation_id: UUID) -> int | None:
+    """Return the message count this conversation was last distilled through.
 
-    Used as a fast-path inside `distill_session` so a duplicate piggyback
-    schedule (e.g. two near-simultaneous chat turns both observing the
-    same idle conversation) does not result in two Haiku calls or two
-    rounds of upserts."""
+    `None` means the conversation has never been distilled (no state row).
+    An integer is the `message_count` recorded at the last distillation —
+    `distill_session` re-runs only once the live count exceeds it by
+    REDISTILL_DELTA. This replaces the old boolean `_already_distilled`
+    fast-path: distillation is no longer once-per-conversation, so the
+    guard is "has it grown enough?" rather than "does a row exist?"."""
     existing = (
         client.table("conversation_distillation_state")
-        .select("conversation_id")
+        .select("message_count")
         .eq("conversation_id", str(conversation_id))
         .limit(1)
         .execute()
         .data
         or []
     )
-    return bool(existing)
+    if not existing:
+        return None
+    return int(existing[0].get("message_count") or 0)
 
 
 def _resolve_user_id(client: Any, conversation_id: UUID) -> UUID | None:
