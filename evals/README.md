@@ -17,6 +17,33 @@ or `evals/`.
 `results.db` is a derived local SQLite (gitignored) — rebuild it with
 `python eval.py --report` for ad-hoc queries.
 
+## Weekly run (model-drift detector)
+
+`.github/workflows/weekly-eval.yml` runs the full suite **once a week**
+(Sunday 07:00 UTC) and on `workflow_dispatch`, against the env-resolved
+production models with the **same** corpus, prompts, thresholds, and
+judge as the per-PR gate. Its job is the one failure class the per-PR
+gate can't see: **model drift under unchanged code** — the chat and
+Gemini models are resolved from env (CLAUDE.md model table), so a
+provider can change behavior with zero commits. The constant corpus is
+the instrument: a score drop is attributable to the model.
+
+- **The judge runs every weekly run** (no day-of-week gate) — ~20 Sonnet
+  calls on the eval key.
+- **On a gate breach** it files (or comments on) a deduped
+  `eval-regression` GitHub issue listing the breached gates and failing
+  rows, written to be `claude-plan`-ready (the Day 31 dev loop). The
+  `claude-plan` label is applied by hand — detection and planning stay
+  separate.
+- **Results are never committed.** The `weekly-eval-run` artifact + the
+  issue stream are the record; there is no `history.md` and no bot
+  commits racing dev branches.
+- **Transient failures self-heal.** A provider 5xx burst can breach a
+  gate for one run; the next weekly run clears it. The issue body says so
+  — close it if the following run is green. There is no infra-vs-drift
+  partitioning, and an *infrastructure* failure (Supabase didn't boot)
+  does not file an issue at all.
+
 ## Running
 
 ```bash
