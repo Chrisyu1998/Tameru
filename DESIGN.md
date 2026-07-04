@@ -1252,7 +1252,7 @@ Per-send record for the §6.4 weekly digest (and any future scheduled email type
 
 ### 8.15 `weekly_recap`
 
-In-app "This week" recap card store (§6.2 / §6.4, added 2026-07-03, migration `20260703120100`). One composed weekly-digest payload per user per local week, surfaced as a pinned card at the top of the chat screen so the insight reaches users who disabled the email digest and gives the entry-moment insight a durable weekly home. Written by two paths, both reusing `compose_digest`: the digest cron (service role) while composing the email, and `GET /chat/recap` (user JWT) on demand for users without a stored row.
+In-app "This week" recap card store (§6.2 / §6.4, added 2026-07-03, migration `20260703140100`). One composed weekly-digest payload per user per local week, surfaced as a pinned card at the top of the chat screen so the insight reaches users who disabled the email digest and gives the entry-moment insight a durable weekly home. Written by two paths, both reusing `compose_digest`: the digest cron (service role) while composing the email, and `GET /chat/recap` (user JWT) on demand for users without a stored row.
 
 | Field | Type | Description |
 |---|---|---|
@@ -1270,7 +1270,7 @@ In-app "This week" recap card store (§6.2 / §6.4, added 2026-07-03, migration 
 
 **Index:** `weekly_recap_user_week_uniq UNIQUE (user_id, dedup_week)` — a **plain** unique constraint (not partial), so PostgREST `.upsert(on_conflict="user_id,dedup_week", ignore_duplicates=True)` infers the arbiter without an RPC. First writer for the week wins; recaps are immutable snapshots.
 
-**RLS shape:** `ENABLE`/`FORCE ROW LEVEL SECURITY` with owner `SELECT` + owner `INSERT` policies only (no UPDATE/DELETE — immutable). The cron writes via the service role (BYPASSRLS); `GET /chat/recap` reads and inserts under the user's JWT. The on-demand compose logs its Sonnet call to `ai_call_log` with `task_type='recap'` (added to the CHECK on both `ai_call_log` and `ai_call_log_daily` in migration `20260703120200`), distinct from the cron's `'digest'`.
+**RLS shape:** `ENABLE`/`FORCE ROW LEVEL SECURITY` with owner `SELECT` + owner `INSERT` policies only (no UPDATE/DELETE — immutable). The cron writes via the service role (BYPASSRLS); `GET /chat/recap` reads and inserts under the user's JWT. The on-demand compose logs its Sonnet call to `ai_call_log` with `task_type='recap'` (added to the CHECK on both `ai_call_log` and `ai_call_log_daily` in migration `20260703140200`), distinct from the cron's `'digest'`.
 
 ### 8.16 *(future — placeholder)*
 
