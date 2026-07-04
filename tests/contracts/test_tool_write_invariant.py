@@ -81,8 +81,11 @@ def test_tool_does_not_write_unless_allowlisted(tool_name, monkeypatch):
     fake_client = _RecordingClient(recorded)
     for module in _CLIENT_BUILDING_MODULES:
         monkeypatch.setattr(module, "supabase_for_user", lambda jwt: fake_client)
-    # Tools that call categorize() would otherwise hit Gemini — neutralize.
-    monkeypatch.setattr(tools_module, "categorize", _fake_categorize_raise)
+    # propose_transaction reaches categorize() through
+    # services/transactions.build_transaction_proposal now (P3-14 delegate
+    # shape) — patch the name in that module's namespace, not on tools, so the
+    # fallback path runs without hitting Gemini.
+    monkeypatch.setattr(transactions_module, "categorize", _fake_categorize_raise)
 
     fake_user = AuthedUser(
         jwt="fake.jwt.token",

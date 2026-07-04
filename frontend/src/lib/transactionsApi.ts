@@ -85,9 +85,13 @@ export function sanitizeCardId(value: string | null | undefined): string | null 
 /**
  * Map the server row to the camelCase shape the imported UI expects. Cards
  * are referenced by `cardId` (string | unknown), and the `source` column
- * surfaces in the UI as the `autoLogged` boolean — anything except 'nlp'
- * counts as auto (subscription auto-logger, csv import, etc.).
+ * surfaces in the UI as the `autoLogged` boolean. A receipt-scanned row
+ * (`receipt_photo`) is an active per-transaction user action — the user
+ * snapped and confirmed it — so it reads like a chat-typed (`nlp`) row, NOT
+ * auto-logged. Everything else (the pg_cron subscription auto-logger,
+ * CSV bulk import) keeps the auto treatment.
  */
+const NOT_AUTO_LOGGED_SOURCES = new Set(['nlp', 'receipt_photo']);
 export function fromWire(row: TransactionRowWire): Transaction {
   return {
     id: row.id,
@@ -96,7 +100,7 @@ export function fromWire(row: TransactionRowWire): Transaction {
     date: row.date,
     cardId: row.card_id ?? '',
     category: row.category,
-    autoLogged: row.source !== 'nlp',
+    autoLogged: !NOT_AUTO_LOGGED_SOURCES.has(row.source),
   };
 }
 
@@ -122,6 +126,13 @@ export interface ConfirmTransactionBody {
   notes: string | null;
   gemini_suggestion: string | null;
   client_request_id: string;
+  /**
+   * `"nlp"` for chat-typed (the server default when omitted) or
+   * `"receipt_photo"` for a scanned-receipt commit. Enum-constrained on the
+   * server (`TransactionProposal.source`) so a client can't forge
+   * `csv_import`/`auto_logged`.
+   */
+  source?: 'nlp' | 'receipt_photo';
 }
 
 export interface ConfirmTransactionResult {
@@ -135,8 +146,9 @@ export interface ConfirmTransactionResult {
 export async function confirmTransaction(
   body: ConfirmTransactionBody,
 ): Promise<ConfirmTransactionResult> {
-  // The server strips fields it doesn't accept; we only send the documented
-  // ones so extra=forbid in TransactionConfirmRequest stays happy.
+  // TransactionConfirmRequest is extra="forbid" — it REJECTS (422) unknown
+  // fields, it does not strip them. So the body must carry only fields the
+  // model declares; every key here maps to one on TransactionProposal.
   const wire = await apiJson<TransactionConfirmResponseWire>(
     '/transactions/confirm',
     {

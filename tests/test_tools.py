@@ -32,6 +32,7 @@ import pytest
 from app.auth import AuthedUser
 from app.db import supabase_for_user
 from app.agent import tools as tools_module
+from app.services import transactions as transactions_module
 from app.agent.tools import (
     TOOL_REGISTRY,
     calculate_total,
@@ -951,7 +952,7 @@ def test_propose_transaction_fills_category_via_gemini(
     learning loop (app/routes/transactions.py:97-101) can detect a user
     edit later by comparing the two."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
     )
@@ -995,7 +996,7 @@ def test_propose_transaction_user_supplied_category_skips_gemini(
         called["n"] += 1
         raise AssertionError("categorize() must not be called when category is supplied")
 
-    monkeypatch.setattr(tools_module, "categorize", _spy)
+    monkeypatch.setattr(transactions_module, "categorize", _spy)
     result = propose_transaction(
         authed_user_a,
         merchant="Blue Bottle",
@@ -1018,7 +1019,7 @@ def test_propose_transaction_falls_back_to_other_on_gemini_error(
         """Raise GeminiProviderError to exercise the fallback branch."""
         raise GeminiProviderError("simulated provider error")
 
-    monkeypatch.setattr(tools_module, "categorize", _raise)
+    monkeypatch.setattr(transactions_module, "categorize", _raise)
     result = propose_transaction(
         authed_user_a,
         merchant="Mystery Place",
@@ -1039,13 +1040,13 @@ def test_propose_transaction_defaults_missing_date_to_user_local_today(
     deterministically via `user_local_today`, so a mis-read of the
     injected "Today is …" anchor can no longer mis-date the row."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
     )
     # Pin "today" so the assertion is deterministic and doesn't depend on
     # the run's wall clock or the test user's stored timezone.
-    monkeypatch.setattr(tools_module, "user_local_today", lambda _jwt: date(2026, 7, 3))
+    monkeypatch.setattr(transactions_module, "user_local_today", lambda _jwt: date(2026, 7, 3))
     result = propose_transaction(
         authed_user_a,
         merchant="Trader Joe's",
@@ -1061,7 +1062,7 @@ def test_propose_transaction_keeps_explicit_date_over_default(
     server default — `user_local_today` only fires when `date` is
     absent, so a supplied date is used verbatim."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
     )
@@ -1070,7 +1071,7 @@ def test_propose_transaction_keeps_explicit_date_over_default(
         """user_local_today must not be consulted when date is supplied."""
         raise AssertionError("user_local_today must not fire when date is supplied")
 
-    monkeypatch.setattr(tools_module, "user_local_today", _must_not_fire)
+    monkeypatch.setattr(transactions_module, "user_local_today", _must_not_fire)
     result = propose_transaction(
         authed_user_a,
         merchant="Trader Joe's",
@@ -1087,7 +1088,7 @@ def test_propose_transaction_preserves_real_card_id(
     proposal. The defensive lookup confirms ownership via the user's
     RLS-scoped client and leaves card_id untouched."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.8),
     )
@@ -1109,7 +1110,7 @@ def test_propose_transaction_drops_hallucinated_card_id(
     would 403 after the user taps "looks right" — a strictly worse
     failure moment than the parse card prompting "pick a card."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
     )
@@ -1133,7 +1134,7 @@ def test_propose_transaction_drops_inactive_card_id(
     it drops a hallucinated UUID — the user closed the card; new chat-
     entered transactions should not land on it."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
     )
@@ -1172,7 +1173,7 @@ def test_propose_transaction_drops_cross_user_card_id(
     None. This is the property that makes "drop on miss" safe even under
     a misbehaving model."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Dining", confidence=0.7),
     )
@@ -1193,7 +1194,7 @@ def test_propose_transaction_does_not_write_to_transactions(
     the tool, count rows in `transactions` before and after, assert
     delta is zero."""
     monkeypatch.setattr(
-        tools_module,
+        transactions_module,
         "categorize",
         lambda merchant, user: CategorySuggestion(category="Groceries", confidence=0.9),
     )

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronLeft, Mic, RefreshCw, Send, SquarePen, WifiOff, X } from "lucide-react";
+import { Camera, ChevronLeft, Mic, RefreshCw, Send, SquarePen, WifiOff, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CandidateCards } from "@/components/chat/CandidateCards";
 import { CardParseCard } from "@/components/chat/CardParseCard";
@@ -24,6 +24,7 @@ import {
   type ChatMessage,
 } from "@/lib/chat";
 import { chatStore, useChatStore } from "@/lib/chatStore";
+import { downscaleImage } from "@/lib/image";
 import type { Card, Transaction } from "@/lib/fixtures";
 import { track } from "@/lib/analytics";
 import { cn } from "@/lib/utils";
@@ -114,6 +115,18 @@ export default function ChatPage() {
     if (!text || capEngaged) return;
     chatStore.send(text);
     setInput("");
+  };
+
+  // Receipt photo → downscale + JPEG re-encode on-device → POST /receipts/parse
+  // (via the store) → parse card. If downscale fails (undecodable file), fall
+  // back to the original so the backend still gets a shot.
+  const handleCapture = async (file: File) => {
+    try {
+      const blob = await downscaleImage(file);
+      await chatStore.sendReceiptPhoto(blob);
+    } catch {
+      await chatStore.sendReceiptPhoto(file);
+    }
   };
 
   /* ─── Parse-card actions ────────────────────────────────────── */
@@ -329,6 +342,7 @@ export default function ChatPage() {
             onChange={setInput}
             onSend={() => handleSend(input)}
             onMic={startVoice}
+            onCapture={handleCapture}
             micSupported={isVoiceSupported()}
             offline={!online}
             busy={busy}
@@ -587,6 +601,7 @@ function InputRow({
   onChange,
   onSend,
   onMic,
+  onCapture,
   micSupported,
   offline,
   busy,
@@ -595,13 +610,18 @@ function InputRow({
   onChange: (v: string) => void;
   onSend: () => void;
   onMic: () => void;
+  onCapture: (file: File) => void;
   micSupported: boolean;
   offline: boolean;
   busy: boolean;
 }) {
   const { t } = useTranslation();
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const hasText = value.trim().length > 0;
   const canSend = hasText && !busy;
+  // Requires a network round-trip to Gemini, so it's pointless offline; also
+  // disabled while a turn/scan is in flight.
+  const canCapture = !busy && !offline;
   return (
     <div className="border-t border-hairline bg-canvas/95 px-3 py-3 backdrop-blur">
       {offline && (
@@ -633,6 +653,27 @@ function InputRow({
             className="block max-h-32 w-full resize-none bg-transparent text-[0.95rem] text-ink placeholder:text-ink-quaternary focus:outline-none disabled:opacity-60"
           />
         </div>
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            // Reset so picking the same file again still fires onChange.
+            e.target.value = "";
+            if (file) onCapture(file);
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => cameraInputRef.current?.click()}
+          aria-label={t("chat.captureReceipt")}
+          disabled={!canCapture}
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-hairline bg-surface text-ink-secondary transition-colors hover:bg-elevated hover:text-ink disabled:opacity-50"
+        >
+          <Camera className="h-4 w-4" />
+        </button>
         {micSupported && (
           <button
             type="button"

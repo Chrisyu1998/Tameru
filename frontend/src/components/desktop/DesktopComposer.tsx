@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Mic, Send } from "lucide-react";
+import { Camera, Mic, Send } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { VoiceOverlay } from "@/components/chat/VoiceOverlay";
 import { chatStore, useChatStore } from "@/lib/chatStore";
+import { downscaleImage } from "@/lib/image";
 import { isVoiceSupported, useVoice } from "@/lib/voice";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,19 @@ export function DesktopComposer() {
   const [focused, setFocused] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  // Receipt upload → downscale + JPEG re-encode → POST /receipts/parse (via
+  // the store, which also opens the drawer so the parse card is visible). On
+  // desktop this is a file picker (no camera); a saved receipt image works.
+  const handleCapture = async (file: File) => {
+    try {
+      const blob = await downscaleImage(file);
+      chatStore.sendReceiptFromComposer(blob);
+    } catch {
+      chatStore.sendReceiptFromComposer(file);
+    }
+  };
 
   // Voice transcript flows into chatStore.sendFromComposer, which opens
   // the drawer for the response — same UX as typing + pressing Send.
@@ -151,6 +165,25 @@ export function DesktopComposer() {
                 className="flex-1 bg-transparent px-2 py-1.5 text-[0.92rem] text-ink placeholder:text-ink-tertiary focus:outline-none"
                 aria-label={t("chat.desktopComposer.inputAria")}
               />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void handleCapture(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => cameraInputRef.current?.click()}
+                aria-label={t("chat.captureReceipt")}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-ink-tertiary hover:text-ink"
+              >
+                <Camera className="h-4 w-4" />
+              </button>
               {micSupported && (
                 <button
                   type="button"

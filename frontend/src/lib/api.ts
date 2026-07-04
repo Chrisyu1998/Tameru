@@ -69,7 +69,7 @@ export async function apiFetch(
   });
 }
 
-function maybeFlagDisplacement(status: number, body: unknown): void {
+export function maybeFlagDisplacement(status: number, body: unknown): void {
   if (status !== 401) return;
   // FastAPI puts our structured error under `detail`. We accept either the
   // wrapped or raw form so a future move to a non-FastAPI shape doesn't

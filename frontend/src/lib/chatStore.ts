@@ -57,6 +57,7 @@ import {
   type ConfirmTransactionResult,
   type TransactionRowWire,
 } from "./transactionsApi";
+import { parseReceipt, type TransactionProposalWire } from "./receiptsApi";
 import { ApiError } from "./api";
 import { track } from "./analytics";
 import { useAppStore } from "../store";
@@ -277,6 +278,47 @@ export const chatStore = {
   },
 
   /**
+   * Scan a receipt photo into a transaction proposal. The image is already
+   * downscaled + JPEG-re-encoded by the caller (chat.tsx); this uploads it to
+   * `POST /receipts/parse` (one Gemini Vision call), appends the returned
+   * proposal as a parse card, and lets the user confirm it through the same
+   * `commitDraft` path as a chat-typed transaction (idempotency, entry-moment
+   * insight, and the merchant-correction loop all inherited). The image is
+   * never stored server-side. Re-entry is guarded by `busy` — and the camera
+   * button is disabled while busy/offline, so this is belt-and-suspenders.
+   */
+  async sendReceiptPhoto(image: Blob) {
+    if (state.busy) return;
+
+    appendMessages({
+      id: newId("user"),
+      role: "user",
+      text: "📷 receipt photo",
+    });
+    setState({ busy: true });
+    try {
+      const wire = await parseReceipt(image);
+      const draft = _wireProposalToDraft(wire);
+      if (!draft) {
+        appendAssistantText(
+          "couldn't read that receipt. try a clearer photo, or just type it.",
+        );
+        return;
+      }
+      appendMessages({
+        id: newId("ai"),
+        role: "assistant",
+        kind: "parse",
+        draft,
+      });
+    } catch (err) {
+      appendAssistantText(_receiptErrorText(err));
+    } finally {
+      setState({ busy: false });
+    }
+  },
+
+  /**
    * Re-fire the last failed message. Resolves silently if there's no
    * latched error. Does NOT re-append the user bubble — the original
    * is still in the thread from `send()`. The conversation_id is
@@ -404,6 +446,10 @@ export const chatStore = {
       notes: draft.notes ?? null,
       gemini_suggestion: draft.geminiSuggestion ?? null,
       client_request_id: draft.clientRequestId,
+      // Preserve where the draft came from so the committed row's `source` is
+      // correct (`receipt_photo` for scanned receipts, `nlp` otherwise). The
+      // server defaults to `nlp` if omitted.
+      source: draft.source ?? "nlp",
     };
 
     // Pre-confirm snapshot: used to decide whether this confirm is the
@@ -1000,6 +1046,16 @@ export const chatStore = {
     setState({ drawerOpen: true });
   },
 
+  /**
+   * Desktop-composer entry for a receipt photo — opens the drawer so the
+   * user sees the parse card land, then runs the same scan as the mobile
+   * path (`sendReceiptPhoto`). Mirrors `sendFromComposer` for images.
+   */
+  sendReceiptFromComposer(image: Blob) {
+    void chatStore.sendReceiptPhoto(image);
+    setState({ drawerOpen: true });
+  },
+
   /** Helper: find tx by id (for candidate lookup). */
   findTx(id: string): Transaction | undefined {
     return ledger.getSnapshot().transactions.find((t) => t.id === id);
@@ -1430,17 +1486,6 @@ function _ingestTransactionRows(call: ChatToolCall): Transaction[] {
  * carry the minimum fields (defensive — should never happen given the
  * server's response_model).
  */
-interface TransactionProposalWire {
-  merchant: string;
-  amount: string | number;
-  date: string;
-  card_id: string | null;
-  category: Category;
-  notes: string | null;
-  gemini_suggestion: string | null;
-  client_request_id: string;
-}
-
 function _proposalToDraft(
   call: ChatToolCall,
   committedPayload?: unknown,
@@ -1465,7 +1510,19 @@ function _proposalToDraft(
     ...(call.result as Record<string, unknown>),
     ...(committed ?? {}),
   };
-  const r = merged as unknown as TransactionProposalWire;
+  return _wireProposalToDraft(merged as unknown as TransactionProposalWire);
+}
+
+/**
+ * Map a `TransactionProposal` wire object (from `propose_transaction` OR
+ * `POST /receipts/parse`) into the local `ParseDraft`. Shared by the chat path
+ * (`_proposalToDraft`, after its committed-payload merge) and the receipt path
+ * (`sendReceiptPhoto`) so both create surfaces produce identical drafts.
+ * Confidence is hardcoded high — the backend already validated the proposal —
+ * so the per-field pencils stay quiet unless the user chooses to edit. Returns
+ * null if the payload lacks the load-bearing fields (defensive).
+ */
+function _wireProposalToDraft(r: TransactionProposalWire): ParseDraft | null {
   const merchant = typeof r.merchant === "string" ? r.merchant : null;
   const date = typeof r.date === "string" ? r.date : null;
   const category = typeof r.category === "string" ? r.category : null;
@@ -1500,7 +1557,25 @@ function _proposalToDraft(
     notes: typeof r.notes === "string" ? r.notes : null,
     geminiSuggestion:
       typeof r.gemini_suggestion === "string" ? r.gemini_suggestion : null,
+    source: r.source === "receipt_photo" ? "receipt_photo" : "nlp",
   };
+}
+
+/**
+ * Friendly one-liner for a receipt-scan failure. Maps the backend HTTP codes
+ * (413 too large, 503 Gemini down, 422/other unreadable) to plain copy, with a
+ * network-error fallback. English-only, consistent with the store's other
+ * operational messages — chat chrome is i18n'd in the components, not here.
+ */
+function _receiptErrorText(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 413) return "that photo is too large — try again.";
+    if (err.status === 503) {
+      return "receipt scanning is briefly unavailable — try again in a moment, or type it.";
+    }
+    return "couldn't read that receipt. try a clearer photo, or just type it.";
+  }
+  return "couldn't scan that receipt — check your connection and try again.";
 }
 
 /**

@@ -66,10 +66,11 @@ def confirm_transaction(
         "amount": str(proposal.amount),
         "date": proposal.date.isoformat(),
         "category": proposal.category,
-        # Server-hardcoded per Day 5 prompt — the API body does not carry
-        # a `source` field. CSV / pg_cron use their own values at the SQL
-        # layer.
-        "source": "nlp",
+        # From the proposal: `"nlp"` (chat, the default) or `"receipt_photo"`
+        # (the /receipts/parse path). Enum-constrained on the model, so a
+        # client cannot forge `csv_import` / `auto_logged` (those write at the
+        # SQL layer with their own dedup semantics). CSV / pg_cron unchanged.
+        "source": proposal.source,
         "client_request_id": str(proposal.client_request_id),
     }
     if proposal.card_id is not None:

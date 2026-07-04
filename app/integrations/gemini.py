@@ -14,13 +14,14 @@ categorize_v3 rationale in app/prompts/categorize.py).
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 import os
 import random
 import time
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from google import genai
@@ -32,6 +33,8 @@ from app.integrations.aicalllog import log_ai_call
 from app.models.imports import ColumnMapping
 from app.prompts.categories import ALLOWED_CATEGORIES
 from app.prompts.categorize import PROMPT_VERSION, render_prompt
+from app.prompts.receipt import RECEIPT_PROMPT_VERSION
+from app.prompts.receipt import render_prompt as render_receipt_prompt
 from app.prompts.csv import (
     BATCH_PROMPT_VERSION,
     DETECT_PROMPT_VERSION,
@@ -46,6 +49,22 @@ class CategorySuggestion:
     """Represent CategorySuggestion."""
     category: str
     confidence: float
+
+
+@dataclass(frozen=True)
+class ReceiptExtraction:
+    """Fields extracted from a receipt photo by `parse_receipt`.
+
+    Any field may be `None` when Gemini couldn't read it (the image isn't a
+    receipt, no visible total, no printed date). `merchant`/`amount` are the
+    load-bearing pair — the receipt route raises a domain error if either is
+    None. `date` defaults to the user's local today downstream when None;
+    `currency` is captured for a mismatch hint only (no FX, invariant 13).
+    """
+    merchant: str | None
+    amount: Decimal | None
+    date: _dt.date | None
+    currency: str | None
 
 
 class GeminiError(Exception):
@@ -234,6 +253,134 @@ def categorize(
             start=start,
             success=False,
             error_code="unknown",
+        )
+        raise
+
+
+def parse_receipt(
+    image_bytes: bytes,
+    mime_type: str,
+    user: AuthedUser,
+) -> ReceiptExtraction:
+    """Extract merchant/amount/date/currency from a receipt photo.
+
+    One Gemini Vision call. Writes exactly one ai_call_log row before
+    returning or re-raising — `task_type='receipt_parse'` — including
+    preflight failures (env resolution, prompt render), mirroring
+    `categorize()`'s audit discipline.
+
+    The image is untrusted input: the extraction rules live in the system
+    instruction, and the image + a static go-signal ride in `contents` (the
+    user-turn slot). Any text printed on the receipt is treated as data, not
+    instructions — the same posture as `categorize_v4`.
+
+    Returns a `ReceiptExtraction` whose fields may be None when the model
+    cannot read them. The category is deliberately NOT extracted here — the
+    caller runs the existing `categorize()` path so the merchant-correction
+    learning loop behaves exactly as it does for chat-typed transactions.
+    """
+    model: str = "unresolved"
+    prompt_hash: str = ""
+    input_tokens = 0
+    output_tokens = 0
+    start = time.perf_counter()
+
+    try:
+        model = _model_name()
+        rendered = render_receipt_prompt()
+        prompt_hash = hashlib.sha256(rendered.encode()).hexdigest()
+
+        try:
+            response = _gemini_client().models.generate_content(
+                model=model,
+                # The receipt image rides in `contents` (multimodal parts
+                # go here); the trailing string is a static go-signal
+                # carrying no user text. Extraction rules — and the
+                # injection defense — live in system_instruction.
+                contents=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    "Extract the receipt fields as JSON. Return JSON only.",
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=rendered,
+                    response_mime_type="application/json",
+                    response_schema={
+                        "type": "object",
+                        "properties": {
+                            "merchant": {"type": "string"},
+                            "amount": {"type": "string"},
+                            "date": {"type": "string"},
+                            "currency": {"type": "string"},
+                        },
+                        # Nothing required — a non-receipt image legitimately
+                        # yields empty strings, normalized to None below.
+                        "required": [],
+                        "property_ordering": [
+                            "merchant",
+                            "amount",
+                            "date",
+                            "currency",
+                        ],
+                    },
+                    http_options=types.HttpOptions(timeout=_timeout_ms()),
+                ),
+            )
+        except GeminiError:
+            raise
+        except Exception as exc:
+            raise _classify_sdk_error(exc) from exc
+
+        input_tokens, output_tokens = _extract_tokens(response)
+
+        raw_text = getattr(response, "text", None) or ""
+        try:
+            data = json.loads(raw_text)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise GeminiJSONParseError(
+                f"Gemini returned non-JSON: {raw_text!r}"
+            ) from exc
+
+        extraction = _parse_receipt_data(data)
+        _write_log(
+            user=user,
+            model=model,
+            prompt_hash=prompt_hash,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            start=start,
+            success=True,
+            error_code=None,
+            task_type="receipt_parse",
+            prompt_version=RECEIPT_PROMPT_VERSION,
+        )
+        return extraction
+
+    except GeminiError as exc:
+        _write_log(
+            user=user,
+            model=model,
+            prompt_hash=prompt_hash,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            start=start,
+            success=False,
+            error_code=exc.error_code,
+            task_type="receipt_parse",
+            prompt_version=RECEIPT_PROMPT_VERSION,
+        )
+        raise
+    except Exception:
+        _write_log(
+            user=user,
+            model=model,
+            prompt_hash=prompt_hash,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            start=start,
+            success=False,
+            error_code="unknown",
+            task_type="receipt_parse",
+            prompt_version=RECEIPT_PROMPT_VERSION,
         )
         raise
 
@@ -572,6 +719,70 @@ def _classify_sdk_error(exc: Exception) -> GeminiError:
     if "timeout" in name.lower() or "timeout" in msg or "timed out" in msg:
         return GeminiTimeout(f"Gemini timeout: {exc}")
     return GeminiProviderError(f"Gemini SDK error: {exc}")
+
+
+def _parse_receipt_data(data: dict[str, Any]) -> ReceiptExtraction:
+    """Normalize a raw receipt-parse JSON object into a ReceiptExtraction.
+
+    Empty strings (the receipt prompt's "unknown" sentinel — response_schema
+    can't cleanly express "string or absent," same tradeoff as
+    `detect_columns`) collapse to None. `amount` is parsed to Decimal; an
+    unparseable or non-positive amount degrades to None so the route asks the
+    user rather than proposing a junk row. A malformed `date` degrades to None
+    (it defaults to the user's local today downstream) instead of failing the
+    whole parse — a readable total with an unreadable date is still useful.
+    """
+    merchant = _receipt_str(data.get("merchant"))
+
+    amount: Decimal | None = None
+    amount_raw = _receipt_str(data.get("amount"))
+    if amount_raw is not None:
+        try:
+            parsed_amount: Decimal | None = Decimal(amount_raw.replace(",", ""))
+        except InvalidOperation:
+            parsed_amount = None
+        # `Decimal` accepts "NaN"/"Infinity" without raising, and `NaN > 0`
+        # itself raises InvalidOperation — outside this guard that would turn a
+        # garbage total into a 500 instead of the documented unreadable case.
+        # `is_finite()` (short-circuited before the comparison) rejects NaN and
+        # ±Infinity so they degrade to None → the route's 422 unreadable path.
+        if (
+            parsed_amount is not None
+            and parsed_amount.is_finite()
+            and parsed_amount > 0
+        ):
+            amount = parsed_amount
+
+    parsed_date: _dt.date | None = None
+    date_raw = _receipt_str(data.get("date"))
+    if date_raw is not None:
+        try:
+            parsed_date = _dt.date.fromisoformat(date_raw)
+        except ValueError:
+            parsed_date = None
+
+    currency = _receipt_str(data.get("currency"))
+    if currency is not None:
+        currency = currency.upper()
+
+    return ReceiptExtraction(
+        merchant=merchant,
+        amount=amount,
+        date=parsed_date,
+        currency=currency,
+    )
+
+
+def _receipt_str(raw: Any) -> str | None:
+    """Return a stripped non-empty string, or None for empty/non-string input.
+
+    The receipt prompt returns "" for fields it can't read; this collapses
+    "" and any non-string to None at the boundary.
+    """
+    if not isinstance(raw, str):
+        return None
+    stripped = raw.strip()
+    return stripped or None
 
 
 def _elapsed_ms(start: float) -> int:

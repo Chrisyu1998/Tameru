@@ -169,6 +169,7 @@
     "dismiss": "dismiss",
     "send": "send",
     "recordVoice": "record voice",
+    "captureReceipt": "scan a receipt",
     "emptyState": {
       "heading": "tell me what you spent",
       "body": "type or speak it. i'll structure the rest. you can also ask me to edit or compare.",
@@ -648,7 +649,7 @@
     "disclosure": {
       "aiProvidersHeading": "ai providers",
       "aiProvidersAnthropicParagraph": "when you chat with tameru — to add a transaction, to ask a question, or anything else — your message goes to anthropic. card multiplier lookups also go to anthropic and include only the public card name and last 4 digits, never your transaction data. anthropic's default retention is 30 days for trust & safety review; zero data retention has been requested for the tameru org and brings that to zero. anthropic does not use api data for training under any tier.",
-      "aiProvidersGeminiParagraph": "we also use google gemini on its paid tier to pick a category for each transaction — the merchant name and amount go to gemini, nothing else. gemini also parses csv imports and receipt photos when you use those. google's paid tier does not use api data for training; the free tier does, and we never use it.",
+      "aiProvidersGeminiParagraph": "we also use google gemini on its paid tier to pick a category for each transaction — for that, only the merchant name and amount are sent. when you scan a receipt, the photo itself goes to gemini (it can show line items, a store address, or a partial card number); it's used only to read the merchant, total, and date, and the image isn't stored. gemini parses csv imports the same way. google's paid tier does not use api data for training; the free tier does, and we never use it.",
       "analyticsHeading": "product analytics",
       "analyticsParagraph1": "we use posthog (us cloud) to count structural events only: chat-session starts and ends, feature usage, onboarding steps, the weekly digest opens, and shown errors. we never send transaction amounts, merchant names, card details, or the text of what you ask in chat.",
       "analyticsParagraph2": "the toggle above stops new events immediately. anything we already counted stays in posthog until you ask us to remove it."
