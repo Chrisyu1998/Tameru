@@ -709,6 +709,55 @@
       "heading": "尚無卡片",
       "body": "新增一兩張卡片讓 tameru 更了解你的消費。",
       "cta": "請 tameru AI 新增"
+    },
+    "creditsChip": {
+      "label": "回饋",
+      "ariaLabel": "查看帳單回饋"
+    }
+  },
+  "credits": {
+    "back": "卡片",
+    "title": "帳單回饋",
+    "loading": "載入中…",
+    "lookUp": "查詢這張卡的回饋",
+    "lookingUp": "查詢中…",
+    "addManually": "手動新增",
+    "saving": "儲存中…",
+    "saveChanges": "儲存變更",
+    "resetsIn": "剩 {{count}} 天 · {{date}} 重置",
+    "empty": {
+      "heading": "尚未追蹤任何回饋",
+      "body": "查詢這張卡的帳單回饋，或手動新增一項。"
+    },
+    "cadence": {
+      "monthly": "每月",
+      "quarterly": "每季",
+      "semiannual": "每半年",
+      "annual": "每年"
+    },
+    "fields": {
+      "name": "名稱",
+      "namePlaceholder": "例如：Lululemon 回饋",
+      "amount": "每期金額",
+      "cadence": "重置",
+      "used": "本期已使用"
+    },
+    "lookupSheet": {
+      "ariaLabel": "追蹤帳單回饋",
+      "title": "找到的回饋",
+      "subtitle": "取消勾選不適用的項目，並視需要修改金額。",
+      "none": "找不到這張卡的定期回饋。請手動新增。",
+      "confirm": "追蹤所選 ({{count}})"
+    },
+    "manualSheet": {
+      "ariaLabel": "新增回饋",
+      "title": "新增回饋",
+      "add": "新增回饋"
+    },
+    "editSheet": {
+      "ariaLabel": "編輯回饋",
+      "title": "編輯回饋",
+      "stopTracking": "停止追蹤此回饋"
     }
   },
   "subscriptions": {

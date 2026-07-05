@@ -709,6 +709,55 @@
       "heading": "no cards yet",
       "body": "tameru learns better with a card or two on file.",
       "cta": "ask tameru ai to add one"
+    },
+    "creditsChip": {
+      "label": "credits",
+      "ariaLabel": "view statement credits"
+    }
+  },
+  "credits": {
+    "back": "cards",
+    "title": "credits",
+    "loading": "loading…",
+    "lookUp": "look up this card's credits",
+    "lookingUp": "looking up…",
+    "addManually": "add manually",
+    "saving": "saving…",
+    "saveChanges": "save changes",
+    "resetsIn": "{{count}}d left · resets {{date}}",
+    "empty": {
+      "heading": "no credits tracked",
+      "body": "look up this card's statement credits, or add one manually."
+    },
+    "cadence": {
+      "monthly": "monthly",
+      "quarterly": "quarterly",
+      "semiannual": "semiannual",
+      "annual": "annual"
+    },
+    "fields": {
+      "name": "name",
+      "namePlaceholder": "e.g. Lululemon credit",
+      "amount": "amount per period",
+      "cadence": "resets",
+      "used": "used this period"
+    },
+    "lookupSheet": {
+      "ariaLabel": "track statement credits",
+      "title": "found credits",
+      "subtitle": "uncheck any that don't apply. edit amounts if needed.",
+      "none": "we couldn't find recurring credits for this card. add one manually.",
+      "confirm": "track selected ({{count}})"
+    },
+    "manualSheet": {
+      "ariaLabel": "add a credit",
+      "title": "add a credit",
+      "add": "add credit"
+    },
+    "editSheet": {
+      "ariaLabel": "edit credit",
+      "title": "edit credit",
+      "stopTracking": "stop tracking this credit"
     }
   },
   "subscriptions": {

@@ -15,6 +15,7 @@ from app.logging_config import configure_logging
 from app.mcp_server import mcp_app, mcp_server, mcp_well_known_routes
 from app.routes import admin as admin_routes
 from app.routes import auth as auth_routes
+from app.routes import card_credits as card_credits_routes
 from app.routes import cards as cards_routes
 from app.routes import chat as chat_routes
 from app.routes import dashboard as dashboard_routes
@@ -328,6 +329,7 @@ app.include_router(transactions_routes.router)
 app.include_router(chat_routes.router)
 app.include_router(dashboard_routes.router)
 app.include_router(cards_routes.router)
+app.include_router(card_credits_routes.router)
 app.include_router(memory_routes.router)
 app.include_router(goals_routes.router)
 app.include_router(subscriptions_routes.router)

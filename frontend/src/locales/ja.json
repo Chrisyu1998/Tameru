@@ -709,6 +709,55 @@
       "heading": "カードがありません",
       "body": "カードを登録するとtameruがより賢くなります。",
       "cta": "tameruに追加を依頼する"
+    },
+    "creditsChip": {
+      "label": "クレジット",
+      "ariaLabel": "利用特典を見る"
+    }
+  },
+  "credits": {
+    "back": "カード",
+    "title": "利用特典",
+    "loading": "読み込み中…",
+    "lookUp": "このカードの特典を検索",
+    "lookingUp": "検索中…",
+    "addManually": "手動で追加",
+    "saving": "保存中…",
+    "saveChanges": "変更を保存",
+    "resetsIn": "残り{{count}}日 · {{date}}に更新",
+    "empty": {
+      "heading": "追跡中の特典はありません",
+      "body": "このカードの利用特典を検索するか、手動で追加してください。"
+    },
+    "cadence": {
+      "monthly": "毎月",
+      "quarterly": "四半期ごと",
+      "semiannual": "半年ごと",
+      "annual": "毎年"
+    },
+    "fields": {
+      "name": "名前",
+      "namePlaceholder": "例：ルルレモン特典",
+      "amount": "期間ごとの金額",
+      "cadence": "更新",
+      "used": "今期の利用額"
+    },
+    "lookupSheet": {
+      "ariaLabel": "利用特典を追跡",
+      "title": "見つかった特典",
+      "subtitle": "該当しないもののチェックを外し、必要に応じて金額を編集してください。",
+      "none": "このカードの定期的な特典は見つかりませんでした。手動で追加してください。",
+      "confirm": "選択した特典を追跡 ({{count}})"
+    },
+    "manualSheet": {
+      "ariaLabel": "特典を追加",
+      "title": "特典を追加",
+      "add": "特典を追加"
+    },
+    "editSheet": {
+      "ariaLabel": "特典を編集",
+      "title": "特典を編集",
+      "stopTracking": "この特典の追跡を停止"
     }
   },
   "subscriptions": {
