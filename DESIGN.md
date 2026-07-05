@@ -560,6 +560,38 @@ Supported language set is **`en`, `ja`, `zh-TW`** (Traditional Chinese only — 
 
 ---
 
+### 6.7 Credit / Perk Tracking (planned — author-driven, phased)
+
+**Not in the Phase-1 core.** A per-card **statement-credit / perk tracker**: the recurring "spend $X, get $Y back" benefits on premium cards (Amex Platinum's $75/quarter Lululemon, $100/quarter Resy, $200/year airline; Sapphire Reserve's dining/travel credits). The user tracks how much of each use-it-or-lose-it credit they've burned this period, so they don't have to open each issuer's app before a deadline. Green-lit 2026-07-04 as an author-driven post-Phase-1 feature (§15); the phased build checklist is in `TODO.md`.
+
+Naming: the card already stores earn **multipliers** (§6.1, "4x dining"); this feature tracks **credits** ("$75 back at Lululemon"). The UI word is "Credits" — keep the two concepts distinct.
+
+**This is the annual-fee-tracking pattern, generalized.** A statement credit is a *card consequence* — it lives on the card, has no independent existence, and is reassigned to no other card — exactly like an annual fee (§6.5). So it reuses that architecture: a companion table keyed to the card, a management surface reached from the card (the AF-sheet pattern), and a `pg_cron` job on the card's schedule. Four pieces already built carry it:
+
+- **Lookup** — the card `web_search` lookup (§6.1) extended with a second prompt returning the card's list of recurring credits (name, amount, cadence, merchant hint) against the same allowlist. One extra ~$0.01 call, opt-in at "track credits" time (kept separate from the card-add multiplier lookup so card-add stays fast).
+- **Reset** — a `pg_cron reset_card_credits()` daily sweep, same forward-only, idempotent, advisory-locked shape as the subscription auto-logger (§6.5, invariant 4). It zeroes `used_amount` and advances the period when today crosses a calendar boundary. Missable-recoverable: a skipped night leaves a credit showing last period's usage for ≤24h.
+- **Propose-then-confirm** — the lookup returns a *checklist of proposed credits*; the user unchecks wrong ones and edits amounts before `POST /card-credits/confirm` writes rows. Manual add covers anything the search missed.
+- **Digest** (Phase 2) — the weekly email (§6.4) gains a "credits expiring soon, unused" slot, which is where the feature's value actually lands: a static tracker is inert, but a "⏰ $75 Lululemon expires in 12 days, $0 used" line saves the user $75.
+
+**Calendar-anchored reset only (v1).** Cadences are monthly / quarterly / semiannual / annual, all anchored to the **calendar** (quarter = Jan/Apr/Jul/Oct starts; half = Jan–Jun / Jul–Dec; year = Jan 1) — which covers Amex Platinum's entire credit set and most premium cards. Anniversary / cardmember-year anchoring (many *other* cards reset credits on the approval date, not Jan 1) is deferred: guessing calendar-vs-anniversary wrong resets the tracker on the wrong day, and a wrong reset is worse than no tracker — the same "a wrong number erodes trust more than a missing one" logic behind the Tier-3 base-rate-only decision (§6.6). Default calendar; add an explicit per-credit anchor override when the anniversary case is scheduled.
+
+**Terms drift; the user is the verifier.** Credit terms change yearly (Amex refreshed Platinum in 2025/26; the Saks credit ends 2026-06-30), so the one-shot lookup will sometimes be stale. The mitigation is structural, not accuracy-chasing: propose-then-confirm on every lookup, `source_urls` + `verified_at` stored and surfaced ("last checked {date}"), everything editable anytime, and a deliberate bias to **under-claim** (a missed credit the user adds by hand is fine; a phantom credit is a trust hit).
+
+**Invariant 8 is not implicated.** `card_credits` (§8.17) is a new auxiliary table, not one of the three ledger tables (transactions/cards/subscriptions), so "chat is the only create surface / no `tool_use` ledger writes" (invariant 8) does not govern it — same standing as `goals` and `user_memory`. The feature honors the spirit anyway: the lookup path is propose-then-confirm, and usage/edit/archive flow through explicit HTTP `PATCH`/`DELETE` (the AF-sheet pattern, §6.5), never a `tool_use` commit. The Credits page is a **management surface** like `/subscriptions` and the cards page, not a ledger-create surface. No new direct-write agent tool is added; Phase 2's optional `get_card_credits` chat tool is read-only.
+
+**Phase split.**
+
+- **Phase 1 — standalone manual tracker.** `card_credits` table + RLS; a "+ track credits" affordance on the card (the AF-chip sibling); the extended lookup → propose-then-confirm; a **Credits page** reached by a button on the card detail — a per-card list of progress bars (`Lululemon ▓▓▓░░ $45 / $75 · resets in 34d`) with set-used-amount, edit, archive, and manual-add; the `pg_cron` calendar reset. Stands on its own value (consolidated credit view + auto-reset).
+- **Phase 2 — the value multipliers.** (a) **Ledger bridge** (the differentiator) — when `POST /transactions/confirm` writes a transaction whose merchant + card match an active credit, the confirm response carries a "count $60 toward your Lululemon credit?" suggestion (piggybacking the existing entry-moment insight channel); a tap `PATCH`es `used_amount`. Only Tameru has *both* a manual ledger and a credit tracker, so only Tameru can offer this — competitors (CardPointers, MaxRewards) are auto-only (via bank linking Tameru won't do) or manual-only. (b) **Weekly-digest integration** — an "expiring soon, unused" reminder line (credits with `next_reset_date` near and `used_amount < amount`) plus an optional positive "value captured this period" line ($ used vs available across the wallet), reusing `compose_digest` + the per-user-timezone send (§6.4). This is where the feature's value lands. (c) `card_credit_history` (§8.18) period snapshots for "you used $60/$75 last quarter." (d) the read-only `get_card_credits` chat tool (agent awareness — see below).
+
+**Agent awareness, not distilled memory.** Credits are *live structured state* with a source-of-truth table (`card_credits`) and a reset schedule — they must **not** be written into `user_memory` (§8.5). Distillation deliberately excludes live inventory and one-off specifics — the same reason `"User has Amex 1007"` is never distilled (memory.md 2026-07-03) — because a credit balance memorized as a fact goes stale the instant the period resets or the credit is archived, and it would decay on relevance-score time rather than reset on period time (the wrong lifecycle). The chat agent instead *reads* credits live via the `get_card_credits` typed tool (Phase 2), the same way it reads transactions and cards via tools rather than memory (§7.2), so "how much Amex credit do I have left?" is answered from the table and is always current. A durable *trait* ("this user optimizes card credits") may still be distilled naturally if the user talks about it — that is a pattern, not inventory, and needs no special engineering.
+
+**Nav placement.** A dedicated **Credits page** reached from a button on the card detail (2026-07-04 decision), not a top-level BottomNav tab (avoids mobile nav bloat). An optional all-cards roll-up entry can live on the cards page / More menu.
+
+**Card soft-delete → archive companion credits.** When a card is soft-deleted (§8.1), its credits flip to `status = 'archived'` (they are card-specific with no reassignment target), mirroring the AF → `cancelled` branch of the split cascade (§8.3), handled in the same `soft_delete_card` RPC.
+
+---
+
 ## 7. AI Architecture
 
 **Design principle:** AI is the primary interface, not a feature bolted on. Screens and charts exist for at-a-glance visibility. The AI handles everything else.
@@ -1278,6 +1310,40 @@ In-app "This week" recap card store (§6.2 / §6.4, added 2026-07-03, migration 
 
 When the §16 welcome email sequence ships, extend `email_log.kind` CHECK with `'welcome_d0'`, `'welcome_d1'`, `'welcome_d7'`. No schema change beyond the CHECK; the unique-week idempotency rule still holds (a user can receive at most one of each kind per week, which is correct for the welcome sequence too — they should get the day-0 welcome exactly once).
 
+### 8.17 `card_credits` (planned — §6.7)
+
+Per-card recurring statement-credit / perk tracker. **Not built; this schema is the design target.** Follows the §8 status-column doctrine and the `cards` crid pattern (§8.1).
+
+| Field | Type | Description |
+|---|---|---|
+| id | UUID | Primary key |
+| user_id | UUID | `NOT NULL`; FK → auth.users |
+| card_id | UUID | `NOT NULL`; FK → cards. A credit has no existence apart from its card (unlike a subscription, whose `card_id` is nullable for ACH bills — §8.3). Soft-delete of the card archives its credits (§6.7) |
+| name | text | "Lululemon credit", "Uber Cash", "Airline fee credit" |
+| amount | numeric | Per-period allowance in `home_currency` (§8.7), stored as `numeric` — the full credit for one period (e.g. `75.00` for $75/qtr) |
+| cadence | text | CHECK enum: `monthly \| quarterly \| semiannual \| annual`. Calendar-anchored in v1 (§6.7) |
+| used_amount | numeric | `NOT NULL DEFAULT 0`. How much of `amount` is used in the current period. Set by manual edit or the Phase-2 ledger bridge |
+| current_period_start | date | Start of the active period, calendar-derived from `cadence` |
+| next_reset_date | date | When `used_amount` resets to 0 — the next calendar boundary. The `pg_cron` sweep's trigger and the UI's "resets in N days" source |
+| merchant_hint | text | Nullable. Lowercased merchant token for the Phase-2 ledger-bridge match (e.g. `"lululemon"`); populated by the lookup, editable. Null disables the bridge for that credit |
+| status | text | CHECK enum: `active \| archived`. `NOT NULL DEFAULT 'active'`. "Stop tracking" → `archived`; no `deleted` value needed (§8 doctrine) |
+| source_urls | text[] | Nullable. `web_search` citations from the lookup (§6.1 shape) |
+| verified_at | timestamptz | Nullable. When the lookup last confirmed the terms; surfaced as "last checked". Null for manually-added credits |
+| client_request_id | UUID | `NOT NULL DEFAULT gen_random_uuid()`. Propose-confirm join key + idempotency, same role as `cards.client_request_id` (§8.1) |
+| created_at | timestamptz | |
+
+**Constraints:**
+- `CREATE UNIQUE INDEX card_credits_active_crid_uniq ON card_credits (user_id, client_request_id) WHERE status = 'active';` — dedups the confirm under a race, same shape as `cards_active_client_request_id_unique` (§8.1).
+- `CREATE UNIQUE INDEX card_credits_active_name_uniq ON card_credits (card_id, lower(name)) WHERE status = 'active';` — soft natural key so re-running the lookup or a double-tap doesn't create two "$75 Lululemon" rows on one card. Archived rows are exempt (re-add after "stop tracking"). It's an expression + partial index, so any `ON CONFLICT` write must go through a SECURITY INVOKER plpgsql upsert (PostgREST can't infer expression/partial indexes — memory.md 2026-05-17 / 2026-05-19).
+
+**Reset (`pg_cron reset_card_credits()`).** Daily sweep, same family as `autolog_subscriptions` (§6.5): for each `status = 'active'` credit with `next_reset_date <= today`, (Phase 2: snapshot the closing period into `card_credit_history`), set `used_amount = 0`, `current_period_start` = the new period start, `next_reset_date` = the next calendar boundary for the cadence. Naturally idempotent (only fires past the boundary, then advances past today) and forward-only (never backfills). Advisory-locked against concurrent runs. Boundaries computed in the user's `timezone` (§8.7) when set, else UTC. System caller (no user JWT) → service role, the same sanctioned standing as the auto-logger (invariants 1 and 4).
+
+**RLS shape:** `ENABLE`/`FORCE ROW LEVEL SECURITY`; owner `SELECT`/`INSERT`/`UPDATE`/`DELETE` policies all `USING`/`WITH CHECK (user_id = auth.uid())`. All app writes (confirm, usage edits, archive) run under the user's JWT; only the `pg_cron` reset uses the service role.
+
+### 8.18 `card_credit_history` (planned, Phase 2 — §6.7)
+
+Optional period snapshots so the Credits page can show "last quarter you used $60 / $75." Written by the `reset_card_credits()` sweep at each period rollover (the closing period's `used_amount` + `amount` + the period bounds). Not built in Phase 1 — the reset job simply skips the snapshot until this table exists. `(card_credit_id, period_start)` unique; read-only to the user.
+
 ---
 
 ## 9. Security & Privacy
@@ -1691,6 +1757,7 @@ Because v1 Tameru is invite-only (§3.3), there is no committed Phase 2 or Phase
 - Retroactive rewards gap analysis ("How many points did I miss last month?")
 - Transfer bonus digest, SUB wishlist alerts
 - Spending limits with AI nudges
+- Credit / perk tracking — per-card statement-credit tracker (Amex Plat's $75/qtr Lululemon, etc.) with calendar-anchored `pg_cron` reset (Phase 1) and a transaction→credit ledger bridge (Phase 2). Design: §6.7; schema §8.17/§8.18; build checklist in `TODO.md`.
 
 Explicitly excluded at every phase: Plaid / Teller.io auto-sync, public launch / Product Hunt, Expo / React Native, in-app purchases via App Store IAP.
 

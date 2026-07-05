@@ -8,6 +8,112 @@ For shipped architecture and the *why* behind decisions, see `DESIGN.md` and
 
 ---
 
+## Credit / Perk Tracking (PLANNED — author-driven, phased)
+
+**Status:** designed 2026-07-04, **not built.** A manual per-card statement-credit
+tracker (Amex Plat's $75/qtr Lululemon, $100/qtr Resy, etc.) so users see which
+use-it-or-lose-it credits they've burned this period without opening each
+issuer's app. Green-lit as a post-Phase-1, author-driven feature (§15). Design +
+rationale: DESIGN.md **§6.7**; schema **§8.17** (`card_credits`) / **§8.18**
+(`card_credit_history`, Phase 2). This file holds the build checklist.
+
+**Decisions already made (build to these — don't re-litigate):**
+
+- **Manual usage entry** — no bank linking (Plaid/Teller permanently out of
+  scope, §3.2). Competitors (CardPointers, MaxRewards) auto-detect usage via
+  account linking; Tameru asks the user to tap "$60 used." That's the product,
+  not a gap — the value is the consolidated privacy-preserving view + reminders.
+- **Calendar-anchored reset only** — monthly / quarterly / semiannual / annual,
+  all on calendar boundaries (covers Amex Platinum's whole credit set).
+  Anniversary / cardmember-year anchoring is **deferred** (default calendar; add
+  a per-credit anchor override later). Guessing calendar-vs-anniversary wrong
+  resets on the wrong day — a trust hit, same logic as Tier-3 base-rate-only.
+- **Under-claim on lookup** — propose-then-confirm every lookup, store
+  `source_urls` + `verified_at`, editable anytime; the user is the verifier.
+  Prefer a missed credit (user adds it) over a phantom one (terms drift yearly).
+- **Nav** — a Credits page reached from a **button on the card detail**, not a
+  BottomNav tab.
+- **Invariant 8 not implicated** — `card_credits` is an auxiliary table, not a
+  ledger table; propose-then-confirm + HTTP edits (AF-sheet pattern), no
+  `tool_use` writes. See §6.7.
+- **Surfaced in the weekly digest + read by the agent** — the payoff isn't the
+  tracker, it's the reminders: a digest "expiring soon, unused" line + a
+  "value captured" line (Phase 2), and the agent answering "how much Amex credit
+  do I have left?" via a read tool.
+- **Credits are tool-read live state, NOT `user_memory`** — the agent reads them
+  via a `get_card_credits` typed tool (Phase 2), never distilled as facts. A
+  credit balance in memory goes stale at period reset and decays on the wrong
+  clock (same stale-inventory reason `"User has Amex 1007"` is excluded from
+  distillation, memory.md 2026-07-03). A durable *trait* ("optimizes credits")
+  may distill naturally — that's a pattern, not inventory.
+
+**Phase 1 — standalone manual tracker:**
+
+- [ ] `card_credits` table + RLS + the two partial unique indexes (§8.17);
+  migration.
+- [ ] `reset_card_credits()` `pg_cron` daily sweep — calendar boundaries per
+  cadence, forward-only, advisory-locked, service role (the §6.5 auto-logger
+  shape). Migration + `pg_cron` schedule.
+- [ ] Extend `app/integrations/card_lookup.py` with a credit-list lookup prompt
+  (name / amount / cadence / merchant_hint) against the existing allowlist; new
+  `ai_call_log` `task_type` (CHECK widen on `ai_call_log` + `ai_call_log_daily`,
+  mirrors the `recap` / `receipt_parse` additions).
+- [ ] Endpoints (typed Pydantic boundaries per CLAUDE.md doctrine):
+  `POST /card-credits/lookup` (→ proposal list), `POST /card-credits/confirm`
+  (write rows), `GET /card-credits?card_id=`, `PATCH /card-credits/{id}`
+  (used_amount / name / amount / cadence / status), `DELETE /card-credits/{id}`
+  (→ archive).
+- [ ] Cards surface: "+ track credits" affordance (AF-chip sibling) → runs
+  lookup → propose-confirm sheet.
+- [ ] Credits page: per-card list of progress bars + set-used-amount + edit +
+  archive + manual-add. i18n keys (en final; ja/zh-TW drafts per Tier-2
+  translation ownership).
+- [ ] `soft_delete_card` RPC: archive companion credits on card soft-delete
+  (§8.3 split-cascade sibling).
+- [ ] Tests: RLS contract; reset-boundary math per cadence; propose-confirm
+  idempotency (crid); lookup fail-closed (empty/partial results).
+
+**Phase 2 — the value multipliers (the differentiator):**
+
+- [ ] **Ledger bridge** — `POST /transactions/confirm`: on a merchant+card match
+  to an active credit (via `merchant_hint`), return a "count $X toward
+  {credit}?" suggestion on the existing entry-moment insight channel; a tap
+  `PATCH`es `used_amount`. Clamp at `amount`; handle refunds/over-cap;
+  user-editable.
+- [ ] Weekly-digest integration in `compose_digest`: an "expiring soon, unused"
+  reminder line (credits with `next_reset_date` within N days and
+  `used_amount < amount`) + an optional positive "value captured this period"
+  line ($ used vs available across the wallet). Reuses the per-user-timezone
+  send (§6.4).
+- [ ] `card_credit_history` (§8.18) + "last {period} you used $X" on the Credits
+  page; `reset_card_credits()` snapshots the closing period.
+- [ ] Read-only `get_card_credits` chat tool — the agent-awareness path ("how
+  much Amex credit do I have left?"). Reads live from `card_credits`, **not**
+  `user_memory` (credits are live state, not distilled facts — see decisions
+  above). Read-only: no direct-write tool, no invariant-8 widening.
+
+**Deferred beyond Phase 2:**
+
+- Anniversary / cardmember-year anchoring (non-calendar reset) + per-credit
+  anchor date.
+- Entry-moment credit nudge (vs. digest-only reminders).
+- Auto term-refresh (periodic re-lookup to catch changed terms) — needs a
+  refresh cron the lookup pipeline doesn't have today (same "no refresh
+  mechanism" constraint that cut Tier-3 promos).
+- Localized credit-lookup sources/prompts for JP/TW cards (follows the Tier-3
+  pattern; JP/TW premium-card credits are rarer anyway).
+
+**Open questions to resolve at build time:**
+
+- Reset-boundary timezone: user `timezone` vs UTC (lean user tz, reuse the
+  digest machinery).
+- Whether the credit lookup is a separate call or bundled into card-add (lean
+  separate — keeps card-add fast, makes tracking opt-in).
+- `merchant_hint` match strategy for the bridge (exact-substring vs. the
+  merchant-canonicalization the chat prompt already does).
+
+---
+
 ## Internationalization — credit cards (DEFERRED)
 
 **Status:** the **minimal-done slice is implemented** (2026-06-02, local +
