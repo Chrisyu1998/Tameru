@@ -31,6 +31,7 @@ from anthropic import Anthropic
 from app.auth import AuthedUser
 from app.integrations.aicalllog import log_ai_call
 from app.integrations.card_regions import ALLOWED_DOMAINS_BY_REGION
+from app.models.card_credits import CardCreditsLookupResult, LookedUpCredit
 from app.models.cards import (
     CardIssuer,
     CardLookupResult,
@@ -40,13 +41,24 @@ from app.models.cards import (
 from app.prompts.categories import ALLOWED_CATEGORIES
 
 
-__all__ = ["CARD_LOOKUP_PROMPT_VERSION", "lookup_card"]
+__all__ = [
+    "CARD_LOOKUP_PROMPT_VERSION",
+    "CREDIT_LOOKUP_PROMPT_VERSION",
+    "lookup_card",
+    "lookup_card_credits",
+]
 
 
 # v2 — Tier 3 (DESIGN.md §6.6): the lookup is now region-aware. US keeps the
 # category-multiplier prompt; JP/TW use a base-rate prompt. The version bumps
 # so `ai_call_log.prompt_version` distinguishes the two eras of card lookups.
 CARD_LOOKUP_PROMPT_VERSION = "card_lookup_v2"
+
+# v1 — Phase 1 credit tracking (DESIGN.md §6.7). A separate card web_search
+# prompt returning the card's list of recurring statement credits; distinct
+# `credit_lookup` task_type so ai_call_log tells it apart from the multiplier
+# lookup.
+CREDIT_LOOKUP_PROMPT_VERSION = "credit_lookup_v1"
 
 # Bound the web_search tool's internal iterations. A well-known card
 # typically needs one search; ambiguous names may need two. Three is the
@@ -185,6 +197,62 @@ _INTL_ISSUERS: dict[CardRegion, str] = {
     "JP": '"rakuten", "smbc", "jcb", "aeon", "epos", "saison", "other"',
     "TW": '"cathay", "esun", "ctbc", "taishin", "fubon", "union", "other"',
 }
+
+
+# Phase 1 credit tracking (DESIGN.md §6.7). Returns the card's list of recurring
+# statement credits. `{home_currency}` is `.replace`d in (not `.format` — the
+# body has literal JSON braces). Under-claim by design: terms drift yearly, so a
+# missed credit (user adds it) beats a phantom one.
+_CREDIT_SYSTEM_PROMPT = """\
+You research a single credit card's recurring STATEMENT CREDITS and return \
+structured JSON.
+
+A statement credit is a recurring, use-it-or-lose-it benefit that reimburses \
+spending at a specific merchant or category on a fixed cadence (e.g. Amex \
+Platinum's $75/quarter Lululemon credit, $100/quarter Resy credit, $200/year \
+airline fee credit). Do NOT report:
+  - earn multipliers / points bonuses (a different feature),
+  - one-time welcome offers or sign-up bonuses,
+  - benefits without a clear recurring dollar value.
+
+Search the allowlisted authoritative sources and, for the card named in the \
+user message, return each recurring statement credit with:
+
+  - name: a short label, e.g. "Lululemon credit", "Uber Cash", "Airline fee \
+credit".
+
+  - amount: the per-PERIOD dollar value as a number, in {home_currency} (e.g. \
+75 for a $75/quarter credit — the amount PER quarter, not the annual total). If \
+the value is published only in a different currency, return null (do NOT \
+convert).
+
+  - cadence: one of ["monthly", "quarterly", "semiannual", "annual"] — how \
+often the credit resets on the calendar.
+
+  - merchant_hint: a short lowercase merchant token the credit applies to, e.g. \
+"lululemon", "uber", "resy". Null for broad category credits with no single \
+merchant.
+
+Bias to UNDER-claiming: if you are not confident a credit is currently offered \
+with these terms, omit it. A missed credit the user adds by hand is fine; a \
+phantom credit is not.
+
+Return your entire output as a single JSON object inside ```json fences:
+
+```json
+{"credits": [{"name": "Lululemon credit", "amount": 75, "cadence": "quarterly", "merchant_hint": "lululemon"}, {"name": "Airline fee credit", "amount": 200, "cadence": "annual", "merchant_hint": null}]}
+```
+
+If the card has no recurring statement credits (most no-annual-fee cards don't), \
+return:
+
+```json
+{"credits": []}
+```
+
+Do not include any prose outside the JSON fences. Cite your sources via \
+web_search — citations are extracted automatically by the caller.
+"""
 
 
 class CardLookupError(Exception):
@@ -432,6 +500,142 @@ def lookup_card(
             model=model,
             task_type="card_lookup",
             prompt_version=CARD_LOOKUP_PROMPT_VERSION,
+            prompt_hash=prompt_hash,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            success=success,
+            error_code=error_code,
+        )
+
+
+def lookup_card_credits(
+    card_name: str,
+    user: AuthedUser,
+    home_currency: str = "USD",
+) -> CardCreditsLookupResult:
+    """Web-grounded lookup of a card's recurring statement credits (§6.7).
+
+    Request:
+        card_name: the user-facing card name, e.g. "Amex Platinum".
+        home_currency: amounts resolve in it; the prompt fails to null (no FX)
+            when a credit's value is published in a different currency.
+
+    Response:
+        CardCreditsLookupResult — `credits` is a list of `LookedUpCredit`
+        (name / amount / cadence / merchant_hint). `needs_manual=True` with an
+        empty list means "found nothing usable — offer manual add." Under-claim
+        by design: a card with no documented credits returns an empty list.
+
+    Never raises (mirrors `lookup_card`). Writes exactly one ai_call_log row
+    (provider="anthropic", task_type="credit_lookup") via the user-JWT path
+    (invariant 14), success or failure.
+    """
+    name = (card_name or "").strip()
+    if not name:
+        return CardCreditsLookupResult(needs_manual=True, raw_text="empty card name")
+
+    system_prompt = _credit_system_prompt(home_currency)
+    model = _model_name()
+    prompt_hash = hashlib.sha256(
+        (system_prompt + "\n---\n" + name).encode()
+    ).hexdigest()
+    start = time.perf_counter()
+    input_tokens = 0
+    output_tokens = 0
+    success = False
+    error_code: str | None = None
+
+    try:
+        client = _anthropic_client()
+        # Credit tracking is US-premium-card-shaped in Phase 1 (JP/TW credit
+        # localization is deferred — TODO.md), so the lookup uses the US
+        # source allowlist plus any inferred issuer domain.
+        allowed_domains = list(
+            ALLOWED_DOMAINS_BY_REGION["US"]
+        ) + _inferred_issuer_domains(name)
+
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=1024,
+                system=system_prompt,
+                tools=[
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": _MAX_WEB_SEARCHES,
+                        "allowed_domains": allowed_domains,
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "List the recurring statement credits for the "
+                            f"credit card named: {name!r}. "
+                            "Return only the JSON object described in the system prompt."
+                        ),
+                    }
+                ],
+            )
+        except anthropic.RateLimitError as exc:
+            error_code = CardLookupRateLimited.error_code
+            return CardCreditsLookupResult(
+                needs_manual=True,
+                raw_text=f"rate_limited: {exc.__class__.__name__}",
+            )
+        except anthropic.APIError as exc:
+            error_code = CardLookupProviderError.error_code
+            return CardCreditsLookupResult(
+                needs_manual=True,
+                raw_text=f"provider_error: {exc.__class__.__name__}",
+            )
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+
+        if _tool_result_errored(response):
+            error_code = CardLookupToolUnavailable.error_code
+            return CardCreditsLookupResult(
+                needs_manual=True,
+                raw_text="web_search unavailable — check Claude Console > Privacy",
+            )
+
+        try:
+            parsed = _extract_json(response)
+        except CardLookupParseError as exc:
+            error_code = CardLookupParseError.error_code
+            return CardCreditsLookupResult(needs_manual=True, raw_text=str(exc))
+
+        citations = _extract_citations(response, allowed_domains)
+        credits = _extract_credits(parsed.get("credits"))
+        # The API call succeeded even when the card has zero documented
+        # credits — that's a valid, common answer (a no-AF card), not a
+        # failure. `needs_manual` just tells the UI to offer manual add.
+        success = True
+        return CardCreditsLookupResult(
+            credits=credits,
+            source_urls=citations,
+            needs_manual=not credits,
+        )
+
+    except Exception as exc:  # pragma: no cover - defensive
+        error_code = type(exc).__name__
+        return CardCreditsLookupResult(
+            needs_manual=True,
+            raw_text=f"unexpected: {error_code}",
+        )
+    finally:
+        log_ai_call(
+            user.jwt,
+            user_id=user.user_id,
+            provider="anthropic",
+            model=model,
+            task_type="credit_lookup",
+            prompt_version=CREDIT_LOOKUP_PROMPT_VERSION,
             prompt_hash=prompt_hash,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -849,4 +1053,77 @@ def _coerce_number(value: Any) -> Any:
         except ValueError:
             return None
         return n if n >= 0 else None
+    return None
+
+
+def _credit_system_prompt(home_currency: str) -> str:
+    """Credit-list prompt with the amount anchored to the user's home currency.
+
+    `.replace` (not `.format`) because the prompt body contains literal `{...}`
+    JSON braces. Same fail-closed-to-null-on-currency-mismatch rule as the AF
+    prompt (§6.7 / invariant 13); no FX. `home_currency` flows into prompt_hash.
+    """
+    return _CREDIT_SYSTEM_PROMPT.replace("{home_currency}", home_currency)
+
+
+def _extract_credits(value: Any) -> list[LookedUpCredit]:
+    """Coerce the model's `credits` array into validated LookedUpCredit rows.
+
+    Drops entries with an empty name, an invalid cadence, or a garbage amount.
+    The under-claim bias means a malformed row is silently skipped rather than
+    surfaced as a phantom credit.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[LookedUpCredit] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        cadence = _normalize_cadence(entry.get("cadence"))
+        if cadence is None:
+            continue
+        hint = entry.get("merchant_hint")
+        merchant_hint = (
+            hint.strip().lower()[:80]
+            if isinstance(hint, str) and hint.strip()
+            else None
+        )
+        try:
+            out.append(
+                LookedUpCredit(
+                    name=name.strip()[:120],
+                    amount=_coerce_number(entry.get("amount")),
+                    cadence=cadence,  # type: ignore[arg-type]
+                    merchant_hint=merchant_hint,
+                )
+            )
+        except Exception:  # pragma: no cover - defensive
+            continue
+    return out
+
+
+def _normalize_cadence(value: Any) -> str | None:
+    """Map model output onto the closed credit-cadence enum, or None."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().lower()
+    if cleaned in ("monthly", "quarterly", "semiannual", "annual"):
+        return cleaned
+    if cleaned in ("month",):
+        return "monthly"
+    if cleaned in ("quarter",):
+        return "quarterly"
+    if cleaned in (
+        "semi-annual",
+        "semi annual",
+        "biannual",
+        "half-yearly",
+        "twice a year",
+    ):
+        return "semiannual"
+    if cleaned in ("year", "yearly", "annually"):
+        return "annual"
     return None

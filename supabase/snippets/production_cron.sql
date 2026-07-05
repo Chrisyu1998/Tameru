@@ -30,3 +30,15 @@ SELECT cron.schedule(
     '0 4 * * 0',  -- weekly, Sunday 04:00 UTC
     $$SELECT trim_eval_user_ai_call_log();$$
 );
+
+-- Credit-tracking reset (DESIGN.md §6.7 / §8.17). Daily calendar-boundary
+-- sweep that zeroes used_amount and advances the period for any active
+-- card_credit whose next_reset_date has arrived (in the user's local tz).
+-- Same forward-only / idempotent / advisory-locked shape as the auto-logger;
+-- scheduled here (not in the migration) so it doesn't fire in dev / CI, where
+-- tests call reset_card_credits() directly under a per-test seed.
+SELECT cron.schedule(
+    'reset-card-credits',
+    '0 5 * * *',  -- daily at 05:00 UTC
+    $$SELECT reset_card_credits();$$
+);

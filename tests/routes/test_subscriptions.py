@@ -25,6 +25,7 @@ from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db import supabase_for_user
 from app.main import app
 
 
@@ -96,9 +97,10 @@ def test_confirm_idempotent_on_same_crid(client, user_a, card_a):
 def test_confirm_rejects_other_users_card_id(client, user_a, card_b):
     """A tampered client posting another user's card_id is rejected.
 
-    RLS scopes `subscriptions` writes by `user_id`, but the
-    `card_id` FK is not user-bound at the DB layer. The route-level
-    `_assert_card_owned` check is the defense.
+    Defense in depth: the route-level `_assert_card_owned` check returns 422
+    here, AND the DB-layer RLS `WITH CHECK` (migration 20260705120600) would
+    refuse the row even if the route were bypassed — see
+    `test_rls_rejects_direct_subscription_insert_onto_foreign_card`.
     """
     body = _proposal(
         name=f"Cross-{_tag()}",
@@ -108,6 +110,55 @@ def test_confirm_rejects_other_users_card_id(client, user_a, card_b):
     resp = client.post("/subscriptions/confirm", headers=_auth(user_a), json=body)
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"]["code"] == "invalid_card"
+
+
+def test_rls_rejects_direct_subscription_insert_onto_foreign_card(user_a, card_b):
+    """RLS (not just the route) refuses a subscription on another user's card.
+
+    A direct PostgREST insert with the caller's own user_id but user B's
+    card_id must be rejected by the INSERT WITH CHECK card-ownership predicate
+    (Codex 2026-07-05 — parallel to the card_credits fix).
+    """
+    a_client = supabase_for_user(user_a.jwt)
+    with pytest.raises(Exception):
+        (
+            a_client.table("subscriptions")
+            .insert(
+                {
+                    "user_id": user_a.id,
+                    "card_id": card_b,  # user B's card
+                    "name": f"RLS probe {_tag()}",
+                    "amount": "9.99",
+                    "frequency": "monthly",
+                    "start_date": "2026-07-01",
+                    "next_billing_date": "2026-08-01",
+                    "category": "Streaming",
+                }
+            )
+            .execute()
+        )
+
+
+def test_rls_allows_direct_cardless_subscription_insert(user_a):
+    """Positive control: a cardless (ACH) subscription still inserts (card_id NULL)."""
+    a_client = supabase_for_user(user_a.jwt)
+    resp = (
+        a_client.table("subscriptions")
+        .insert(
+            {
+                "user_id": user_a.id,
+                "card_id": None,  # ACH bill — allowed
+                "name": f"RLS ach {_tag()}",
+                "amount": "1200",
+                "frequency": "monthly",
+                "start_date": "2026-07-01",
+                "next_billing_date": "2026-08-01",
+                "category": "Bills",
+            }
+        )
+        .execute()
+    )
+    assert resp.data and resp.data[0]["card_id"] is None
 
 
 def test_confirm_rejects_non_positive_amount(client, user_a, card_a):

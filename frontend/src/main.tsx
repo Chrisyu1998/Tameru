@@ -14,6 +14,7 @@ import Layout, { NotFoundPage } from './pages/_layout';
 import HomePage from './pages/home';
 import ChatPage from './pages/chat';
 import CardsPage from './pages/cards';
+import CardCreditsPage from './pages/cards.credits';
 import SubscriptionsPage from './pages/subscriptions';
 import MemoryPage from './pages/memory';
 import GoalsPage from './pages/goals';
@@ -138,6 +139,7 @@ function App() {
           <Route element={<RequireOnboarded />}>
             <Route path="/" element={<HomePage />} />
             <Route path="/cards" element={<CardsPage />} />
+            <Route path="/cards/:cardId/credits" element={<CardCreditsPage />} />
             <Route path="/subscriptions" element={<SubscriptionsPage />} />
             <Route path="/memory" element={<MemoryPage />} />
             <Route path="/goals" element={<GoalsPage />} />

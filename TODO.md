@@ -10,12 +10,16 @@ For shipped architecture and the *why* behind decisions, see `DESIGN.md` and
 
 ## Credit / Perk Tracking (PLANNED — author-driven, phased)
 
-**Status:** designed 2026-07-04, **not built.** A manual per-card statement-credit
-tracker (Amex Plat's $75/qtr Lululemon, $100/qtr Resy, etc.) so users see which
-use-it-or-lose-it credits they've burned this period without opening each
-issuer's app. Green-lit as a post-Phase-1, author-driven feature (§15). Design +
-rationale: DESIGN.md **§6.7**; schema **§8.17** (`card_credits`) / **§8.18**
-(`card_credit_history`, Phase 2). This file holds the build checklist.
+**Status:** **Phase 1 shipped 2026-07-05** (local + 15 route tests green; migrations
+apply clean via `supabase db reset`; frontend build green — **not yet deployed**).
+**OPERATOR:** apply the new `reset-card-credits` schedule from
+`supabase/snippets/production_cron.sql` to prod (daily `0 5 * * *`). A manual
+per-card statement-credit tracker (Amex Plat's $75/qtr Lululemon, $100/qtr Resy,
+etc.) so users see which use-it-or-lose-it credits they've burned this period
+without opening each issuer's app. Green-lit as a post-Phase-1, author-driven
+feature (§15). Design + rationale: DESIGN.md **§6.7**; schema **§8.17**
+(`card_credits`) / **§8.18** (`card_credit_history`, Phase 2). Phase 2 (below) is
+still planned.
 
 **Decisions already made (build to these — don't re-litigate):**
 
@@ -31,8 +35,13 @@ rationale: DESIGN.md **§6.7**; schema **§8.17** (`card_credits`) / **§8.18**
 - **Under-claim on lookup** — propose-then-confirm every lookup, store
   `source_urls` + `verified_at`, editable anytime; the user is the verifier.
   Prefer a missed credit (user adds it) over a phantom one (terms drift yearly).
-- **Nav** — a Credits page reached from a **button on the card detail**, not a
-  BottomNav tab.
+- **Nav** — a "credits" chip on the card row in `cards.tsx` (sibling to the AF
+  chip on `CardTile`), NOT a BottomNav tab and NOT a "card detail" page (none
+  exists in v1). The chip **navigates to a dedicated Credits page route**
+  (`/cards/:cardId/credits`) — a full page, not a bottom sheet, since a card can
+  carry ~10 credits (Amex Plat). DESIGN §6.7's "button on the card detail"
+  wording means exactly this; update it to "chip on the card row → Credits page"
+  when built.
 - **Invariant 8 not implicated** — `card_credits` is an auxiliary table, not a
   ledger table; propose-then-confirm + HTTP edits (AF-sheet pattern), no
   `tool_use` writes. See §6.7.
@@ -46,39 +55,88 @@ rationale: DESIGN.md **§6.7**; schema **§8.17** (`card_credits`) / **§8.18**
   clock (same stale-inventory reason `"User has Amex 1007"` is excluded from
   distillation, memory.md 2026-07-03). A durable *trait* ("optimizes credits")
   may distill naturally — that's a pattern, not inventory.
+- **Reset sweep is a sanctioned service-role caller** — `reset_card_credits()` is
+  a new `pg_cron` DB function with no user JWT, same category as the auto-logger
+  (invariant 1 caller #1). Add it by name to CLAUDE.md invariant 1 + DESIGN §9.1
+  in the migration that ships it (memory.md 2026-05-22 enumerates callers by
+  name). `test_no_service_role_leak.py` is NOT implicated — SQL in a migration,
+  not `app/` Python — so this is invariant-doc sync only, no test change.
+- **Lookup amount fail-closed on currency mismatch** — if the lookup returns a
+  credit amount in a currency ≠ `home_currency`, store `amount = null` and let the
+  user type it; never convert (mirrors the AF fail-closed-to-null, invariant 13 /
+  the Tier-3 "Annual fee" note below). No separate home-currency gate — the AF
+  path already set the pattern.
+- **Lookup failure returns `[]` + HTTP 200, never 503** —
+  `POST /card-credits/lookup` catches lookup errors and returns an empty proposal
+  list; the UI renders "no credits found — add manually." Mirrors `lookup_card`'s
+  never-raises contract (`app/integrations/card_lookup.py`); deliberately unlike
+  the receipt route's 503, because credits always have a manual-add fallback and
+  receipt does not.
 
 **Phase 1 — standalone manual tracker:**
 
-- [ ] `card_credits` table + RLS + the two partial unique indexes (§8.17);
-  migration.
-- [ ] `reset_card_credits()` `pg_cron` daily sweep — calendar boundaries per
-  cadence, forward-only, advisory-locked, service role (the §6.5 auto-logger
-  shape). Migration + `pg_cron` schedule.
-- [ ] Extend `app/integrations/card_lookup.py` with a credit-list lookup prompt
-  (name / amount / cadence / merchant_hint) against the existing allowlist; new
-  `ai_call_log` `task_type` (CHECK widen on `ai_call_log` + `ai_call_log_daily`,
-  mirrors the `recap` / `receipt_parse` additions).
-- [ ] Endpoints (typed Pydantic boundaries per CLAUDE.md doctrine):
+- [x] `card_credits` table + RLS + the two partial unique indexes (§8.17);
+  migration (`20260705120000`).
+- [x] `reset_card_credits()` `pg_cron` daily sweep — calendar boundaries per
+  cadence, forward-only, advisory-locked *against concurrent cron runs only*,
+  service role (the §6.5 auto-logger shape). Migration + `pg_cron` schedule.
+  **No two-sided lock** with the `used_amount` write path: the sweep zeroes
+  `used_amount` only at a period boundary, so a Phase-1 set-absolute `PATCH`
+  landing at that instant is period-ambiguous, visible, and self-correcting
+  (user re-enters if zeroed) — missable-recoverable, NOT the 2026-05-18
+  memory-prune lock case (that was silent, permanent loss). Documented benign in
+  §8.17.
+- [x] `credit_period_bounds(cadence, on_date)` plpgsql helper →
+  `(period_start, next_reset)`: the single source of truth for calendar-anchored
+  boundaries (monthly = 1st, quarterly = Jan/Apr/Jul/Oct 1, semiannual =
+  Jan/Jul 1, annual = Jan 1), in the user's `timezone` else UTC. Consumed by
+  BOTH `reset_card_credits()` (advance) AND the confirm upsert (seed) — one SQL
+  implementation, no Python↔SQL mirror drift; it's also the field the Phase-2
+  period-guard `WHERE :tx_date >= current_period_start` depends on.
+- [x] Extend `app/integrations/card_lookup.py` with a credit-list lookup prompt
+  (`lookup_card_credits`, `credit_lookup_v1`); new `ai_call_log` `task_type`
+  `credit_lookup` (CHECK widen on `ai_call_log` + `ai_call_log_daily`,
+  `20260705120500`).
+- [x] Endpoints (typed Pydantic boundaries per CLAUDE.md doctrine):
   `POST /card-credits/lookup` (→ proposal list), `POST /card-credits/confirm`
-  (write rows), `GET /card-credits?card_id=`, `PATCH /card-credits/{id}`
-  (used_amount / name / amount / cadence / status), `DELETE /card-credits/{id}`
-  (→ archive).
-- [ ] Cards surface: "+ track credits" affordance (AF-chip sibling) → runs
-  lookup → propose-confirm sheet.
-- [ ] Credits page: per-card list of progress bars + set-used-amount + edit +
-  archive + manual-add. i18n keys (en final; ja/zh-TW drafts per Tier-2
-  translation ownership).
-- [ ] `soft_delete_card` RPC: archive companion credits on card soft-delete
-  (§8.3 split-cascade sibling).
-- [ ] Tests: RLS contract; reset-boundary math per cadence; propose-confirm
-  idempotency (crid); lookup fail-closed (empty/partial results).
+  (writes via a SECURITY INVOKER plpgsql upsert — required by the expression/
+  partial `card_credits_active_name_uniq` index, §8.17 — which seeds
+  `used_amount = 0` + `current_period_start` / `next_reset_date` from
+  `credit_period_bounds()`), `GET /card-credits?card_id=`,
+  `PATCH /card-credits/{id}` (used_amount / name / amount / cadence / status; a
+  cadence edit recomputes the period bounds via the same helper),
+  `DELETE /card-credits/{id}` (→ archive).
+- [x] Cards surface: a "credits" chip on `CardTile` (AF-chip sibling) →
+  navigates to the Credits page. First-time setup is that page's empty state —
+  "look up this card's credits" (→ lookup → propose-confirm) + "add manually" —
+  mirroring the dashed "+ track AF" empty-state affordance (memory.md 2026-05-19).
+- [x] Credits page: new route `/cards/:cardId/credits`
+  (`frontend/src/pages/cards.credits.tsx`) — per-card progress bars +
+  set-used-amount + edit + archive + manual-add + empty state (lookup /
+  manual-add). i18n keys added to en (final) + ja/zh-TW (drafts per Tier-2
+  translation ownership — Chris to review the CJK).
+- [x] `soft_delete_card` RPC: archive companion credits on card soft-delete
+  (§8.3 split-cascade sibling; `20260705120400`).
+- [x] Tests: `tests/routes/test_card_credits.py` (15 passing) — RLS (read /
+  patch / delete / confirm-onto-foreign-card); `credit_period_bounds` seeding at
+  confirm AND recompute on a cadence PATCH; propose-confirm idempotency (crid +
+  name partial index) through the plpgsql upsert; lookup fail-closed
+  (empty → `[]`); soft-delete cascade. (Deferred: a pure DST-boundary unit on
+  the reset-advance path — the seed path exercises `credit_period_bounds`
+  per cadence.)
 
 **Phase 2 — the value multipliers (the differentiator):**
 
 - [ ] **Ledger bridge** — `POST /transactions/confirm`: on a merchant+card match
   to an active credit (via `merchant_hint`), return a "count $X toward
-  {credit}?" suggestion on the existing entry-moment insight channel; a tap
-  `PATCH`es `used_amount`. Clamp at `amount`; handle refunds/over-cap;
+  {credit}?" suggestion as a **separate `credit_suggestion` field** on the
+  confirm response — NOT the single `insight` slot; the entry-moment insight and
+  the credit affordance are orthogonal and must not suppress each other. A tap
+  increments via a **single atomic statement** —
+  `UPDATE ... SET used_amount = LEAST(amount, used_amount + :delta) WHERE id = :id
+  AND :tx_date >= current_period_start` — no read-modify-write window (fixes both
+  the reset race and concurrent bridge taps), and the period guard attributes the
+  credit to the period the spend occurred in. Handle refunds/over-cap;
   user-editable.
 - [ ] Weekly-digest integration in `compose_digest`: an "expiring soon, unused"
   reminder line (credits with `next_reset_date` within N days and
@@ -105,12 +163,16 @@ rationale: DESIGN.md **§6.7**; schema **§8.17** (`card_credits`) / **§8.18**
 
 **Open questions to resolve at build time:**
 
-- Reset-boundary timezone: user `timezone` vs UTC (lean user tz, reuse the
-  digest machinery).
-- Whether the credit lookup is a separate call or bundled into card-add (lean
-  separate — keeps card-add fast, makes tracking opt-in).
-- `merchant_hint` match strategy for the bridge (exact-substring vs. the
-  merchant-canonicalization the chat prompt already does).
+- `merchant_hint` match strategy for the **Phase-2** bridge (exact-substring vs.
+  the merchant-canonicalization the chat prompt already does). Genuinely open —
+  only needed when the bridge is built.
+
+**Resolved (were listed open; decided — don't re-litigate):**
+
+- Reset-boundary timezone → **user `timezone` when set, else UTC** (§8.17; reuses
+  the digest machinery).
+- Credit lookup separate vs. bundled into card-add → **separate, opt-in at
+  "track credits"** (§6.7 — keeps card-add fast).
 
 ---
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, RefreshCw } from "lucide-react";
+import { ArrowRight, Gift, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Pill } from "@/components/Pill";
 import { SwipeableRow } from "@/components/SwipeableRow";
@@ -127,6 +127,7 @@ export default function CardsPage() {
                       pending={!!pending}
                       af={af}
                       onAfTap={() => setEditingAf(card)}
+                      onCreditsTap={() => navigate(`/cards/${card.id}/credits`)}
                     />
                   </button>
                   {pending && (
@@ -176,11 +177,13 @@ function CardTile({
   pending,
   af,
   onAfTap,
+  onCreditsTap,
 }: {
   card: Card;
   pending: boolean;
   af: SubscriptionRow | null;
   onAfTap: () => void;
+  onCreditsTap: () => void;
 }) {
   const { t } = useTranslation();
   const stripe = card.color ?? "#8A8377";
@@ -283,6 +286,26 @@ function CardTile({
                 </div>
               )
             )}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreditsTap();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onCreditsTap();
+                }
+              }}
+              className="mt-2 ml-2 inline-flex items-center gap-1.5 rounded-full border border-hairline px-2 py-0.5 text-[0.72rem] text-ink-tertiary hover:bg-elevated cursor-pointer"
+              aria-label={t("cards.creditsChip.ariaLabel")}
+            >
+              <Gift className="h-3 w-3" />
+              <span>{t("cards.creditsChip.label")}</span>
+            </div>
           </>
         )}
       </div>
