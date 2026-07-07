@@ -18,6 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.card_credits import CreditSuggestion
 from app.prompts.categories import ALLOWED_CATEGORIES
 
 
@@ -218,10 +219,19 @@ class TransactionConfirmResponse(BaseModel):
     (same `client_request_id`) `insight` is always `None` — the original
     insight already fired on the first confirm; re-firing is worse than
     silence (DESIGN.md §6.2).
+
+    `credit_suggestion` is the Phase-2 ledger bridge (DESIGN.md §6.7): a
+    "count $X toward {credit}?" offer when the committed transaction's
+    merchant + card match an active statement credit. It is a **separate**
+    field from `insight` on purpose — the two are orthogonal and must not
+    suppress each other. Like `insight`, it is computed only on the
+    fresh-insert path, so an idempotent replay carries `None` (the offer,
+    if any, already fired on the first confirm).
     """
 
     transaction: TransactionRow
     insight: EntryMomentInsight | None = None
+    credit_suggestion: CreditSuggestion | None = None
 
 
 class TransactionListResponse(BaseModel):

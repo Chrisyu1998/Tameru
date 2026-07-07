@@ -162,6 +162,12 @@
       "expand": "顯示本週回顧",
       "collapse": "收合本週回顧"
     },
+    "creditSuggestion": {
+      "prompt": "要把 {{amount}} 計入你的 {{name}} 回饋嗎？",
+      "apply": "計入",
+      "applying": "計入中…",
+      "counted": "已把 {{amount}} 計入 {{name}}。"
+    },
     "placeholder": "輸入或點擊麥克風",
     "thinking": "思考中…",
     "offline": "離線 — 重新連線後訊息將自動傳送。",
@@ -725,6 +731,7 @@
     "saving": "儲存中…",
     "saveChanges": "儲存變更",
     "resetsIn": "剩 {{count}} 天 · {{date}} 重置",
+    "lastPeriod": "上期：{{total}} 中已使用 {{used}}",
     "empty": {
       "heading": "尚未追蹤任何回饋",
       "body": "查詢這張卡的帳單回饋，或手動新增一項。"

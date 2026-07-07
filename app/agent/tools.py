@@ -84,6 +84,10 @@ AGGREGATION_PAGE_SIZE = 1_000
 # cap keeps a runaway tool call from blowing the context budget.
 SUBSCRIPTIONS_ROW_CAP = 200
 
+# Same defensive cap for `get_card_credits`. A user tracks a handful of credits
+# per card (Amex Platinum has ~10), so this is never hit in practice.
+_CARD_CREDITS_CAP = 200
+
 
 class CalculateTotalRequest(BaseModel):
     """Tool input for `calculate_total`.
@@ -589,6 +593,34 @@ GET_CARDS_TOOL: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {},
+    },
+}
+
+
+GET_CARD_CREDITS_TOOL: dict[str, Any] = {
+    "name": "get_card_credits",
+    "description": (
+        "Return the user's active statement credits — the recurring "
+        "'spend $X, get $Y back' perks on premium cards (e.g. Amex "
+        "Platinum's $75/quarter Lululemon credit) — with how much of each "
+        "is used this period, what's left, and when it resets. Use for "
+        "'how much Amex credit do I have left', 'which credits expire "
+        "soon', 'have I used my Lululemon credit yet'. Optionally filter to "
+        "one card by its `ref` handle from get_cards. Read-only; this is "
+        "distinct from get_cards (which returns earn multipliers)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "card_ref": {
+                "type": "string",
+                "description": (
+                    "Optional card `ref` handle (e.g. 'amex-1001') from "
+                    "get_cards to restrict to one card. Omit for all cards."
+                ),
+            },
+        },
     },
 }
 
@@ -1238,6 +1270,64 @@ def get_cards(user: AuthedUser) -> dict[str, Any]:
     return GetCardsResponse(items=items).model_dump(mode="json")
 
 
+def get_card_credits(user: AuthedUser, *, card_ref: str | None = None) -> dict[str, Any]:
+    """Return the user's active statement credits with per-period usage.
+
+    Request:
+        {} or {"card_ref": "amex-1001"}
+
+    Response:
+        {"credits": [{"name": "Lululemon", "card_ref": "amex-1001",
+                      "cadence": "quarterly", "amount": "75.00",
+                      "used_amount": "30.00", "remaining": "45.00",
+                      "next_reset_date": "2026-10-01"}],
+         "truncated": false}
+
+    Live read (never `user_memory`): a credit balance memorized as a fact would
+    go stale at each period reset, so the agent reads it here on demand, exactly
+    as it reads transactions and cards (DESIGN.md §6.7, §7.2). Amounts are
+    Decimal-safe strings; `remaining` = `amount - used_amount` when the
+    allowance is set, else null. A `card_ref` that resolves to no owned active
+    card fails closed to an empty list (never every card).
+    """
+    client = supabase_for_user(user.jwt)
+    refs = _card_refs_by_id(client)
+    query = (
+        client.table("card_credits")
+        .select("card_id,name,cadence,amount,used_amount,next_reset_date")
+        .eq("status", "active")
+        .order("next_reset_date", desc=False)
+    )
+    if card_ref is not None:
+        resolved = _resolve_card_ref(client, card_ref)
+        if resolved is None:
+            return {"credits": [], "truncated": False}
+        query = query.eq("card_id", resolved)
+    rows = query.limit(_CARD_CREDITS_CAP + 1).execute().data or []
+    truncated = len(rows) > _CARD_CREDITS_CAP
+    credits: list[dict[str, Any]] = []
+    for r in rows[:_CARD_CREDITS_CAP]:
+        amount = r.get("amount")
+        used = r.get("used_amount")
+        remaining = (
+            str(Decimal(str(amount)) - Decimal(str(used)))
+            if amount is not None and used is not None
+            else None
+        )
+        credits.append(
+            {
+                "name": r["name"],
+                "card_ref": refs.get(r["card_id"], r["card_id"]),
+                "cadence": r["cadence"],
+                "amount": str(amount) if amount is not None else None,
+                "used_amount": str(used) if used is not None else None,
+                "remaining": remaining,
+                "next_reset_date": r["next_reset_date"],
+            }
+        )
+    return {"credits": credits, "truncated": truncated}
+
+
 def propose_transaction(user: AuthedUser, **kwargs: Any) -> dict[str, Any]:
     """Build a TransactionProposal from a chat-described purchase.
 
@@ -1673,6 +1763,7 @@ TOOL_REGISTRY: dict[str, tuple[dict[str, Any], Callable[..., Any]]] = {
     GET_SUBSCRIPTIONS_TOOL["name"]: (GET_SUBSCRIPTIONS_TOOL, get_subscriptions),
     GET_SPENDING_SUMMARY_TOOL["name"]: (GET_SPENDING_SUMMARY_TOOL, get_spending_summary),
     GET_CARDS_TOOL["name"]: (GET_CARDS_TOOL, get_cards),
+    GET_CARD_CREDITS_TOOL["name"]: (GET_CARD_CREDITS_TOOL, get_card_credits),
     PROPOSE_TRANSACTION_TOOL["name"]: (PROPOSE_TRANSACTION_TOOL, propose_transaction),
     PROPOSE_CARD_TOOL["name"]: (PROPOSE_CARD_TOOL, propose_card),
     PROPOSE_SUBSCRIPTION_TOOL["name"]: (

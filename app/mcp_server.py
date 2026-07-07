@@ -42,6 +42,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import AnyHttpUrl
 
+from app.agent.tools import get_card_credits as _agent_get_card_credits
 from app.agent.tools import get_cards as _agent_get_cards
 from app.agent.tools import get_spending_summary as _agent_get_spending_summary
 from app.agent.tools import get_subscriptions as _agent_get_subscriptions
@@ -58,8 +59,10 @@ _MAX_RECENT_LIMIT = 100
 _MCP_INSTRUCTIONS = (
     "Tameru is a personal spending tracker. These tools are read-only: "
     "they answer questions about the signed-in user's transactions, "
-    "spending by category, recurring subscriptions, and credit-card "
-    "reward multipliers. They cannot create, edit, or delete anything."
+    "spending by category, recurring subscriptions, credit-card reward "
+    "multipliers, and statement credits (use-it-or-lose-it perks like an "
+    "Amex Platinum $75/quarter Lululemon credit). They cannot create, "
+    "edit, or delete anything."
 )
 
 
@@ -221,6 +224,24 @@ async def get_subscriptions() -> dict[str, Any]:
 
 
 @mcp_server.tool()
+async def get_card_credits(card_name: str | None = None) -> dict[str, Any]:
+    """The user's active statement credits with per-period usage and reset dates.
+
+    Statement credits are the recurring "spend $X, get $Y back" perks on
+    premium cards (e.g. Amex Platinum's $75/quarter Lululemon credit) —
+    distinct from reward multipliers (see get_card_multipliers).
+
+    Args:
+        card_name: optional case-insensitive substring matching one card by
+            name. Omit to return credits across all cards.
+
+    Returns ``{credits: [{name, card_ref, cadence, amount, used_amount,
+    remaining, next_reset_date}], truncated: bool}``.
+    """
+    return _tool_get_card_credits(_current_user(), card_name)
+
+
+@mcp_server.tool()
 async def get_card_multipliers(card_name: str | None = None) -> dict[str, Any]:
     """Credit-card reward multipliers for the user's cards.
 
@@ -315,6 +336,30 @@ def _tool_get_subscriptions(user: AuthedUser) -> dict[str, Any]:
     history.
     """
     return _agent_get_subscriptions(user, status="active")
+
+
+def _tool_get_card_credits(
+    user: AuthedUser, card_name: str | None
+) -> dict[str, Any]:
+    """Delegate to the chat agent's `get_card_credits` read tool.
+
+    The agent tool filters by a card `ref` handle; MCP clients speak card
+    *names*, so an optional `card_name` is resolved to that card's ref via
+    `get_cards` first (case-insensitive substring, same as the multiplier
+    tool). A non-matching name fails closed to an empty list rather than
+    returning every card's credits.
+    """
+    card_ref: str | None = None
+    if card_name:
+        items = _agent_get_cards(user).get("items", [])
+        needle = card_name.strip().lower()
+        match = next(
+            (c for c in items if needle in str(c.get("name", "")).lower()), None
+        )
+        if match is None:
+            return {"credits": [], "truncated": False}
+        card_ref = match.get("ref")
+    return _agent_get_card_credits(user, card_ref=card_ref)
 
 
 def _tool_get_card_multipliers(

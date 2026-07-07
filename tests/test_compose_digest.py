@@ -43,10 +43,17 @@ class _FakeSupabase:
     a `.data` list of dicts, matching supabase-py's shape.
     """
 
-    def __init__(self, *, transactions: list[dict], home_currency: str = "USD"):
-        """Provide fixture data."""
+    def __init__(
+        self,
+        *,
+        transactions: list[dict],
+        home_currency: str = "USD",
+        credits: list[dict] | None = None,
+    ):
+        """Provide fixture data. `credits` feeds the Phase-2 card_credits read."""
         self._transactions = transactions
         self._home_currency = home_currency
+        self._credits = credits or []
 
     def table(self, name: str):
         """Provide table."""
@@ -54,6 +61,8 @@ class _FakeSupabase:
             return _MetaQuery(self._home_currency)
         if name == "transactions":
             return _TxQuery(self._transactions)
+        if name == "card_credits":
+            return _CreditQuery(self._credits)
         raise AssertionError(f"unexpected table: {name}")
 
 
@@ -131,6 +140,25 @@ class _TxQuery:
         return _Resp(out)
 
 
+class _CreditQuery:
+    """Chainable stub for `card_credits` — returns the seeded credit rows."""
+    def __init__(self, credits: list[dict]):
+        """Provide credit query."""
+        self._credits = credits
+
+    def select(self, *_args, **_kwargs):
+        """Provide select."""
+        return self
+
+    def eq(self, *_args, **_kwargs):
+        """Provide eq."""
+        return self
+
+    def execute(self):
+        """Provide execute."""
+        return _Resp(list(self._credits))
+
+
 class _FakeAnthropic:
     """Captures the messages sent to verify the privacy boundary."""
 
@@ -175,6 +203,41 @@ def test_aggregates_correct():
     assert payload.home_currency == "USD"
     assert isinstance(call_log, SonnetCallLog)
     assert call_log.success is True
+
+
+def test_expiring_credit_lines_render():
+    """Phase-2 credit lines (§6.7): only a credit near reset with unused
+    headroom is surfaced; a far-off one and a fully-used one are not."""
+    week_start = _previous_week_start_et()
+    transactions = _make_transactions(week_start)
+    today = datetime.now(ET).date()
+    credits = [
+        {"name": "SoonCredit", "amount": "75", "used_amount": "30",
+         "next_reset_date": (today + timedelta(days=7)).isoformat()},
+        {"name": "FarCredit", "amount": "100", "used_amount": "0",
+         "next_reset_date": (today + timedelta(days=30)).isoformat()},
+        {"name": "MaxedCredit", "amount": "50", "used_amount": "50",
+         "next_reset_date": (today + timedelta(days=5)).isoformat()},
+    ]
+    sb = _FakeSupabase(transactions=transactions, credits=credits)
+    anth = _FakeAnthropic(
+        response_text=json.dumps({"observation": "steady", "nudge": None})
+    )
+
+    payload, _ = compose_digest(sb, USER_ID, anthropic_client=anth)
+
+    # Only SoonCredit is within 14 days AND has unused headroom.
+    assert [c.name for c in payload.expiring_credits] == ["SoonCredit"]
+    # Value captured caps each used at its allowance: 30 + 0 + 50 = 80 of 225.
+    assert payload.value_captured is not None
+    assert payload.value_captured.used == Decimal("80")
+    assert payload.value_captured.available == Decimal("225")
+
+    email = render_email(payload, "https://unsub", app_cta_url="https://app")
+    assert "SoonCredit" in email.text
+    assert "FarCredit" not in email.text
+    assert "MaxedCredit" not in email.text
+    assert "Use it or lose it" in email.text
 
 
 def test_privacy_boundary_no_merchants_to_sonnet():

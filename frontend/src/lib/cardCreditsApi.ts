@@ -61,6 +61,22 @@ export interface CardCreditListResponse {
   items: CardCreditRow[];
 }
 
+// One closed-period snapshot (Phase 2, §8.18) — mirrors CardCreditHistoryRow.
+export interface CardCreditHistoryRow {
+  id: string;
+  card_credit_id: string;
+  name: string;
+  amount: string | null;
+  used_amount: string;
+  period_start: string;
+  period_end: string;
+  created_at: string;
+}
+
+export interface CardCreditHistoryResponse {
+  items: CardCreditHistoryRow[];
+}
+
 export interface CardCreditPatchBody {
   used_amount?: string | null;
   name?: string | null;
@@ -110,6 +126,35 @@ export async function patchCredit(
     method: 'PATCH',
     body: patch,
   });
+}
+
+/** Count a matched transaction toward a credit — the Phase-2 ledger tap
+ * (DESIGN.md §6.7). The server reads the transaction's amount/date under RLS
+ * and increments `used_amount` atomically (clamped to the allowance). A 409
+ * means the transaction couldn't be counted (guard failed / not owned). */
+export async function applyCreditUsage(
+  creditId: string,
+  transactionId: string,
+): Promise<CardCreditRow> {
+  return apiJson<CardCreditRow>(`/card-credits/${creditId}/apply`, {
+    method: 'POST',
+    body: { transaction_id: transactionId },
+  });
+}
+
+/** List a credit's closed-period snapshots, newest first (Phase 2, §8.18).
+ * Powers the Credits page "last {period} you used $X". */
+export async function getCreditHistory(
+  creditId: string,
+  opts?: { limit?: number },
+): Promise<CardCreditHistoryResponse> {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  return apiJson<CardCreditHistoryResponse>(
+    `/card-credits/${creditId}/history${qs ? `?${qs}` : ''}`,
+    { method: 'GET' },
+  );
 }
 
 export async function deleteCredit(creditId: string): Promise<void> {

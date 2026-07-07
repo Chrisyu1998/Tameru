@@ -26,6 +26,9 @@ from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
 from app.integrations.card_lookup import lookup_card_credits
 from app.models.card_credits import (
+    ApplyCreditUsageRequest,
+    CardCreditHistoryResponse,
+    CardCreditHistoryRow,
     CardCreditListResponse,
     CardCreditPatchRequest,
     CardCreditRow,
@@ -254,6 +257,78 @@ def delete_card_credit(
         .execute()
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{credit_id}/apply", response_model=CardCreditRow)
+def apply_credit_usage(
+    credit_id: UUID,
+    body: ApplyCreditUsageRequest,
+    user: AuthedUser = Depends(get_current_user_with_device),
+) -> CardCreditRow:
+    """Count a matched transaction toward a credit — the Phase-2 ledger tap.
+
+    Request body:
+        {"transaction_id": "…uuid…"}
+
+    Response:
+        CardCreditRow — the updated credit (new `used_amount`).
+
+    The `card_credit_apply_usage` RPC reads the transaction's amount + date
+    itself under RLS (never a client-sent delta), then atomically increments
+    `used_amount` clamped to `[0, allowance]`, guarded on same-card +
+    `date >= current_period_start`. A single-statement update means concurrent
+    bridge taps can't lose an update. An empty result — the credit or
+    transaction isn't the caller's, they're on different cards, or the spend
+    predates the current period — is a 409 (indistinguishable by design, so a
+    probing client learns nothing).
+    """
+    client = supabase_for_user(user.jwt)
+    resp = client.rpc(
+        "card_credit_apply_usage",
+        {
+            "p_credit_id": str(credit_id),
+            "p_transaction_id": str(body.transaction_id),
+        },
+    ).execute()
+    rows = resp.data or []
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "credit_apply_failed",
+                "message": "that transaction could not be counted toward this credit",
+            },
+        )
+    return CardCreditRow.model_validate(rows[0])
+
+
+@router.get("/{credit_id}/history", response_model=CardCreditHistoryResponse)
+def get_card_credit_history(
+    credit_id: UUID,
+    limit: int = Query(
+        default=8, ge=1, le=60, description="Max closed periods to return."
+    ),
+    user: AuthedUser = Depends(get_current_user_with_device),
+) -> CardCreditHistoryResponse:
+    """List a credit's closed-period snapshots, newest first (§8.18).
+
+    Powers the Credits page "last {period} you used $X". RLS scopes the read to
+    the caller — a foreign `credit_id` returns empty rather than leaking. The
+    table is written only by the `reset_card_credits()` sweep, so this is a pure
+    read.
+    """
+    client = supabase_for_user(user.jwt)
+    rows = (
+        client.table("card_credit_history")
+        .select("*")
+        .eq("card_credit_id", str(credit_id))
+        .order("period_start", desc=True)
+        .limit(limit)
+        .execute()
+    ).data or []
+    return CardCreditHistoryResponse(
+        items=[CardCreditHistoryRow.model_validate(r) for r in rows]
+    )
 
 
 # ---------------------------------------------------------------------------

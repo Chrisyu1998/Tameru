@@ -205,6 +205,52 @@ class CardCreditListResponse(BaseModel):
     items: list[CardCreditRow]
 
 
+class CreditSuggestion(BaseModel):
+    """Phase-2 ledger-bridge suggestion carried on `POST /transactions/confirm`.
+
+    When a just-committed transaction's merchant + card match an active credit's
+    `merchant_hint` (and the spend falls in that credit's current period), the
+    confirm response carries this in its own `credit_suggestion` field —
+    deliberately NOT the `insight` slot, so the entry-moment insight and the
+    credit affordance never suppress each other (DESIGN.md §6.7). The UI renders
+    "count {suggested_amount} toward {credit_name}?"; a tap POSTs
+    `{transaction_id}` to `POST /card-credits/{credit_id}/apply`.
+
+    `suggested_amount` is the display value — `min(transaction amount,
+    remaining)` when the allowance is known — but the apply RPC clamps
+    authoritatively, so a stale display can never over-count. `remaining` is
+    null when the credit's `amount` (allowance) is unset.
+
+    Example: `{"credit_id": "…", "credit_name": "Lululemon", "transaction_id":
+    "…", "suggested_amount": "30.00", "remaining": "30.00"}`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    credit_id: UUID
+    credit_name: str
+    transaction_id: UUID
+    suggested_amount: Decimal
+    remaining: Decimal | None = None
+
+
+class ApplyCreditUsageRequest(BaseModel):
+    """HTTP body for `POST /card-credits/{credit_id}/apply` — the ledger tap.
+
+    Carries only the matched transaction id. The server reads that
+    transaction's amount + date under RLS (never a client-sent delta) and hands
+    both ids to the `card_credit_apply_usage` atomic RPC, which increments
+    `used_amount` clamped to `[0, allowance]` and guarded on same-card +
+    `date >= current_period_start`. See DESIGN.md §6.7 Phase 2.
+
+    Example: `{"transaction_id": "…uuid…"}`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: UUID
+
+
 class CardCreditPatchRequest(BaseModel):
     """Partial update body for `PATCH /card-credits/{id}`.
 
@@ -244,3 +290,30 @@ class CardCreditPatchRequest(BaseModel):
         if v is not None and v < 0:
             raise ValueError("value must be >= 0")
         return v
+
+
+class CardCreditHistoryRow(BaseModel):
+    """One closed-period snapshot from `card_credit_history` (Phase 2, §8.18).
+
+    Written by the `reset_card_credits()` sweep at each period rollover;
+    read-only to the user. Powers the Credits page "last {period} you used $X".
+    `amount` mirrors the closed period's allowance (nullable, as on the live
+    row); `used_amount` is what was actually used before the reset zeroed it.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: UUID
+    card_credit_id: UUID
+    name: str
+    amount: Decimal | None = None
+    used_amount: Decimal
+    period_start: _dt.date
+    period_end: _dt.date
+    created_at: _dt.datetime
+
+
+class CardCreditHistoryResponse(BaseModel):
+    """`GET /card-credits/{id}/history` response — newest closed period first."""
+
+    items: list[CardCreditHistoryRow]

@@ -10,16 +10,16 @@ For shipped architecture and the *why* behind decisions, see `DESIGN.md` and
 
 ## Credit / Perk Tracking (PLANNED — author-driven, phased)
 
-**Status:** **Phase 1 shipped 2026-07-05** (local + 15 route tests green; migrations
-apply clean via `supabase db reset`; frontend build green — **not yet deployed**).
-**OPERATOR:** apply the new `reset-card-credits` schedule from
-`supabase/snippets/production_cron.sql` to prod (daily `0 5 * * *`). A manual
-per-card statement-credit tracker (Amex Plat's $75/qtr Lululemon, $100/qtr Resy,
-etc.) so users see which use-it-or-lose-it credits they've burned this period
-without opening each issuer's app. Green-lit as a post-Phase-1, author-driven
-feature (§15). Design + rationale: DESIGN.md **§6.7**; schema **§8.17**
-(`card_credits`) / **§8.18** (`card_credit_history`, Phase 2). Phase 2 (below) is
-still planned.
+**Status:** **Phase 1 + Phase 2 shipped 2026-07-05** (local: full backend suite
+green incl. 11 new `test_credit_bridge.py` + `get_card_credits` tool/MCP +
+digest tests; `supabase db reset` applies all migrations clean; frontend build +
+170 vitest green — **not yet deployed**). **OPERATOR:** apply the new
+`reset-card-credits` schedule from `supabase/snippets/production_cron.sql` to prod
+(daily `0 5 * * *`). A manual per-card statement-credit tracker (Amex Plat's
+$75/qtr Lululemon, $100/qtr Resy, etc.) so users see which use-it-or-lose-it
+credits they've burned this period without opening each issuer's app. Green-lit
+as a post-Phase-1, author-driven feature (§15). Design + rationale: DESIGN.md
+**§6.7**; schema **§8.17** (`card_credits`) / **§8.18** (`card_credit_history`).
 
 **Decisions already made (build to these — don't re-litigate):**
 
@@ -127,28 +127,66 @@ still planned.
 
 **Phase 2 — the value multipliers (the differentiator):**
 
-- [ ] **Ledger bridge** — `POST /transactions/confirm`: on a merchant+card match
-  to an active credit (via `merchant_hint`), return a "count $X toward
-  {credit}?" suggestion as a **separate `credit_suggestion` field** on the
-  confirm response — NOT the single `insight` slot; the entry-moment insight and
-  the credit affordance are orthogonal and must not suppress each other. A tap
-  increments via a **single atomic statement** —
-  `UPDATE ... SET used_amount = LEAST(amount, used_amount + :delta) WHERE id = :id
-  AND :tx_date >= current_period_start` — no read-modify-write window (fixes both
-  the reset race and concurrent bridge taps), and the period guard attributes the
-  credit to the period the spend occurred in. Handle refunds/over-cap;
-  user-editable.
-- [ ] Weekly-digest integration in `compose_digest`: an "expiring soon, unused"
-  reminder line (credits with `next_reset_date` within N days and
+- [x] **Ledger bridge** — `POST /transactions/confirm`: on a merchant+card match
+  to an active credit, return a "count $X toward {credit}?" suggestion as a
+  **separate `credit_suggestion` field** on the confirm response — NOT the single
+  `insight` slot; the entry-moment insight and the credit affordance are
+  orthogonal and must not suppress each other. **Match: exact-substring** —
+  lowercased `merchant_hint` ⊂ lowercased merchant (hints are distinctive brand
+  tokens, so false positives are near-zero; the chat merchant-canonicalization is
+  a deferred enhancement for messy statement/CSV descriptors, not a blocker).
+  Computed **only on the fresh-insert path**, so an idempotent re-confirm (same
+  crid → route returns the existing row early, `transactions.py:56/91`) returns
+  `credit_suggestion: null` — same suppression as `insight`; a double-submit
+  doesn't re-offer an already-tapped credit. A tap goes through the
+  **idempotent** `card_credit_apply_usage` RPC: it records the
+  `(card_credit_id, transaction_id)` application in a unique-keyed ledger
+  (`card_credit_applications`, §8.19) `ON CONFLICT DO NOTHING`, and increments
+  `used_amount = GREATEST(0, LEAST(amount, used_amount + delta))` only when a
+  *new* row lands. So a lost-response retry / double-tap / offline replay of the
+  same transaction is a no-op (fixes the double-count Codex flagged 2026-07-05),
+  and concurrent applies of *different* transactions serialize on the row lock
+  with no lost update. The period guard is a **lower bound only** (`t.date >=
+  current_period_start`) and lives **inside the UPDATE's WHERE** (joining the
+  transaction), so it is re-checked under the row lock via EvalPlanQual — if a
+  reset advances the period between the apply's snapshot and its write, the
+  old-period spend is rejected instead of landing in the fresh period (a plain
+  `SELECT … FOR UPDATE` guard would NOT fix this: a plpgsql function shares its
+  caller's snapshot, so only the updating statement's own EvalPlanQual re-read
+  sees the new period — Codex round 2, 2026-07-05). A spend dated *before* the
+  current period (old receipt / a spend from the period that just reset) doesn't
+  count; a future-dated spend counts toward the current period (benign, <24h
+  pre-sweep edge). Do NOT add a `t.date < next_reset_date` upper bound — it makes
+  the tap a silent no-op, worse than the benign misattribution. Refunds floor at
+  0; over-cap clamps at `amount`. **Done-when:**
+  `tests/routes/test_credit_bridge.py` — match →
+  suggestion present; no match → null; idempotent re-confirm → null; **re-apply
+  same transaction → counted once**; tap over-cap clamps at `amount`; spend <
+  `current_period_start` → no-op; refund path.
+- [x] Weekly-digest integration in `compose_digest`: an "expiring soon, unused"
+  reminder line (credits with `next_reset_date` within **N = 14 days** and
   `used_amount < amount`) + an optional positive "value captured this period"
   line ($ used vs available across the wallet). Reuses the per-user-timezone
-  send (§6.4).
-- [ ] `card_credit_history` (§8.18) + "last {period} you used $X" on the Credits
+  send (§6.4). **N = 14, not 7**: the digest sends weekly, so a 7-day window
+  contains exactly one send (one reminder, maybe only 1 day before reset) while a
+  14-day window contains two (earliest 8–14 days out — real lead time + a
+  follow-up). Cadence-aware tuning (monthly 7d / quarterly 14d / annual 30d) is a
+  deferred refinement; 14 flat for v1. **Done-when:** a credit 10 days from reset
+  with `used_amount < amount` appears in the digest fixture; one 20 days out does
+  not; a fully-used one does not.
+- [x] `card_credit_history` (§8.18) + "last {period} you used $X" on the Credits
   page; `reset_card_credits()` snapshots the closing period.
-- [ ] Read-only `get_card_credits` chat tool — the agent-awareness path ("how
+- [x] Read-only `get_card_credits` chat tool — the agent-awareness path ("how
   much Amex credit do I have left?"). Reads live from `card_credits`, **not**
   `user_memory` (credits are live state, not distilled facts — see decisions
-  above). Read-only: no direct-write tool, no invariant-8 widening.
+  above). Read-only: no direct-write tool, no invariant-8 widening. Return shape
+  `{credits: [{name, amount, used_amount, next_reset_date, card_ref}]}`. **Also
+  wire it into the MCP read-only server** (`app/mcp_server.py`) via one shared
+  `app/agent/tools.py` read fn, so the chat-agent and MCP read surfaces don't
+  drift (memory.md 2026-05-20); read-only, so no invariant-3 / consent change.
+  **Done-when:** `tests/test_tools.py` asserts RLS-scoped return (caller's active
+  credits only); `tests/test_mcp.py` asserts the MCP tool exists + returns the
+  same shape.
 
 **Deferred beyond Phase 2:**
 
@@ -163,12 +201,18 @@ still planned.
 
 **Open questions to resolve at build time:**
 
-- `merchant_hint` match strategy for the **Phase-2** bridge (exact-substring vs.
-  the merchant-canonicalization the chat prompt already does). Genuinely open —
-  only needed when the bridge is built.
+- (none remaining for Phase 2 — see Resolved.)
 
 **Resolved (were listed open; decided — don't re-litigate):**
 
+- Bridge channel → **separate `credit_suggestion` field** on the confirm response,
+  NOT the `insight` slot (orthogonal affordances; must not suppress each other).
+  DESIGN §6.7 synced.
+- `merchant_hint` match → **exact-substring** (lowercased `merchant_hint` ⊂
+  lowercased merchant); chat merchant-canonicalization deferred (helps messy
+  statement/CSV descriptors, not a Phase-2 blocker).
+- Digest "expiring soon" threshold → **N = 14 days** (2× the weekly send cadence;
+  cadence-aware tuning deferred).
 - Reset-boundary timezone → **user `timezone` when set, else UTC** (§8.17; reuses
   the digest machinery).
 - Credit lookup separate vs. bundled into card-add → **separate, opt-in at

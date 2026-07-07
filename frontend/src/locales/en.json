@@ -162,6 +162,12 @@
       "expand": "show weekly recap",
       "collapse": "hide weekly recap"
     },
+    "creditSuggestion": {
+      "prompt": "count {{amount}} toward your {{name}} credit?",
+      "apply": "count it",
+      "applying": "counting…",
+      "counted": "counted {{amount}} toward {{name}}."
+    },
     "placeholder": "type or tap the mic",
     "thinking": "thinking…",
     "offline": "offline — messages will send when you reconnect.",
@@ -725,6 +731,7 @@
     "saving": "saving…",
     "saveChanges": "save changes",
     "resetsIn": "{{count}}d left · resets {{date}}",
+    "lastPeriod": "last period: {{used}} of {{total}} used",
     "empty": {
       "heading": "no credits tracked",
       "body": "look up this card's statement credits, or add one manually."
