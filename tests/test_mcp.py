@@ -51,6 +51,7 @@ from app.db import supabase_for_user
 from app.main import app
 from app.mcp_server import (
     TameruTokenVerifier,
+    _tool_get_card_credits,
     _tool_get_card_multipliers,
     _tool_get_recent_transactions,
     _tool_get_spending_summary,
@@ -64,14 +65,15 @@ from app.mcp_server import (
 # ===========================================================================
 
 
-def test_all_four_read_tools_are_registered():
-    """The MCP surface is EXACTLY the four read-only tools of DESIGN.md §7.9.
+def test_all_read_tools_are_registered():
+    """The MCP surface is EXACTLY the read-only tools of DESIGN.md §7.9 / §6.7.
 
     Equality, not subset (audit P3-17): a subset match would stay green if
-    a fifth (write) tool were registered — and the write-invariant guard
-    only walks the chat TOOL_REGISTRY, so an MCP-only mutation tool would
-    pass both tests. CLAUDE.md invariant 3 makes adding an MCP write tool
-    an explicit-approval event; this assertion is its mechanical hook.
+    a write tool were registered — and the write-invariant guard only walks
+    the chat TOOL_REGISTRY, so an MCP-only mutation tool would pass both
+    tests. CLAUDE.md invariant 3 makes adding an MCP write tool an
+    explicit-approval event; this assertion is its mechanical hook.
+    `get_card_credits` (credit tracking Phase 2, §6.7) is read-only.
     """
     names = {tool.name for tool in asyncio.run(mcp_server.list_tools())}
     assert names == {
@@ -79,6 +81,7 @@ def test_all_four_read_tools_are_registered():
         "get_recent_transactions",
         "get_subscriptions",
         "get_card_multipliers",
+        "get_card_credits",
     }
 
 
@@ -257,6 +260,63 @@ def test_get_card_multipliers_isolates_users(user_a, user_b, card_a, card_b):
     b_names = {c["name"] for c in _tool_get_card_multipliers(_authed(user_b), None)["items"]}
     assert "A card" in a_names and "B card" not in a_names
     assert "B card" in b_names and "A card" not in b_names
+
+
+# ===========================================================================
+# get_card_credits (Phase 2, §6.7)
+# ===========================================================================
+
+
+def test_mcp_get_card_credits_returns_credit_shape(user_a, card_a):
+    """The MCP tool returns the same shape as the agent tool it delegates to."""
+    name = f"Credit-{_tag()}"
+    _seed_credit(user_a, card_a, name=name)
+    result = _tool_get_card_credits(_authed(user_a), None)
+    assert set(result) == {"credits", "truncated"}
+    row = next(c for c in result["credits"] if c["name"] == name)
+    assert set(row) >= {
+        "name",
+        "card_ref",
+        "cadence",
+        "amount",
+        "used_amount",
+        "remaining",
+        "next_reset_date",
+    }
+
+
+def test_mcp_get_card_credits_name_filter_fails_closed(user_a, card_a):
+    """A card_name matching no card yields no credits (fail closed), not all."""
+    _seed_credit(user_a, card_a, name=f"Credit-{_tag()}")
+    assert _tool_get_card_credits(_authed(user_a), "no-such-card-zzz") == {
+        "credits": [],
+        "truncated": False,
+    }
+
+
+def test_mcp_get_card_credits_isolates_users(user_a, user_b, card_a):
+    """RLS: user B's MCP token cannot read user A's credits."""
+    name = f"Private-{_tag()}"
+    _seed_credit(user_a, card_a, name=name)
+    b = _tool_get_card_credits(_authed(user_b), None)
+    assert all(c["name"] != name for c in b["credits"])
+
+
+def _seed_credit(user, card_id, *, name):
+    """Insert an active card_credit directly under RLS (explicit period dates)."""
+    supabase_for_user(user.jwt).table("card_credits").insert(
+        {
+            "user_id": user.id,
+            "card_id": card_id,
+            "name": name,
+            "amount": "75",
+            "cadence": "quarterly",
+            "used_amount": "10",
+            "current_period_start": "2026-07-01",
+            "next_reset_date": "2026-10-01",
+            "status": "active",
+        }
+    ).execute()
 
 
 # ---------------------------------------------------------------------------

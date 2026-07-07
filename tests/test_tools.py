@@ -37,6 +37,7 @@ from app.agent.tools import (
     TOOL_REGISTRY,
     calculate_total,
     execute_tool,
+    get_card_credits,
     get_cards,
     get_spending_summary,
     get_subscriptions,
@@ -86,6 +87,8 @@ def test_registry_contains_expected_surface():
         the row commits via `POST /subscriptions/confirm` after the
         user taps "looks right"). Both cardful and cardless (bank-ACH)
         proposals are supported — DESIGN.md §8.3.
+      * Credit tracking Phase 2 — `get_card_credits` (read-only statement
+        credits with per-period usage; DESIGN.md §6.7).
     """
     expected = {
         "calculate_total",
@@ -93,6 +96,7 @@ def test_registry_contains_expected_surface():
         "get_subscriptions",
         "get_spending_summary",
         "get_cards",
+        "get_card_credits",
         "propose_transaction",
         "propose_card",
         "propose_subscription",
@@ -114,6 +118,38 @@ def test_every_registered_tool_has_paired_schema_and_executor():
         assert schema["name"] == name, f"{name}: schema.name mismatch"
         assert callable(executor), f"{name}: executor not callable"
         assert "input_schema" in schema, f"{name}: missing input_schema"
+
+
+def test_get_card_credits_returns_scoped_rows_with_ref_and_remaining(
+    authed_user_a, user_a, card_a
+):
+    """get_card_credits returns the caller's active credits with card_ref +
+    remaining; the amounts are Decimal-safe strings (Phase 2, §6.7)."""
+    name = f"Credit-{_tag()}"
+    _seed_card_credit(user_a, card_a, name=name, amount="75", used="30")
+    result = get_card_credits(authed_user_a)
+    assert set(result) == {"credits", "truncated"}
+    row = next(c for c in result["credits"] if c["name"] == name)
+    assert row["card_ref"] and "-" in row["card_ref"]  # {issuer}-{last_four}
+    assert row["amount"] == "75"
+    assert row["used_amount"] == "30"
+    assert row["remaining"] == "45"
+    assert row["cadence"] == "quarterly"
+
+
+def test_get_card_credits_is_rls_scoped(authed_user_b, user_a, card_a):
+    """User B never sees user A's credits (RLS scopes the read)."""
+    name = f"Private-{_tag()}"
+    _seed_card_credit(user_a, card_a, name=name, amount="50", used="0")
+    result = get_card_credits(authed_user_b)
+    assert all(c["name"] != name for c in result["credits"])
+
+
+def test_get_card_credits_unknown_ref_fails_closed(authed_user_a, user_a, card_a):
+    """A card_ref that resolves to no owned card returns an empty list, not all."""
+    _seed_card_credit(user_a, card_a, name=f"C-{_tag()}", amount="20", used="0")
+    result = get_card_credits(authed_user_a, card_ref="nope-9999")
+    assert result == {"credits": [], "truncated": False}
 
 
 # ===========================================================================
@@ -1280,6 +1316,23 @@ def test_set_goal_rls_isolates_users(authed_user_a, authed_user_b, user_a, user_
 def _tag() -> str:
     """Support tag."""
     return uuid.uuid4().hex[:8]
+
+
+def _seed_card_credit(user, card_id, *, name, amount, used, cadence="quarterly"):
+    """Insert an active card_credit directly under RLS (period dates explicit)."""
+    supabase_for_user(user.jwt).table("card_credits").insert(
+        {
+            "user_id": user.id,
+            "card_id": card_id,
+            "name": name,
+            "amount": amount,
+            "cadence": cadence,
+            "used_amount": used,
+            "current_period_start": "2026-07-01",
+            "next_reset_date": "2026-10-01",
+            "status": "active",
+        }
+    ).execute()
 
 
 def _digits4(tag: str) -> str:

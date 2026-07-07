@@ -162,6 +162,12 @@
       "expand": "今週の振り返りを表示",
       "collapse": "今週の振り返りを閉じる"
     },
+    "creditSuggestion": {
+      "prompt": "{{amount}} を {{name}} 特典に計上しますか？",
+      "apply": "計上する",
+      "applying": "計上中…",
+      "counted": "{{amount}} を {{name}} に計上しました。"
+    },
     "placeholder": "入力またはマイクをタップ",
     "thinking": "考え中…",
     "offline": "オフライン — 再接続時に送信されます。",
@@ -725,6 +731,7 @@
     "saving": "保存中…",
     "saveChanges": "変更を保存",
     "resetsIn": "残り{{count}}日 · {{date}}に更新",
+    "lastPeriod": "前回：{{total}} 中 {{used}} を利用",
     "empty": {
       "heading": "追跡中の特典はありません",
       "body": "このカードの利用特典を検索するか、手動で追加してください。"

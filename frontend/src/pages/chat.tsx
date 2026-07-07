@@ -7,6 +7,7 @@ import { CardParseCard } from "@/components/chat/CardParseCard";
 import { Chart } from "@/components/chat/Chart";
 import { DailyCapCard } from "@/components/chat/DailyCapCard";
 import { EntryInsightBubble } from "@/components/chat/EntryInsightBubble";
+import { CreditSuggestionCard } from "@/components/chat/CreditSuggestionCard";
 import { MessageBubble, ToolAttribution } from "@/components/chat/MessageBubble";
 import { MiniBarChart } from "@/components/chat/MiniBarChart";
 import { ParseCard } from "@/components/chat/ParseCard";
@@ -397,6 +398,19 @@ function MessageRow({
 
   if (msg.kind === "insight") {
     return <EntryInsightBubble text={msg.text} severity={msg.severity} />;
+  }
+
+  if (msg.kind === "credit-suggestion") {
+    return (
+      <CreditSuggestionCard
+        creditName={msg.creditName}
+        suggestedAmount={msg.suggestedAmount}
+        applying={msg.applying}
+        applied={msg.applied}
+        error={msg.error}
+        onApply={() => void chatStore.applyCreditSuggestion(msg.id)}
+      />
+    );
   }
 
   if (msg.kind === "chart") {

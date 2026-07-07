@@ -11,10 +11,12 @@ import {
   CREDIT_CADENCES,
   confirmCredits,
   deleteCredit,
+  getCreditHistory,
   listCredits,
   lookupCredits,
   manualCreditProposal,
   patchCredit,
+  type CardCreditHistoryRow,
   type CardCreditRow,
   type CreditCadence,
   type CreditProposal,
@@ -35,6 +37,11 @@ export default function CardCreditsPage() {
   const card = useMemo(() => cards.find((c) => c.id === cardId), [cards, cardId]);
 
   const [credits, setCredits] = useState<CardCreditRow[]>([]);
+  // Latest closed-period snapshot per credit (Phase 2, §8.18) → the
+  // "last period you used $X" line. Best-effort; absent for new credits.
+  const [history, setHistory] = useState<Record<string, CardCreditHistoryRow>>(
+    {},
+  );
   const [loading, setLoading] = useState(true);
   const [proposals, setProposals] = useState<CreditProposal[] | null>(null);
   const [looking, setLooking] = useState(false);
@@ -47,6 +54,24 @@ export default function CardCreditsPage() {
     try {
       const resp = await listCredits(cardId);
       setCredits(resp.items);
+      // Latest closed period per credit (one light call each, bounded by the
+      // handful of credits per card). Best-effort — a failure just omits the
+      // "last period" line for that credit.
+      const entries = await Promise.all(
+        resp.items.map(async (c) => {
+          try {
+            const h = await getCreditHistory(c.id, { limit: 1 });
+            return [c.id, h.items[0]] as const;
+          } catch {
+            return [c.id, undefined] as const;
+          }
+        }),
+      );
+      setHistory(
+        Object.fromEntries(
+          entries.filter((e): e is [string, CardCreditHistoryRow] => !!e[1]),
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "load failed");
     } finally {
@@ -108,7 +133,7 @@ export default function CardCreditsPage() {
                 onClick={() => setEditing(credit)}
                 className="block w-full text-left rounded-2xl border border-hairline px-4 py-3.5 hover:bg-elevated"
               >
-                <CreditProgress credit={credit} />
+                <CreditProgress credit={credit} lastPeriod={history[credit.id]} />
               </button>
             </li>
           ))}
@@ -175,7 +200,13 @@ export default function CardCreditsPage() {
   );
 }
 
-function CreditProgress({ credit }: { credit: CardCreditRow }) {
+function CreditProgress({
+  credit,
+  lastPeriod,
+}: {
+  credit: CardCreditRow;
+  lastPeriod?: CardCreditHistoryRow;
+}) {
   const { t } = useTranslation();
   const used = parseFloat(credit.used_amount) || 0;
   const total = credit.amount != null ? parseFloat(credit.amount) : null;
@@ -204,6 +235,14 @@ function CreditProgress({ credit }: { credit: CardCreditRow }) {
           date: formatFullDate(credit.next_reset_date),
         })}
       </p>
+      {lastPeriod && lastPeriod.amount != null && (
+        <p className="mt-0.5 text-[0.72rem] text-ink-quaternary">
+          {t("credits.lastPeriod", {
+            used: fmtAmt(parseFloat(lastPeriod.used_amount) || 0),
+            total: fmtAmt(parseFloat(lastPeriod.amount) || 0),
+          })}
+        </p>
+      )}
     </div>
   );
 }

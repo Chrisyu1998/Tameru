@@ -120,6 +120,14 @@ Version log:
     computes explicit/relative dates ("yesterday", "last Friday") from
     the anchor. Static-block edit (propose_transaction wording) busts
     the cache once.
+  * chat_v16 (credit tracking Phase 2) — adds the read-only
+    `get_card_credits` tool (DESIGN.md §6.7): the user's active statement
+    credits with per-period usage and reset dates, so "how much Amex credit
+    do I have left" reads live from `card_credits` instead of being
+    unanswerable. The SYSTEM_PROMPT Tools section gains a `get_card_credits`
+    bullet that distinguishes a credit (money back) from a multiplier
+    (points earned). Tool-schema-set + static-block change, so the version
+    bumps and the cache re-warms once.
 
 Hash policy: system_prompt_hash() hashes block[0]["text"] + tool schemas
 only. The dynamic tail (block[1]) is deliberately excluded so two
@@ -142,10 +150,9 @@ from app.agent.memory import render_user_memory
 from app.db import supabase_for_user
 from app.util.timezone import user_local_today
 
-# chat_v15: propose_transaction.date is optional — the agent omits it when
-# the user gives no date and the tool fills the user's local today (see the
-# version history in the docstring above).
-PROMPT_VERSION = "chat_v15"
+# chat_v16: adds the read-only get_card_credits tool (credit tracking Phase 2,
+# DESIGN.md §6.7) — see the version history in the docstring above.
+PROMPT_VERSION = "chat_v16"
 
 
 SYSTEM_PROMPT = """\
@@ -197,6 +204,15 @@ cards do I have", "which card earns most on X", or to resolve a card the \
 user named before a propose_* call or a card-filtered read — then pass \
 that card's `ref` as the `card_ref` argument, copied exactly. Tool \
 results never contain UUIDs and no tool accepts one.
+
+- **get_card_credits**: returns the user's active statement credits — the \
+recurring "spend $X, get $Y back" perks on premium cards (e.g. Amex \
+Platinum's $75/quarter Lululemon credit) — with how much of each is used \
+this period, what's left, and when it resets. Use for "how much Amex credit \
+do I have left", "which credits expire soon", "have I used my Lululemon \
+credit". This is DISTINCT from get_cards (earn multipliers); a credit is \
+money back, a multiplier is points earned. Optionally filter to one card \
+with its `ref` handle from get_cards.
 
 - **propose_transaction**: builds a transaction proposal from a \
 user-described purchase. Returns a payload the client renders as a parse \

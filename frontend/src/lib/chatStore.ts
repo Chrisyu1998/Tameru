@@ -58,6 +58,7 @@ import {
   type TransactionRowWire,
 } from "./transactionsApi";
 import { parseReceipt, type TransactionProposalWire } from "./receiptsApi";
+import { applyCreditUsage } from "./cardCreditsApi";
 import { ApiError } from "./api";
 import { track } from "./analytics";
 import { useAppStore } from "../store";
@@ -251,6 +252,40 @@ function appendAssistantText(text: string) {
   });
 }
 
+/**
+ * Build the trailing bubbles a successful transaction confirm appends beneath
+ * the committed parse card: the entry-moment insight (if any) and the Phase-2
+ * ledger-bridge credit suggestion (if any). Both are optional and independent —
+ * a confirm can yield neither, either, or both (DESIGN.md §6.7). Shared by the
+ * live `commitDraft` path and the offline-drain path so they can't drift.
+ */
+function _trailingConfirmMessages(result: ConfirmTransactionResult): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  if (result.insight) {
+    out.push({
+      id: newId("ai"),
+      role: "assistant",
+      kind: "insight",
+      text: result.insight.text,
+      severity: result.insight.severity,
+    });
+  }
+  if (result.creditSuggestion) {
+    const cs = result.creditSuggestion;
+    out.push({
+      id: newId("ai"),
+      role: "assistant",
+      kind: "credit-suggestion",
+      creditId: cs.credit_id,
+      creditName: cs.credit_name,
+      transactionId: cs.transaction_id,
+      suggestedAmount: cs.suggested_amount,
+      remaining: cs.remaining,
+    });
+  }
+  return out;
+}
+
 export const chatStore = {
   getSnapshot(): ChatState {
     return state;
@@ -410,6 +445,43 @@ export const chatStore = {
   },
 
   /**
+   * Tap "count it" on a ledger-bridge credit suggestion (Phase 2, §6.7).
+   * POSTs the matched transaction to `/card-credits/{creditId}/apply`; the
+   * atomic RPC clamps the increment. Flips the bubble to a confirmed line on
+   * success, or shows a retry-able error. A no-op if already applying/applied,
+   * so a double-tap can't double-count (the button is also hidden after).
+   */
+  async applyCreditSuggestion(messageId: string): Promise<void> {
+    const target = state.messages.find((m) => m.id === messageId);
+    if (
+      !target ||
+      target.role !== "assistant" ||
+      target.kind !== "credit-suggestion" ||
+      target.applying ||
+      target.applied
+    ) {
+      return;
+    }
+    const patch = (fields: Partial<typeof target>) =>
+      setState({
+        messages: state.messages.map((m) =>
+          m.id === messageId &&
+          m.role === "assistant" &&
+          m.kind === "credit-suggestion"
+            ? { ...m, ...fields }
+            : m,
+        ),
+      });
+    patch({ applying: true, error: null });
+    try {
+      const row = await applyCreditUsage(target.creditId, target.transactionId);
+      patch({ applying: false, applied: true, appliedUsed: row.used_amount });
+    } catch {
+      patch({ applying: false, error: "couldn't count that — tap to retry" });
+    }
+  },
+
+  /**
    * Commit a parse draft to the backend.
    *
    * Backend-sourced drafts carry `clientRequestId` (from the propose_transaction
@@ -478,23 +550,11 @@ export const chatStore = {
           ? { ...m, draft, committedTxId: tx.id, pendingSync: false }
           : m,
       );
-      const insight = result.insight;
-      if (insight) {
-        setState({
-          messages: [
-            ...committedMessages,
-            {
-              id: newId("ai"),
-              role: "assistant",
-              kind: "insight",
-              text: insight.text,
-              severity: insight.severity,
-            },
-          ],
-        });
-      } else {
-        setState({ messages: committedMessages });
-      }
+      // Append the entry-moment insight and/or the ledger-bridge credit
+      // suggestion beneath the just-committed card (both optional, independent).
+      setState({
+        messages: [...committedMessages, ..._trailingConfirmMessages(result)],
+      });
     } catch (err) {
       // Network failure (fetch threw — not an ApiError) → enqueue the
       // already-built body and mark the parse card as pending sync. The
@@ -821,20 +881,7 @@ export const chatStore = {
         frozen: false,
       };
     });
-    setState({
-      messages: result.insight
-        ? [
-            ...next,
-            {
-              id: newId("ai"),
-              role: "assistant",
-              kind: "insight",
-              text: result.insight.text,
-              severity: result.insight.severity,
-            },
-          ]
-        : next,
-    });
+    setState({ messages: [...next, ..._trailingConfirmMessages(result)] });
   },
 
   /**

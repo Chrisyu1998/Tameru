@@ -41,6 +41,15 @@ DEFAULT_DIGEST_TZ_NAME = "America/New_York"
 _DEFAULT_DIGEST_TZ = ZoneInfo(DEFAULT_DIGEST_TZ_NAME)
 _BASELINE_WEEKS = 8
 
+# Phase-2 credit tracking (§6.7). N = 14, not 7: the digest sends weekly, so a
+# 7-day window catches exactly one send (one reminder, maybe only a day before
+# reset), while 14 catches two (earliest 8-14 days out — real lead time + a
+# follow-up). Cadence-aware tuning is a deferred refinement (TODO.md).
+_CREDIT_EXPIRY_WINDOW_DAYS = 14
+# Cap the "expiring soon" list so the email stays tight; soonest-first, so a
+# user tracking many credits sees the most urgent.
+_CREDIT_EXPIRY_MAX_LINES = 3
+
 # Sonnet model is resolved from env per CLAUDE.md "Model usage by task"
 # invariant: model strings are environment-resolved so we can roll a
 # model forward or back without a code change. Mirrors the chat agent's
@@ -116,6 +125,34 @@ class SonnetCallLog:
 
 
 @dataclass(frozen=True)
+class ExpiringCredit:
+    """One statement credit near its reset with unused headroom (Phase 2, §6.7).
+
+    Surfaced in the digest's "use it or lose it" line. Only credits with a
+    known `amount` and `used_amount < amount` reach this — an unknown allowance
+    can't produce a "$X unused" figure. `days_left` is clamped `>= 0`.
+    """
+    name: str
+    amount: Decimal
+    used_amount: Decimal
+    next_reset_date: date
+    days_left: int
+
+
+@dataclass(frozen=True)
+class CreditValueCaptured:
+    """Wallet-wide credit utilization this period (Phase 2, §6.7).
+
+    `used` and `available` are summed across active credits with a known
+    allowance (`used` capped at each credit's allowance). Drives the positive
+    "you've captured $X of $Y" digest line. None when the user tracks no
+    amount-bearing credits.
+    """
+    used: Decimal
+    available: Decimal
+
+
+@dataclass(frozen=True)
 class DigestPayload:
     """The aggregates that drive both the email body and the Sonnet call.
 
@@ -137,6 +174,11 @@ class DigestPayload:
     # Last with a default so callers/tests predating Tier 2 still construct a
     # valid (English) payload; compose_digest always passes it explicitly.
     ui_language: str | None = None
+    # Phase-2 credit tracking (§6.7). Defaulted so pre-Phase-2 callers/tests
+    # still build a valid payload; the in-app recap (which reuses this payload)
+    # ignores them — only render_email surfaces the credit lines.
+    expiring_credits: tuple[ExpiringCredit, ...] = ()
+    value_captured: CreditValueCaptured | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +221,11 @@ def compose_digest(
         transactions, week_start=week_start, week_end=week_end
     )
 
+    # Phase-2 credit tracking (§6.7): expiring-soon + value-captured, computed
+    # against NOW in the user's zone (not the summarized week — expiry is a
+    # forward-looking "act before the reset" signal). Cheap DB read, no LLM.
+    expiring_credits, value_captured = _read_credit_status(client, user_id, tz)
+
     observation, nudge, sonnet_call_log = _call_sonnet(
         anthropic_client=anthropic_client,
         week_total=week_total,
@@ -199,6 +246,8 @@ def compose_digest(
         ui_language=ui_language,
         observation=observation,
         nudge=nudge,
+        expiring_credits=expiring_credits,
+        value_captured=value_captured,
     )
     return payload, sonnet_call_log
 
@@ -252,6 +301,29 @@ def render_email(
     line_observation = payload.observation
     line_nudge = payload.nudge  # may be None
 
+    # Phase-2 credit sections (§6.7): each is a group of plain lines rendered
+    # as one block (blank line around it in text, one <p> in HTML). The
+    # expiring group leads with a bold heading; value-captured is a lone line.
+    # Credit names are user data, so the HTML path escapes every line.
+    credit_sections: list[list[str]] = []
+    if payload.expiring_credits:
+        section = [s["credits_heading"]]
+        for c in payload.expiring_credits:
+            section.append(
+                s["credit_expiring"].format(
+                    name=c.name,
+                    remaining=money(c.amount - c.used_amount),
+                    amount=money(c.amount),
+                    days=c.days_left,
+                )
+            )
+        credit_sections.append(section)
+    if payload.value_captured is not None:
+        v = payload.value_captured
+        credit_sections.append(
+            [s["value_captured"].format(used=money(v.used), available=money(v.available))]
+        )
+
     subject = s["subject"].format(week=week_label)
 
     # Plaintext: one block per line, blank lines between. The CTA line
@@ -260,6 +332,8 @@ def render_email(
     text_blocks = [line_total, line_top, line_observation]
     if line_nudge:
         text_blocks.append(line_nudge)
+    for section in credit_sections:
+        text_blocks.append("\n".join(section))
     text_blocks.append(f"{s['cta']}: {app_cta_url}")
     text_blocks.append(f"{s['unsub']}: {unsubscribe_url}")
     text = "\n\n".join(text_blocks) + "\n"
@@ -292,6 +366,15 @@ def render_email(
     ]
     if line_nudge:
         parts.append(f'<p style="{p_style}">{_html_escape(line_nudge)}</p>')
+    # Phase-2 credit sections: expiring group leads with a bold heading; a
+    # lone value-captured line is not bolded. Every line escaped (user data).
+    for section in credit_sections:
+        if len(section) > 1:
+            head = f"<strong>{_html_escape(section[0])}</strong>"
+            body = "".join(f"<br>{_html_escape(line)}" for line in section[1:])
+            parts.append(f'<p style="{p_style}">{head}{body}</p>')
+        else:
+            parts.append(f'<p style="{p_style}">{_html_escape(section[0])}</p>')
     # CTA sits after the prose, before the unsubscribe footer — Day 26b.
     parts.append(
         f'<p style="{cta_wrap_style}">'
@@ -438,6 +521,60 @@ def _read_active_transactions(
         .execute()
     )
     return resp.data or []
+
+
+def _read_credit_status(
+    client: Client, user_id: UUID, tz: ZoneInfo
+) -> tuple[tuple[ExpiringCredit, ...], CreditValueCaptured | None]:
+    """Read the user's active credits → (expiring-soon list, value captured).
+
+    Works under both callers' clients: the cron's service-role admin client
+    (where `.eq("user_id", …)` is the scope) and the recap route's user JWT
+    (where RLS already scopes it, and the filter is redundant-but-correct).
+
+    Expiring = a known allowance, `used_amount < amount`, and `next_reset_date`
+    within `_CREDIT_EXPIRY_WINDOW_DAYS` of today-in-`tz`, soonest first. Value
+    captured sums `used` (capped at each allowance) vs total allowance across
+    amount-bearing credits; None when the user tracks none.
+    """
+    today = datetime.now(tz).date()
+    resp = (
+        client.table("card_credits")
+        .select("name,amount,used_amount,next_reset_date")
+        .eq("user_id", str(user_id))
+        .eq("status", "active")
+        .execute()
+    )
+    expiring: list[ExpiringCredit] = []
+    total_used = Decimal("0")
+    total_available = Decimal("0")
+    for row in resp.data or []:
+        if row.get("amount") is None:
+            continue  # no allowance → no "unused" figure, no ratio contribution
+        amount = Decimal(str(row["amount"]))
+        used = Decimal(str(row["used_amount"]))
+        total_available += amount
+        total_used += min(used, amount)
+        if used >= amount:
+            continue  # fully captured — nothing to remind about
+        days_left = (date.fromisoformat(row["next_reset_date"]) - today).days
+        if days_left <= _CREDIT_EXPIRY_WINDOW_DAYS:
+            expiring.append(
+                ExpiringCredit(
+                    name=row["name"],
+                    amount=amount,
+                    used_amount=used,
+                    next_reset_date=date.fromisoformat(row["next_reset_date"]),
+                    days_left=max(0, days_left),
+                )
+            )
+    expiring.sort(key=lambda e: e.days_left)
+    value = (
+        CreditValueCaptured(used=total_used, available=total_available)
+        if total_available > 0
+        else None
+    )
+    return tuple(expiring[:_CREDIT_EXPIRY_MAX_LINES]), value
 
 
 def _aggregate(
@@ -657,6 +794,9 @@ _DIGEST_STRINGS: dict[str, dict[str, str]] = {
         "top_below": "Top category: {cat} at {amt} — {delta} below its 8-week baseline.",
         "top_inline": "Top category: {cat} at {amt} — in line with its 8-week baseline.",
         "no_top": "No category stood out this week.",
+        "credits_heading": "Use it or lose it:",
+        "credit_expiring": "{name}: {remaining} of {amount} unused, resets in {days}d.",
+        "value_captured": "You've captured {used} of {available} in card credits this period.",
         "cta": "View this week in Tameru",
         "unsub": "Unsubscribe",
     },
@@ -669,6 +809,9 @@ _DIGEST_STRINGS: dict[str, dict[str, str]] = {
         "top_below": "最も多かったカテゴリー：{cat}（{amt}）。8週間の平均を {delta} 下回っています。",
         "top_inline": "最も多かったカテゴリー：{cat}（{amt}）。8週間の平均とほぼ同じです。",
         "no_top": "今週は特に目立ったカテゴリーはありませんでした。",
+        "credits_heading": "使わないと失効する特典：",
+        "credit_expiring": "{name}：{amount} のうち {remaining} 未使用、あと {days}日でリセット。",
+        "value_captured": "今期はカード特典 {available} のうち {used} を活用しました。",
         "cta": "Tameru で今週を見る",
         "unsub": "配信停止",
     },
@@ -681,6 +824,9 @@ _DIGEST_STRINGS: dict[str, dict[str, str]] = {
         "top_below": "最高類別：{cat}，{amt}，比 8 週平均少 {delta}。",
         "top_inline": "最高類別：{cat}，{amt}，與 8 週平均相當。",
         "no_top": "本週沒有特別突出的類別。",
+        "credits_heading": "快到期的回饋，別忘了使用：",
+        "credit_expiring": "{name}：{amount} 中還有 {remaining} 未使用，{days} 天後重置。",
+        "value_captured": "本期已使用卡片回饋 {available} 中的 {used}。",
         "cta": "在 Tameru 查看本週",
         "unsub": "取消訂閱",
     },

@@ -12,12 +12,14 @@ every query. The service role is never used here (invariant 1).
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.auth import AuthedUser, get_current_user_with_device
 from app.db import supabase_for_user
+from app.models.card_credits import CreditSuggestion
 from app.models.transactions import (
     DEFAULT_LIMIT,
     TransactionConfirmRequest,
@@ -111,7 +113,19 @@ def confirm_transaction(
         insight = entry_moment_insight(user, row)
     except Exception:
         insight = None
-    return TransactionConfirmResponse(transaction=row, insight=insight)
+
+    # Phase-2 ledger bridge (§6.7): if this fresh row's merchant + card match
+    # an active statement credit, offer to count it. A SEPARATE field from
+    # `insight` — the two are orthogonal and must not suppress each other.
+    # Best-effort: the row is committed; the suggestion is a garnish, so a
+    # failure inside it must never fail the confirm.
+    try:
+        credit_suggestion = _credit_suggestion_for(user, row)
+    except Exception:
+        credit_suggestion = None
+    return TransactionConfirmResponse(
+        transaction=row, insight=insight, credit_suggestion=credit_suggestion
+    )
 
 
 @router.get("", response_model=TransactionListResponse)
@@ -355,6 +369,59 @@ def _load_existing_by_client_request_id(
     if resp.data:
         return TransactionRow.model_validate(resp.data[0])
     return None
+
+def _credit_suggestion_for(
+    user: AuthedUser, row: TransactionRow
+) -> CreditSuggestion | None:
+    """Return a ledger-bridge suggestion for a freshly-committed transaction.
+
+    Fires only for a *charge* (amount > 0) that carries a card. It reads that
+    card's active credits under RLS and returns the first whose lowercased
+    `merchant_hint` is a substring of the transaction merchant AND whose current
+    period contains the transaction date (the same lower-bound guard the apply
+    RPC enforces — don't offer to count a spend from the period that just
+    reset). A credit already at/over its allowance is skipped. `suggested_amount`
+    is `min(txn amount, remaining)` for display; the apply RPC clamps
+    authoritatively. Returns None when nothing matches. Bounded — a card carries
+    a handful of credits, so the substring match runs in Python rather than
+    round-tripping a `LIKE` per credit.
+    """
+    if row.card_id is None or row.amount <= 0:
+        return None
+    client = supabase_for_user(user.jwt)
+    resp = (
+        client.table("card_credits")
+        .select("id,name,amount,used_amount,merchant_hint,current_period_start")
+        .eq("card_id", str(row.card_id))
+        .eq("status", "active")
+        .execute()
+    )
+    merchant_l = row.merchant.lower()
+    for c in resp.data or []:
+        hint = c.get("merchant_hint")
+        if not hint or hint not in merchant_l:
+            continue
+        if row.date < date.fromisoformat(c["current_period_start"]):
+            continue
+        amount = Decimal(str(c["amount"])) if c.get("amount") is not None else None
+        used = Decimal(str(c["used_amount"]))
+        if amount is not None:
+            remaining = amount - used
+            if remaining <= 0:
+                continue  # already maxed; nothing to offer
+            suggested = min(row.amount, remaining)
+        else:
+            remaining = None
+            suggested = row.amount
+        return CreditSuggestion(
+            credit_id=c["id"],
+            credit_name=c["name"],
+            transaction_id=row.id,
+            suggested_amount=suggested,
+            remaining=remaining,
+        )
+    return None
+
 
 def _upsert_merchant_correction(
     user: AuthedUser, merchant: str, category: str

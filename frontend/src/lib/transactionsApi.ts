@@ -45,9 +45,22 @@ export interface EntryMomentInsightWire {
   severity: InsightSeverity;
 }
 
+/** Ledger-bridge suggestion wire shape — mirrors `CreditSuggestion`
+ * (app/models/card_credits.py). Present when a just-committed transaction's
+ * merchant + card match an active statement credit (DESIGN.md §6.7). A
+ * SEPARATE field from `insight` — the two never suppress each other. */
+export interface CreditSuggestionWire {
+  credit_id: string;
+  credit_name: string;
+  transaction_id: string;
+  suggested_amount: string; // Decimal serialized as string
+  remaining: string | null;
+}
+
 export interface TransactionConfirmResponseWire {
   transaction: TransactionRowWire;
   insight: EntryMomentInsightWire | null;
+  credit_suggestion: CreditSuggestionWire | null;
 }
 
 /**
@@ -141,6 +154,10 @@ export interface ConfirmTransactionResult {
   // rule fires; null on first-in-category, within-noise deltas, saturated
   // rate limits, and on idempotent replay (Day 13).
   insight: EntryMomentInsightWire | null;
+  // Ledger-bridge credit suggestion (Phase 2, §6.7) when the committed
+  // transaction matches an active statement credit; null otherwise and on
+  // idempotent replay. Orthogonal to `insight` — both may be present.
+  creditSuggestion: CreditSuggestionWire | null;
 }
 
 export async function confirmTransaction(
@@ -156,7 +173,11 @@ export async function confirmTransaction(
       body,
     },
   );
-  return { transaction: fromWire(wire.transaction), insight: wire.insight };
+  return {
+    transaction: fromWire(wire.transaction),
+    insight: wire.insight,
+    creditSuggestion: wire.credit_suggestion,
+  };
 }
 
 export interface PatchTransactionBody {

@@ -154,6 +154,36 @@ export interface AssistantInsightMessage {
 }
 
 /**
+ * Ledger-bridge credit suggestion — Phase 2 (DESIGN.md §6.7). Rendered
+ * below a committed parse card when `POST /transactions/confirm` returns a
+ * non-null `credit_suggestion` (the just-logged spend matched an active
+ * statement credit on the same card). A tap POSTs to
+ * `/card-credits/{creditId}/apply`; the atomic RPC clamps the increment. A
+ * SEPARATE kind from `insight` so the two never suppress each other. Once
+ * applied, the card flips to a confirmed line (no button).
+ */
+export interface AssistantCreditSuggestionMessage {
+  id: string;
+  role: "assistant";
+  kind: "credit-suggestion";
+  creditId: string;
+  creditName: string;
+  transactionId: string;
+  /** Decimal string — the offer amount (min of txn amount, remaining). */
+  suggestedAmount: string;
+  /** Decimal string, or null when the credit's allowance isn't set. */
+  remaining: string | null;
+  /** In-flight between tap and the apply response. */
+  applying?: boolean;
+  /** Set once the apply lands; flips the card to a confirmed line. */
+  applied?: boolean;
+  /** `used_amount` after applying (from the response), for the confirmed copy. */
+  appliedUsed?: string;
+  /** Non-null after a failed apply — shows a retry-able error line. */
+  error?: string | null;
+}
+
+/**
  * Card parse-card message — Day 14b. The chat-side analog of the
  * onboarding `AddCardStep` preview tile, rendered when the agent calls
  * `propose_card`. The proposal payload from the tool is wider than the
@@ -308,6 +338,7 @@ export type ChatMessage =
   | AssistantChartMessage
   | AssistantRichChartMessage
   | AssistantInsightMessage
+  | AssistantCreditSuggestionMessage
   | AssistantCardParseMessage
   | AssistantSubscriptionParseMessage;
 
